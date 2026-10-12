@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "targets": ["api", "daily"],
+    "ignore": [],
+    "source": "functions"
+  },
+  "client": {
+    "source": "client"
+  }
+}

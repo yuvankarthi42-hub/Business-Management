@@ -1,0 +1,42 @@
+{
+  "name": "billpoodum",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit",
+    "dev:catalyst": "vite --mode catalyst --port 5180",
+    "build:catalyst": "tsc -b && vite build --mode catalyst --outDir dist-catalyst",
+    "backend:build": "npm --prefix backend run build",
+    "backend:test": "npm --prefix backend test",
+    "build:catalyst-webclient": "tsc -b && vite build --mode catalyst --base=/app/ --outDir dist-catalyst && node scripts/catalyst-client.mjs"
+  },
+  "devDependencies": {
+    "@types/papaparse": "^5.5.2",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^4.7.0",
+    "autoprefixer": "^10.5.5",
+    "postcss": "^8.5.28",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "html2canvas": "^1.4.1",
+    "jsbarcode": "^3.11.6",
+    "jszip": "^3.10.2",
+    "lucide-react": "^1.40.0",
+    "papaparse": "^5.5.3",
+    "qrcode": "^1.5.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "6.28.0",
+    "recharts": "^3.10.1"
+  }
+}

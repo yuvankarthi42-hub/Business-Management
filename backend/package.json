@@ -1,0 +1,35 @@
+{
+  "name": "billpoodum-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "BillPoodum API \u2014 Zoho Catalyst Advanced I/O function (Node.js). Source in TypeScript, bundled into catalyst/functions/api.",
+  "type": "commonjs",
+  "scripts": {
+    "gen": "node scripts/gen-schema.mjs && node scripts/gen-sqlite.mjs && node scripts/gen-checklist.mjs",
+    "build": "node scripts/gen-schema.mjs && node scripts/gen-sqlite.mjs && node scripts/build.mjs",
+    "dev": "node scripts/gen-schema.mjs && node scripts/gen-sqlite.mjs && tsx watch src/local.ts",
+    "typecheck": "node scripts/gen-schema.mjs && tsc --noEmit -p .",
+    "test": "node scripts/gen-schema.mjs && node scripts/gen-sqlite.mjs && npm run test:sqlite && npm run test:hrana && npm run test:memory",
+    "test:sqlite": "TEST_DB=sqlite tsx --test test/*.test.ts",
+    "test:memory": "TEST_DB=memory tsx --test test/*.test.ts",
+    "test:hrana": "TEST_DB=hrana tsx --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.22.3",
+    "zcatalyst-sdk-node": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.2",
+    "@types/express": "^4.17.25",
+    "@types/node": "^18.19.130",
+    "@types/sql.js": "^1.4.11",
+    "esbuild": "^0.28.2",
+    "sql.js": "^1.14.1",
+    "tsx": "^4.23.15",
+    "typescript": "5.6"
+  }
+}

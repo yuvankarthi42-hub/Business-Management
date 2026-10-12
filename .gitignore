@@ -1,0 +1,18 @@
+node_modules
+dist
+.DS_Store
+*.log
+.env
+
+# Backend local dev
+backend/.local/
+backend/.env.local
+backend/node_modules/
+catalyst/functions/api/index.js
+catalyst/client/
+dist-catalyst
+.env.catalyst
+catalyst/.catalystrc
+catalyst/functions/daily/index.js
+*.tsbuildinfo
+.claude/settings.local.json

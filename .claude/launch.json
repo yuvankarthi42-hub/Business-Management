@@ -1,0 +1,8 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "web", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "port": 5173 },
+    { "name": "api-local", "runtimeExecutable": "npm", "runtimeArgs": ["--prefix", "backend", "run", "dev"], "port": 8787 },
+    { "name": "web-catalyst", "runtimeExecutable": "sh", "runtimeArgs": ["-c", "VITE_BACKEND=catalyst npx vite --port 5180 --strictPort"], "port": 5180 }
+  ]
+}
