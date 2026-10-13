@@ -15,6 +15,7 @@ import type { ModuleKey, Permission } from './core/types'
 // Each page is its own chunk. Loaders are kept so the chunks can be fetched ahead of time.
 const load = {
   Login: () => import('./pages/Login'),
+  Landing: () => import('./pages/Landing'),
   Onboarding: () => import('./pages/Onboarding'),
   Dashboard: () => import('./pages/Dashboard'),
   Billing: () => import('./pages/Billing'),
@@ -50,6 +51,7 @@ const load = {
   AdminWhatsApp: () => import('./admin/WhatsApp'),
 }
 const Login = lazy(load.Login)
+const Landing = lazy(load.Landing)
 const Onboarding = lazy(load.Onboarding)
 const Dashboard = lazy(load.Dashboard)
 const Billing = lazy(load.Billing)
@@ -92,7 +94,7 @@ const AdminWhatsApp = lazy(load.AdminWhatsApp)
 function preloadPages() {
   const admin = location.pathname.startsWith('/admin')
   // Most-used screens first; public / sign-in pages last.
-  const LAST = ['Login', 'Onboarding', 'CustomerMenu', 'SpecialsDisplay']
+  const LAST = ['Login', 'Landing', 'Onboarding', 'CustomerMenu', 'SpecialsDisplay']
   const names = (Object.keys(load) as (keyof typeof load)[])
     .filter((n) => n.startsWith('Admin') === admin)
     .sort((a, b) => Number(LAST.includes(a)) - Number(LAST.includes(b)))
@@ -103,10 +105,14 @@ function preloadPages() {
   idle(() => { void batch() })
 }
 
+const isInstalledApp = () => window.matchMedia?.('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone === true
+
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { me, loading } = useApp()
   const loc = useLocation()
   if (loading) return <Spinner />
+  // Signed out at the home address: the landing page (the installed app goes straight to sign-in).
+  if (!me && loc.pathname === '/' && !isInstalledApp()) return <Landing />
   if (!me) return <Navigate to="/login" state={{ from: loc.pathname }} replace />
   if (!me.business.onboarded && loc.pathname !== '/onboarding') return <Navigate to="/onboarding" replace />
   return <>{children}</>
@@ -136,6 +142,7 @@ function App() {
     <Suspense fallback={<Spinner />}>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/welcome" element={<Landing />} />
         {/* No public sign-up: the product admin creates customer accounts. */}
         <Route path="/signup" element={<Navigate to="/login" replace state={{ signup: true }} />} />
         <Route path="/admin/login" element={<AdminLogin />} />

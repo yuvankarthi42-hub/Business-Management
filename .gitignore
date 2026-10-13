@@ -16,3 +16,4 @@ catalyst/.catalystrc
 catalyst/functions/daily/index.js
 *.tsbuildinfo
 .claude/settings.local.json
+*.zip
