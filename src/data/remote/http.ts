@@ -5,7 +5,41 @@ export class ApiError extends Error {
   constructor(message: string, readonly code = 'ERROR', readonly status = 0) { super(message) }
 }
 
-const BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') || '/server/api'
+/**
+ * Where the API is. VITE_API_BASE may list several addresses (comma-separated); a Catalyst address also tries
+ * its twin in the other data centre (.in ⇄ .com). The first one that answers /health is used for this tab.
+ */
+const CANDIDATES = (() => {
+  const raw = String(import.meta.env.VITE_API_BASE ?? '').split(',').map((x) => x.trim().replace(/\/$/, '')).filter(Boolean)
+  const out: string[] = []
+  for (const u of raw.length ? raw : ['/server/api']) {
+    out.push(u)
+    const twin = u.replace(/\.catalystserverless\.(in|com)(?=[/:]|$)/, (_m, t: string) => `.catalystserverless.${t === 'in' ? 'com' : 'in'}`)
+    if (twin !== u) out.push(twin)
+  }
+  return [...new Set(out)]
+})()
+const API_KEY = 'billpoodum.api'
+let chosen: Promise<string> | null = null
+async function probe(u: string) {
+  try {
+    const r = await fetch(`${u}/health`, { signal: AbortSignal.timeout(6000), credentials: 'omit' })
+    return r.ok && !!((await r.json()) as { ok?: boolean }).ok
+  } catch { return false }
+}
+function apiBase(): Promise<string> {
+  if (CANDIDATES.length === 1) return Promise.resolve(CANDIDATES[0])
+  chosen ??= (async () => {
+    try { const s = sessionStorage.getItem(API_KEY); if (s && CANDIDATES.includes(s)) return s } catch { /* private mode */ }
+    for (const u of CANDIDATES) if (await probe(u)) { try { sessionStorage.setItem(API_KEY, u) } catch { /* private mode */ } return u }
+    chosen = null // nothing answered (offline?): try again on the next request
+    return CANDIDATES[0]
+  })()
+  return chosen
+}
+/** After a network failure: ask again which address answers. */
+function forgetBase() { chosen = null; try { sessionStorage.removeItem(API_KEY) } catch { /* private mode */ } }
+const crossSite = (base: string) => { try { return new URL(base, location.href).origin !== location.origin } catch { return false } }
 const KEYS = { user: 'billpoodum.token', admin: 'billpoodum.adminToken', branch: 'billpoodum.branch' } as const
 
 const read = (k: string) => { try { return localStorage.getItem(k) } catch { return null } }
@@ -50,18 +84,20 @@ async function rpcOnce<T>(name: string, args: unknown[], token: TokenKind, id: s
   const t = token === 'user' ? auth.user : token === 'admin' ? auth.admin : null
   let res: Response
   try {
-    res = await fetch(`${BASE}/rpc/${name}`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-request-id': id,
-        'x-device': deviceId,
-        ...(t ? { authorization: `Bearer ${t}` } : {}),
-        ...(token === 'user' && auth.branch ? { 'x-branch': auth.branch } : {}),
-      },
-      body: JSON.stringify({ args }),
-    })
+    const h: Record<string, string> = {
+      'x-request-id': id,
+      'x-device': deviceId,
+      ...(t ? { authorization: `Bearer ${t}` } : {}),
+      ...(token === 'user' && auth.branch ? { 'x-branch': auth.branch } : {}),
+    }
+    // API on another site (app on Slate): a "simple" request — plain text body, no extra headers — so the
+    // browser sends it without a CORS pre-check. The sign-in token and branch travel inside the body.
+    const base = await apiBase()
+    res = await fetch(`${base}/rpc/${name}`, crossSite(base)
+      ? { method: 'POST', headers: { 'content-type': 'text/plain;charset=UTF-8' }, body: JSON.stringify({ args, h }), credentials: 'omit' }
+      : { method: 'POST', headers: { 'content-type': 'application/json', ...h }, body: JSON.stringify({ args }) })
   } catch {
+    if (CANDIDATES.length > 1) forgetBase()
     // No queueing: an offline change is never saved for later. The user sees the error and tries again.
     throw new ApiError('No internet connection. Nothing was saved — please try again when you are online.', 'OFFLINE')
   }

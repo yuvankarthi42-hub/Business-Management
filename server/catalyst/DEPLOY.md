@@ -101,7 +101,7 @@ two secrets and keep them private. Set the same `STRATUS_*` values on **daily** 
 | `SECRETS_KEY` | 32+ random characters — encrypts WhatsApp access tokens in Turso. Keep it forever (changing it means re-entering the tokens). |
 | `STRATUS_BUCKET` | `billpoodum-media` |
 | `STRATUS_PUBLIC_URL` | the bucket URL from step 4 |
-| `ALLOWED_ORIGINS` | the web app address when it is on another domain (Slate), e.g. `https://billpoodum.onslate.in` |
+| `ALLOWED_ORIGINS` | the web app address when it is on another domain (Slate), e.g. `https://web-xxxx.onslate.com`. Comma-separate several. Each one also allows its `.in` ⇄ `.com` twin. |
 | `CRON_KEY` | optional — only if you call `system.runDailyJobs` from outside |
 | **Turso (3A)** | |
 | `TURSO_PLATFORM_URL` | the platform database URL (`libsql://…`). Setting it switches the API to Turso. |
@@ -148,7 +148,10 @@ should pass.
 
 **Slate (recommended)** — React apps with normal links (`/billing`, `/q/<shop>` for QR menus).
 
-1. Create `.env.catalyst` (copy `.env.catalyst.example`) with `VITE_API_BASE=https://<your-function-domain>/server/api`.
+1. Create `.env.catalyst` (copy `.env.catalyst.example`) with:
+   - `VITE_API_BASE=https://<your-function-domain>/server/api`. You can comma-separate several. A Catalyst address
+     also tries its other data-centre twin (`.in` ⇄ `.com`). The first one that answers `/health` is used.
+   - `VITE_ROUTER=hash` (Slate serves only real files, so links look like `/#/login` and never hit a 404).
 2. Build:
 
    ```bash

@@ -8,6 +8,7 @@ import type { Validity } from '@/data'
 import type { AdminRole } from '@/core/types'
 import type { AdminPermission } from '@/core/adminRoles'
 import { formatPhone } from '@/core/phone'
+import { appUrl } from '@/lib/appUrl'
 
 export interface AdminMe { id: string; name: string; username: string; role: AdminRole; permissions: AdminPermission[] }
 export const useAdmin = () => useOutletContext<{ admin: AdminMe }>().admin
@@ -66,7 +67,7 @@ export function ValidityPicker({ value, onChange, from, branches, pricePerBranch
 export function CredentialCard({ phone, username, password, businessName }: { phone?: string; username: string; password?: string; businessName: string }) {
   const toast = useToast()
   const [copied, setCopied] = useState(false)
-  const loginUrl = `${location.origin}/login`
+  const loginUrl = appUrl('/login')
   const text = `BillPoodum login for ${businessName}\nWebsite: ${loginUrl}${phone ? `\nMobile number: ${formatPhone(phone)}` : ''}\nUsername: ${username}${password ? `\nPassword: ${password}` : ''}\nSign in and finish your shop setup.`
   return (
     <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4" data-no-i18n>

@@ -147,3 +147,22 @@ test('secrets are encrypted at rest; migrations add up to the schema file', { sk
   const have = (await db.sql("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")).map((r) => String(r.name)).sort()
   assert.deepEqual(have, want)
 })
+
+test('a failed shop database says which Turso setting to check', async () => {
+  const { PerShopDatabases } = await import('../src/db/databases')
+  const { LocalProvisioner } = await import('../src/db/local')
+  const { SqlError } = await import('../src/db/sql/driver')
+  const base = new LocalProvisioner()
+  const make = (over: Partial<typeof base>) => new PerShopDatabases(Object.assign(Object.create(Object.getPrototypeOf(base)), base, over), 'local')
+  const platform = (dbs: InstanceType<typeof PerShopDatabases>) => dbs.platform().then((p) => p.insert('businesses', { name: 'X', category: 2, sub_type: 'Tea Shop' }))
+  const cases: [Partial<typeof base>, RegExp][] = [
+    [{ create: async () => { throw new Error('Turso create database 401: {"error":"invalid token"}') } }, /TURSO_API_TOKEN/],
+    [{ create: async () => { throw new Error('Turso create database 404: not found') } }, /TURSO_ORG and TURSO_GROUP/],
+    [{ connect: async () => ({ run: async () => { throw new SqlError('auth', 'refused') }, script: async () => {}, batch: async () => [], begin: async () => { throw new SqlError('auth', 'refused') } }) }, /group token/],
+  ]
+  for (const [over, want] of cases) {
+    const dbs = make(over)
+    const b = await platform(dbs)
+    await assert.rejects(dbs.createShop(b.ROWID), want)
+  }
+})

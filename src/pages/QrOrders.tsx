@@ -151,7 +151,7 @@ function CodesView() {
             <p className="text-lg font-bold">{c.title}</p>
             <p className="text-xs text-slate-500">{c.sub}</p>
             <p className="mt-1 text-[11px] font-medium text-brand-600">Scan to see the menu & order</p>
-            <a href={c.url.replace(qr.baseUrl.replace(/\/$/, ''), '')} target="_blank" rel="noopener" className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-brand-600 print:hidden"><ExternalLink className="h-3.5 w-3.5" />Open</a>
+            <a href={c.url} target="_blank" rel="noopener" className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-brand-600 print:hidden"><ExternalLink className="h-3.5 w-3.5" />Open</a>
           </Card>
         ))}
         {!cards.length && <Card className="col-span-full"><EmptyState icon={QrCode} title="No QR codes" description="Turn on at least one order type in Settings." /></Card>}

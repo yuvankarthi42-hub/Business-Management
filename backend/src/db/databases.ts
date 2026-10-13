@@ -5,7 +5,7 @@
 import { ApiError } from '../core/errors'
 import { latestVersion, migrate, migrateWhenReachable } from './migrate'
 import * as E from '../../../server/catalyst/enums'
-import type { SqlDriver } from './sql/driver'
+import { SqlError, type SqlDriver } from './sql/driver'
 import { HranaDriver } from './sql/hrana'
 import { TursoDb } from './turso'
 import type { Db } from './types'
@@ -96,14 +96,17 @@ export class PerShopDatabases implements Databases {
     const name = this.nameFor(businessId)
     const existing = await p.first('shop_databases', { business_id: businessId })
     const row = existing ?? await p.insert('shop_databases', { business_id: businessId, db_name: name, status: E.ShopDbStatus.creating })
+    let step: 'create' | 'tables' = 'create'
     try {
       const url = await this.prov.create(name)
+      step = 'tables'
       await migrateWhenReachable(await this.prov.connect(url), 'shop')
       await p.update('shop_databases', row.ROWID, { db_url: url, status: E.ShopDbStatus.ready, schema_version: latestVersion('shop') })
     } catch (e) {
-      console.error(`[createShop ${businessId}]`, e)
+      console.error(`[createShop ${businessId}] ${step}`, e)
       await p.update('shop_databases', row.ROWID, { status: E.ShopDbStatus.failed }).catch(() => {})
-      throw new ApiError('Couldn’t create the shop’s database. Please try again.', 503, 'SHOP_DB_CREATE_FAILED')
+      // Only the product admin sees this, and it never contains a token — it says which setting to check.
+      throw new ApiError(`Couldn’t create the shop’s database — ${explainCreate(e, step)}`, 503, 'SHOP_DB_CREATE_FAILED')
     }
   }
 
@@ -156,7 +159,8 @@ export class TursoProvisioner implements Provisioner {
     else if (res.status === 409) {
       // Already made by an earlier try — use it.
       const got = await this.api(`/databases/${encodeURIComponent(name)}`)
-      if (got.ok) host = ((await got.json()) as { database?: { Hostname?: string } }).database?.Hostname
+      if (!got.ok) throw new Error(`Turso get database ${got.status}: ${(await got.text()).slice(0, 300)}`)
+      host = ((await got.json()) as { database?: { Hostname?: string } }).database?.Hostname
     } else throw new Error(`Turso create database ${res.status}: ${(await res.text()).slice(0, 300)}`)
     if (!host) throw new Error('Turso did not return the database address')
     return `libsql://${host}`
@@ -173,4 +177,20 @@ export function tursoFromEnv(env = process.env): PerShopDatabases {
     platformUrl: env.TURSO_PLATFORM_URL ?? '', token: env.TURSO_AUTH_TOKEN ?? '', org: env.TURSO_ORG ?? '', apiToken: env.TURSO_API_TOKEN ?? '',
     group: env.TURSO_GROUP || 'default', location: env.TURSO_LOCATION || undefined,
   }), env.TURSO_DB_PREFIX || 'bp')
+}
+
+/** Why making a shop database failed, in words that point at the setting to fix. */
+function explainCreate(e: unknown, step: 'create' | 'tables'): string {
+  const msg = (e as Error)?.message ?? String(e)
+  const status = /Turso (?:create|get) database (\d{3})/.exec(msg)?.[1]
+  if (step === 'create') {
+    if (status === '401' || status === '403') return 'Turso refused the API token. Check TURSO_API_TOKEN (Turso → Settings → API Tokens).'
+    if (status === '404') return 'Turso can’t find the organisation or group. Check TURSO_ORG and TURSO_GROUP.'
+    if (status) return `Turso answered ${status}: ${msg.replace(/^.*?\d{3}:\s*/, '').slice(0, 160)}`
+    if (/fetch failed|ENOTFOUND|ECONN|timeout|aborted/i.test(msg)) return 'Can’t reach the Turso API (api.turso.tech). Try again in a minute.'
+    return msg.slice(0, 160)
+  }
+  if (e instanceof SqlError && e.kind === 'auth') return 'The new database refused TURSO_AUTH_TOKEN. It must be a group token (Turso → Groups → your group → Create Token), not a database token.'
+  if (e instanceof SqlError && (e.kind === 'gone' || e.kind === 'network')) return 'The new database isn’t reachable yet. Try again in a minute.'
+  return `Creating its tables failed: ${msg.slice(0, 160)}`
 }

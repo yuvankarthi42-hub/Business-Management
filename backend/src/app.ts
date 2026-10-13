@@ -20,7 +20,11 @@ export function createApp(envFor: (req: Request) => Env) {
   const app = express()
   app.disable('x-powered-by')
   // The app can be hosted on another domain (Catalyst Slate). Only the addresses in ALLOWED_ORIGINS may call the API.
-  const origins = (process.env.ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean)
+  // Each address also allows its twin in the other Catalyst data centre (.in ⇄ .com), so one entry covers both.
+  // (Safe to allow: requests carry the sign-in token in the body, never cookies.)
+  const listed = (process.env.ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean)
+  const twin = (o: string) => o.replace(/\.(onslate|catalystserverless|catalystappsail|zohostratus)\.(in|com)$/, (_m, d: string, t: string) => `.${d}.${t === 'in' ? 'com' : 'in'}`)
+  const origins = [...new Set([...listed, ...listed.map(twin)])]
   app.use((req, res, next) => {
     const o = req.header('origin')
     if (o && origins.includes(o)) {
@@ -34,6 +38,13 @@ export function createApp(envFor: (req: Request) => Env) {
     next()
   })
   app.use(express.json({ limit: '8mb' }))
+  // "Simple" cross-site requests (no CORS pre-check, which the Catalyst gateway answers without CORS headers):
+  // text/plain body {"args":[…],"h":{"authorization","x-branch","x-request-id","x-device"}}.
+  app.use(express.text({ type: 'text/plain', limit: '8mb' }))
+  app.use((req, _res, next) => {
+    if (typeof req.body === 'string') { try { req.body = JSON.parse(req.body) } catch { req.body = {} } }
+    next()
+  })
 
   app.get(['/health', '/'], (_req, res) => { res.json({ ok: true, version: API_VERSION, handlers: handlerNames().length }) })
 
@@ -60,15 +71,17 @@ export function createApp(envFor: (req: Request) => Env) {
     if (!h) { res.status(404).json({ error: { message: `Unknown action ${name}`, code: 'NOT_FOUND' } }); return }
     try {
       const env = envFor(req)
-      const c = new Ctx(env, await env.dbs.platform(), (req.header('x-request-id') ?? '').slice(0, 40) || null)
-      const device = (req.header('x-device') ?? '').trim()
+      const meta = (req.body && typeof req.body.h === 'object' && req.body.h) || {}
+      const hdr = (name: string) => req.header(name) ?? (typeof meta[name] === 'string' ? (meta[name] as string) : undefined)
+      const c = new Ctx(env, await env.dbs.platform(), (hdr('x-request-id') ?? '').slice(0, 40) || null)
+      const device = (hdr('x-device') ?? '').trim()
       c.origin = /^[A-Za-z0-9_-]{6,40}$/.test(device) ? device : null
-      const token = (req.header('authorization') ?? '').replace(/^Bearer\s+/i, '')
+      const token = (hdr('authorization') ?? '').replace(/^Bearer\s+/i, '')
       const claims = verifyToken<Record<string, unknown>>(token)
       if (h.access === 'user') {
         if (!claims || claims.t !== 'u') throw new ApiError('Please sign in again', 401, 'UNAUTHORIZED')
         await openShop(c, String(claims.bid))
-        c.session = await loadSession(c, claims as unknown as UserClaims, req.header('x-branch') ?? undefined)
+        c.session = await loadSession(c, claims as unknown as UserClaims, hdr('x-branch') ?? undefined)
         if (!c.session) throw new ApiError('Please sign in again', 401, 'UNAUTHORIZED')
         if (h.write) c.assertWritable({ readOnlyOk: h.readOnlyOk })
         else if (c.session.business.status === 'deactivated' && !c.session.support) throw new ApiError('This account has been deactivated. Please contact the product admin.', 403, 'DEACTIVATED')
@@ -82,7 +95,7 @@ export function createApp(envFor: (req: Request) => Env) {
         // Public actions (QR menu) may still know the signed-in user, but never need one.
         try {
           await openShop(c, String(claims.bid))
-          c.session = await loadSession(c, claims as unknown as UserClaims, req.header('x-branch') ?? undefined)
+          c.session = await loadSession(c, claims as unknown as UserClaims, hdr('x-branch') ?? undefined)
         } catch { c.session = null }
       }
       const args = Array.isArray(req.body?.args) ? req.body.args : []

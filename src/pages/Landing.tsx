@@ -1,10 +1,11 @@
-// Public landing page (/ when signed out, and /welcome). Its own look — ink and receipt paper — so it doesn't feel
-// like the app screens. Everything shown here is something the product really does.
+// Public landing page (/ when signed out, and /welcome). Positions BillPoodum as complete business management —
+// billing is one part. Its own look (deep charcoal + mint), separate from the app screens. Everything shown here
+// is something the product really does.
 import clsx from 'clsx'
 import {
-  ArrowRight, BarChart3, Boxes, ChefHat, Clock, CreditCard, Flame, LayoutDashboard, Languages, MessageCircle,
-  NotebookPen, PackageOpen, QrCode, ReceiptText, Scissors, ShieldCheck, ShoppingCart, Sparkles, Store, Tag, UserCheck,
-  Users, UtensilsCrossed, Wallet, type LucideIcon,
+  ArrowRight, BarChart3, Bell, Boxes, Check, ChefHat, CreditCard, FileSpreadsheet, Languages, LayoutDashboard, Lock,
+  MessageCircle, MonitorSmartphone, NotebookPen, PackageOpen, QrCode, ReceiptText, Scissors, ShieldCheck, ShoppingCart,
+  Store, Tag, TrendingUp, UserCheck, Users, UtensilsCrossed, Wallet, type LucideIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -12,23 +13,20 @@ import { useApp } from '@/app/AppContext'
 import { LanguageToggle } from '@/i18n/LanguagePicker'
 import './landing.css'
 
-/** Price shown on the page (₹ per branch per month). Keep it the same as Admin → Settings → price per branch. */
-const PRICE_PER_BRANCH = 499
-/** "Get your account" opens WhatsApp when this is set (digits with country code, e.g. 919876543210); else sign-in. */
+/** "Get started" opens WhatsApp when this is set (digits with country code, e.g. 919876543210); else sign-in. */
 const CONTACT_WHATSAPP = (import.meta.env.VITE_CONTACT_WHATSAPP ?? '').replace(/\D/g, '')
-const getStartedHref = CONTACT_WHATSAPP
-  ? `https://wa.me/${CONTACT_WHATSAPP}?text=${encodeURIComponent('Hi, I would like a BillPoodum account for my shop.')}`
-  : null
+const waLink = CONTACT_WHATSAPP ? `https://wa.me/${CONTACT_WHATSAPP}?text=${encodeURIComponent('Hi, I would like to know more about BillPoodum for my business.')}` : null
 
 const reduced = () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-const rupee = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+/** Scroll to a section (no #anchors: the app may use # for its own links). */
+const jump = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: reduced() ? 'auto' : 'smooth' })
+const D = (ms: number) => ({ ['--d' as string]: `${ms}ms` })
 
-/** Adds .is-in to [data-reveal] elements as they scroll into view. */
 function useReveal() {
   useEffect(() => {
     const els = document.querySelectorAll('.lp [data-reveal]')
     if (!('IntersectionObserver' in window)) { els.forEach((e) => e.classList.add('is-in')); return }
-    const io = new IntersectionObserver((list) => list.forEach((x) => { if (x.isIntersecting) { x.target.classList.add('is-in'); io.unobserve(x.target) } }), { rootMargin: '0px 0px -10% 0px' })
+    const io = new IntersectionObserver((list) => list.forEach((x) => { if (x.isIntersecting) { x.target.classList.add('is-in'); io.unobserve(x.target) } }), { rootMargin: '0px 0px -8% 0px' })
     els.forEach((e) => io.observe(e))
     return () => io.disconnect()
   }, [])
@@ -39,146 +37,263 @@ function useInView<T extends Element>(margin = '0px') {
   useEffect(() => {
     const el = ref.current
     if (!el || seen) return
-    const io = new IntersectionObserver(([x]) => { if (x.isIntersecting) { setSeen(true); io.disconnect() } }, { rootMargin: margin, threshold: 0.25 })
+    const io = new IntersectionObserver(([x]) => { if (x.isIntersecting) { setSeen(true); io.disconnect() } }, { rootMargin: margin, threshold: 0.2 })
     io.observe(el)
     return () => io.disconnect()
   }, [seen, margin])
   return [ref, seen] as const
 }
 
-function GetStarted({ className, label = 'Get your account' }: { className?: string; label?: string }) {
-  const cls = clsx('lp-btn lp-btn-gold px-6 py-3 text-[15px]', className)
-  return getStartedHref
-    ? <a href={getStartedHref} target="_blank" rel="noreferrer" className={cls}><MessageCircle className="h-4 w-4" />{label}</a>
+function GetStarted({ className, label = 'Get started' }: { className?: string; label?: string }) {
+  const cls = clsx('lp-btn lp-btn-mint px-6 py-3 text-[15px]', className)
+  return waLink
+    ? <a href={waLink} target="_blank" rel="noreferrer" className={cls}><MessageCircle className="h-4 w-4" />{label}</a>
     : <Link to="/login" className={cls}>{label}<ArrowRight className="h-4 w-4" /></Link>
 }
 
 function Mark({ className }: { className?: string }) {
   return (
     <div className={clsx('flex items-center gap-2.5', className)}>
-      <div className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-[#4d86ff] to-[#1f55eb] text-white shadow-[0_8px_24px_-8px_rgba(59,115,246,.9)]">
-        <ReceiptText className="h-[18px] w-[18px]" />
+      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-[#94f8af] to-[#61ce70] text-[#07130b] shadow-[0_8px_24px_-8px_rgba(97,206,112,.9)]">
+        <LayoutDashboard className="h-[18px] w-[18px]" />
       </div>
-      <span className="text-[17px] font-semibold tracking-tight" data-no-i18n>BillPoodum</span>
+      <span className="lp-display text-[17px] text-white" data-no-i18n>BillPoodum</span>
     </div>
   )
 }
 
-// ======================================================================= the printing receipt
+// ======================================================================= hero: the owner's dashboard
 
-interface Shop {
-  name: string; place: string; meta: string; bill: string
-  items: [string, number, number][] // name, qty, price
-  tax: { label: string; rate: number; inclusive?: boolean }
-  pay: string
-  chips: [string, string]
-}
-const SHOPS: Shop[] = [
-  {
-    name: 'Murugan Tea Stall', place: 'Madurai', meta: 'Counter · Takeaway', bill: 'INV-10482',
-    items: [['Filter Coffee', 2, 25], ['Masala Tea', 1, 20], ['Onion Samosa', 3, 15], ['Medu Vada', 2, 12]],
-    tax: { label: 'GST 5%', rate: 0.05 }, pay: 'UPI',
-    chips: ['Bill sent on WhatsApp', 'Coffee powder · 2.1 kg left'],
-  },
-  {
-    name: 'FreshMart Supermarket', place: 'Coimbatore', meta: 'Counter 3 · Scanned', bill: 'FM-20931',
-    items: [['Aavin Milk 500 ml', 2, 27], ['Ponni Rice 5 kg', 1, 365], ['Sunflower Oil 1 L', 1, 148], ['Toor Dal 1 kg', 1, 162], ['Brown Bread', 1, 45]],
-    tax: { label: 'GST (incl.)', rate: 0.05, inclusive: true }, pay: 'CASH',
-    chips: ['Stock updated · Milk 56 left', 'Expiry first · Batch B-114'],
-  },
-  {
-    name: 'Glow Unisex Salon', place: 'Chennai', meta: 'Stylist · Priya', bill: 'GL-1207',
-    items: [['Haircut', 1, 250], ['Beard Styling', 1, 120], ['Hair Spa', 1, 799]],
-    tax: { label: 'GST 18%', rate: 0.18 }, pay: 'CARD',
-    chips: ['Priya · commission added', 'Next visit reminder ready'],
-  },
-  {
-    name: 'Annapoorna Restaurant', place: 'Trichy', meta: 'Table 4 · Dine in', bill: 'AN-5530',
-    items: [['Veg Meals', 2, 140], ['Paneer Butter Masala', 1, 220], ['Butter Naan', 3, 45], ['Sweet Lassi', 2, 70]],
-    tax: { label: 'GST 5%', rate: 0.05 }, pay: 'UPI',
-    chips: ['KOT-0042 → Kitchen', 'Table 4 is free again'],
-  },
-]
-function totals(s: Shop) {
-  const sub = s.items.reduce((a, [, q, p]) => a + q * p, 0)
-  const tax = s.tax.inclusive ? sub - sub / (1 + s.tax.rate) : sub * s.tax.rate
-  const raw = s.tax.inclusive ? sub : sub + tax
-  const total = Math.round(raw)
-  return { sub, tax, round: total - raw, total }
-}
+const WEEK: [string, number][] = [['Mon', 58], ['Tue', 64], ['Wed', 52], ['Thu', 71], ['Fri', 84], ['Sat', 96], ['Sun', 78]]
 
-function PrintingReceipt() {
-  const [shop, setShop] = useState(0)
-  const [step, setStep] = useState(0)
-  const [torn, setTorn] = useState(false)
-  const s = SHOPS[shop]
-  const t = useMemo(() => totals(s), [s])
-  const steps = 3 + s.items.length + 4 // header rows, items, totals, stamp
-
-  useEffect(() => {
-    if (reduced()) { setStep(steps); const id = setTimeout(() => setShop((i) => (i + 1) % SHOPS.length), 6000); return () => clearTimeout(id) }
-    if (step < steps) { const id = setTimeout(() => setStep((x) => x + 1), step === 0 ? 500 : 240); return () => clearTimeout(id) }
-    const hold = setTimeout(() => setTorn(true), 3200)
-    const next = setTimeout(() => { setTorn(false); setStep(0); setShop((i) => (i + 1) % SHOPS.length) }, 3900)
-    return () => { clearTimeout(hold); clearTimeout(next) }
-  }, [step, steps])
-
-  const show = (n: number) => step >= n
-  const itemsFrom = 3, totalsFrom = 3 + s.items.length
+function HeroDashboard() {
   return (
-    <div className="relative mx-auto w-full max-w-[380px]" data-no-i18n>
-      <div className="lp-printer"><span className={clsx('lp-led', step < steps && 'is-busy')} /></div>
-      <div className="relative -mt-[14px] px-[30px]">
-        <div className="lp-receipt-wrap">
-          <div className={clsx('lp-receipt lp-paper lp-mono min-h-[60px] px-6 pb-8 pt-6 text-[12.5px] leading-[1.75]', torn && 'is-torn')} key={shop}>
-            {show(1) && (
-              <div className="lp-row text-center">
-                <div className="text-[15px] font-bold uppercase tracking-wider">{s.name}</div>
-                <div className="text-[11px] opacity-60">{s.place} · GSTIN 33ABCDE1234F1Z5</div>
-              </div>
-            )}
-            {show(2) && <div className="lp-row mt-2 flex justify-between text-[11px] opacity-70"><span>{s.bill}</span><span>{s.meta}</span></div>}
-            {show(3) && <div className="lp-row my-2 border-t border-dashed border-black/25" />}
-            {s.items.map(([name, q, p], i) => show(itemsFrom + i + 1) && (
-              <div key={name} className="lp-row flex items-baseline">
-                <span className="truncate">{name}</span><span className="ml-1 shrink-0 opacity-60">×{q}</span>
-                <span className="lp-dots" />
-                <span className="tabular shrink-0">{rupee(q * p)}</span>
-              </div>
+    <div className="relative mx-auto max-w-5xl">
+      <div className="lp-window overflow-hidden">
+        <div className="flex items-center gap-2 border-b border-white/5 px-4 py-3">
+          <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" /><span className="h-2.5 w-2.5 rounded-full bg-[#febc2e]" /><span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
+          <div className="mx-auto hidden rounded-md bg-white/5 px-10 py-1 text-[11px] text-white/40 sm:block">Dashboard · All branches</div>
+        </div>
+        <div className="grid grid-cols-12">
+          <aside className="col-span-3 hidden border-r border-white/5 p-3 text-[13px] md:block lg:col-span-2">
+            {([[LayoutDashboard, 'Dashboard'], [ReceiptText, 'Billing'], [Boxes, 'Inventory'], [Users, 'Customers'], [UserCheck, 'Staff'], [Wallet, 'Expenses'], [BarChart3, 'Reports']] as [LucideIcon, string][]).map(([I, l], k) => (
+              <div key={l} className={clsx('mb-1 flex items-center gap-2.5 rounded-lg px-2.5 py-2', k === 0 ? 'bg-[#7ffaab]/10 text-[#7ffaab]' : 'text-white/45')}><I className="h-4 w-4" />{l}</div>
             ))}
-            {show(totalsFrom + 1) && <div className="lp-row mt-2 border-t border-dashed border-black/25 pt-2 flex justify-between opacity-75"><span>Subtotal</span><span className="tabular">{rupee(t.sub)}</span></div>}
-            {show(totalsFrom + 2) && <div className="lp-row flex justify-between opacity-75"><span>{s.tax.label}</span><span className="tabular">{rupee(t.tax)}</span></div>}
-            {show(totalsFrom + 3) && (
-              <div className="lp-row mt-1 flex items-end justify-between border-t-2 border-black/80 pt-2">
-                <span className="text-[13px] font-bold">TOTAL</span>
-                <span className="tabular text-[22px] font-bold leading-none">{rupee(t.total)}</span>
+          </aside>
+          <main className="col-span-12 p-4 sm:p-6 md:col-span-9 lg:col-span-10">
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              {[['Today’s sales', '₹48,250', '+12%'], ['Bills', '312', '+8%'], ['Expenses', '₹6,400', ''], ['Customer dues', '₹12,800', '']].map(([l, v, d]) => (
+                <div key={l} className="rounded-2xl border border-white/5 bg-white/[.03] p-3.5 sm:p-4">
+                  <div className="text-[11px] text-white/45 sm:text-xs">{l}</div>
+                  <div className="lp-display mt-1.5 text-lg text-white sm:text-2xl">{v}</div>
+                  {d && <div className="mt-1 flex items-center gap-1 text-[11px] text-[#7ffaab]"><TrendingUp className="h-3 w-3" />{d}</div>}
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 grid gap-3 lg:grid-cols-3">
+              <div className="rounded-2xl border border-white/5 bg-white/[.03] p-4 lg:col-span-2">
+                <div className="flex items-center justify-between text-xs text-white/45"><span>Sales this week</span><span>₹5.0L</span></div>
+                <div className="mt-4 flex h-32 items-end gap-2 sm:h-40 sm:gap-3">
+                  {WEEK.map(([d, v], k) => (
+                    <div key={d} className="flex h-full flex-1 flex-col items-center gap-2">
+                      <div className="flex w-full flex-1 items-end"><div className="lp-bar w-full rounded-t-lg bg-gradient-to-t from-[#61ce70]/40 to-[#94f8af]" style={{ height: `${v}%`, ...D(300 + k * 70) }} /></div>
+                      <span className="text-[10px] text-white/35">{d}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
-            )}
-            {show(totalsFrom + 4) && (
-              <>
-                <div className="mt-4 flex justify-center"><span className="lp-stamp pointer-events-none inline-block px-3 py-0.5 text-[13px] font-bold">PAID · {s.pay}</span></div>
-                <div className="lp-row mt-2 text-center text-[11px] opacity-60">Thank you! Visit again.</div>
-              </>
-            )}
+              <div className="rounded-2xl border border-white/5 bg-white/[.03] p-4">
+                <div className="text-xs text-white/45">Branches today</div>
+                {[['Anna Nagar', 62], ['T. Nagar', 48], ['Velachery', 31]].map(([n, p]) => (
+                  <div key={n} className="mt-3.5">
+                    <div className="flex justify-between text-[12px]"><span className="text-white/75">{n}</span><span className="text-white/45">{p}%</span></div>
+                    <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/5"><div className="h-full rounded-full bg-[#7ffaab]" style={{ width: `${p}%` }} /></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+      {/* what's happening across the business, right now */}
+      <div className="lp-chip lp-float absolute -left-3 top-[22%] hidden items-center gap-3 rounded-2xl px-4 py-3 xl:flex xl:-left-24">
+        <span className="lp-icon lp-ping h-9 w-9 rounded-xl"><QrCode className="h-4 w-4" /></span>
+        <div><div className="text-[13px] font-semibold text-white">New QR order</div><div className="text-[11px] text-white/50">Table 5 · ₹640</div></div>
+      </div>
+      <div className="lp-chip lp-float-2 absolute -right-3 top-[14%] hidden items-center gap-3 rounded-2xl px-4 py-3 xl:flex xl:-right-20">
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-400/15 text-amber-300"><Bell className="h-4 w-4" /></span>
+        <div><div className="text-[13px] font-semibold text-white">Low stock</div><div className="text-[11px] text-white/50">Milk 500 ml · 6 left</div></div>
+      </div>
+      <div className="lp-chip lp-float-2 absolute -left-3 bottom-[10%] hidden items-center gap-3 rounded-2xl px-4 py-3 xl:flex xl:-left-20">
+        <span className="lp-icon h-9 w-9 rounded-xl"><UserCheck className="h-4 w-4" /></span>
+        <div><div className="text-[13px] font-semibold text-white">Attendance</div><div className="text-[11px] text-white/50">12 of 14 present</div></div>
+      </div>
+      <div className="lp-chip lp-float absolute -right-3 bottom-[16%] hidden items-center gap-3 rounded-2xl px-4 py-3 xl:flex xl:-right-24">
+        <span className="lp-icon h-9 w-9 rounded-xl"><Check className="h-4 w-4" /></span>
+        <div><div className="text-[13px] font-semibold text-white">Payment received</div><div className="text-[11px] text-white/50">₹1,240 · UPI</div></div>
+      </div>
+    </div>
+  )
+}
+
+// ======================================================================= the feature explorer
+
+interface Module { key: string; icon: LucideIcon; tag: string; title: string; blurb: string; points: string[] }
+const MODULES: Module[] = [
+  { key: 'pos', icon: ReceiptText, tag: 'Sell', title: 'Billing & POS', blurb: 'Fast counter billing with barcode scan, sizes, add-ons, discounts and split payments — UPI, cash, card or credit.', points: ['Bill in a few taps — search, scan or tap the item', 'GST worked out per item, printed on 58 / 80 mm receipts', 'Returns, exchanges and credit notes', 'Edit running orders and settle them later'] },
+  { key: 'serve', icon: UtensilsCrossed, tag: 'Serve', title: 'Tables, kitchen & QR orders', blurb: 'Run dine-in smoothly: table status, waiters taking orders on their phones, kitchen tickets on a screen and guests ordering by QR.', points: ['Every table at a glance — transfer and merge', 'Kitchen tickets (KOT) reach the kitchen screen instantly', 'QR menu for dine-in, takeaway and delivery', 'Today’s specials on a TV display'] },
+  { key: 'stock', icon: Boxes, tag: 'Stock', title: 'Inventory & stock', blurb: 'Know exactly what you have in every branch. Stock goes down with every bill and up with every purchase.', points: ['Low-stock alerts before you run out', 'Batch & expiry — the earliest expiry is sold first', 'Barcode labels and bulk import from Excel / CSV', 'Wastage and adjustments, with full history'] },
+  { key: 'people', icon: UserCheck, tag: 'People', title: 'Staff & payroll', blurb: 'Attendance, salary, advances and commission — and logins that show each person only what their role allows.', points: ['Daily attendance in one tap', 'Monthly salary with advances deducted', 'Commission for each staff member', 'Roles & permissions for every login'] },
+  { key: 'money', icon: Wallet, tag: 'Money', title: 'Payments, credit & expenses', blurb: 'Every rupee in and out: payments, customer credit, collections and shop expenses — all in one place.', points: ['Customer credit and outstanding dues', 'Collect dues against old bills', 'Expenses by category — rent, purchase, salary…', 'Cash, UPI and card totals for the day'] },
+  { key: 'grow', icon: MessageCircle, tag: 'Grow', title: 'Customers & WhatsApp', blurb: 'Turn walk-ins into regulars with customer history, special prices, and bills and offers on WhatsApp.', points: ['Customer profiles with purchase history', 'Send bills on WhatsApp', 'Offer campaigns with a poster from your menu', 'Wholesale price list for bulk buyers'] },
+  { key: 'control', icon: BarChart3, tag: 'Control', title: 'Reports & multi-branch', blurb: 'See the whole business — one branch or all of them together — from your phone, wherever you are.', points: ['Sales, expense and product reports', 'Branch-by-branch comparison', 'Audit log of every change', 'Export all your data any time'] },
+]
+const MODULE_MS = 6500
+
+function ModuleMock({ k }: { k: string }) {
+  const row = 'flex items-center justify-between rounded-xl border border-white/5 bg-white/[.03] px-3.5 py-2.5 text-[13px]'
+  switch (k) {
+    case 'pos': return (
+      <div className="grid gap-3 sm:grid-cols-5">
+        <div className="grid grid-cols-2 gap-2.5 sm:col-span-3">
+          {[['Filter Coffee', 25], ['Veg Puff', 22], ['Masala Dosa', 70], ['Rose Milk', 35]].map(([n, p], i) => (
+            <div key={n} className="lp-swap rounded-xl border border-white/5 bg-white/[.04] p-3" style={D(i * 60)}>
+              <div className="mb-5 h-7 w-7 rounded-lg bg-gradient-to-br from-[#7ffaab]/30 to-[#605be5]/30" />
+              <div className="text-[12px] text-white/80" data-no-i18n>{n}</div><div className="text-[12px] font-semibold text-[#7ffaab]">₹{p}</div>
+            </div>
+          ))}
+        </div>
+        <div className="lp-swap rounded-xl border border-white/5 bg-white/[.04] p-3.5 sm:col-span-2" style={D(200)}>
+          <div className="text-[11px] uppercase tracking-wider text-white/40">Bill · INV-10482</div>
+          {[['Filter Coffee ×2', 50], ['Masala Dosa', 70], ['GST 5%', 6]].map(([n, p]) => <div key={n} className="mt-2 flex justify-between text-[12px] text-white/70"><span data-no-i18n>{n}</span><span>₹{p}</span></div>)}
+          <div className="mt-3 flex justify-between border-t border-white/10 pt-2 text-sm font-semibold text-white"><span>Total</span><span>₹126</span></div>
+          <div className="mt-3 grid grid-cols-3 gap-1.5 text-center text-[11px]">{['UPI', 'Cash', 'Card'].map((m, i) => <span key={m} className={clsx('rounded-lg py-1.5', i === 0 ? 'bg-[#7ffaab] text-[#07130b]' : 'bg-white/5 text-white/60')}>{m}</span>)}</div>
+        </div>
+      </div>
+    )
+    case 'serve': return (
+      <div className="grid gap-3 sm:grid-cols-5">
+        <div className="grid grid-cols-4 gap-2 sm:col-span-3">
+          {(['busy', 'free', 'bill', 'busy', 'free', 'busy', 'free', 'bill'] as const).map((st, i) => (
+            <div key={i} className={clsx('lp-swap flex aspect-square flex-col items-center justify-center rounded-xl border text-[12px] font-semibold', st === 'free' ? 'border-white/10 text-white/50' : st === 'busy' ? 'border-[#7ffaab]/40 bg-[#7ffaab]/10 text-[#7ffaab]' : 'border-amber-300/40 bg-amber-300/10 text-amber-200')} style={D(i * 45)}>
+              T{i + 1}<span className="mt-0.5 text-[9px] font-normal opacity-70">{st === 'free' ? 'Free' : st === 'busy' ? 'Running' : 'Bill'}</span>
+            </div>
+          ))}
+        </div>
+        <div className="lp-swap rounded-xl border border-white/5 bg-white/[.04] p-3.5 sm:col-span-2" style={D(250)}>
+          <div className="flex items-center justify-between text-[11px] uppercase tracking-wider text-white/40"><span>KOT-0042</span><span className="text-[#7ffaab]">New</span></div>
+          <div className="mt-1 text-[12px] text-white/50">Table 4 · Dine in</div>
+          {['2 × Veg Meals', '1 × Paneer Butter Masala', '3 × Butter Naan'].map((x) => <div key={x} className="mt-2 text-[13px] text-white/85" data-no-i18n>{x}</div>)}
+          <div className="mt-3 rounded-lg bg-[#7ffaab]/10 py-1.5 text-center text-[11px] text-[#7ffaab]">Start preparing</div>
+        </div>
+      </div>
+    )
+    case 'stock': return (
+      <div className="space-y-2">
+        {[['Aavin Milk 500 ml', 6, 'low', 'Exp 14 Oct'], ['Ponni Rice 5 kg', 84, 'ok', ''], ['Sunflower Oil 1 L', 23, 'ok', 'Exp 02 Mar'], ['Brown Bread', 4, 'low', 'Exp 13 Oct'], ['Toor Dal 1 kg', 41, 'ok', '']].map(([n, q, st, ex], i) => (
+          <div key={n as string} className={clsx(row, 'lp-swap')} style={D(i * 55)}>
+            <span className="text-white/80" data-no-i18n>{n}</span>
+            <span className="flex items-center gap-2">
+              {ex && <span className="hidden rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-white/50 sm:inline" data-no-i18n>{ex}</span>}
+              <span className={clsx('rounded-full px-2.5 py-0.5 text-[11px] font-semibold', st === 'low' ? 'bg-amber-300/15 text-amber-200' : 'bg-[#7ffaab]/10 text-[#7ffaab]')}>{q as number} left</span>
+            </span>
+          </div>
+        ))}
+      </div>
+    )
+    case 'people': return (
+      <div className="space-y-2">
+        {[['Priya', 'Stylist', true, '₹18,000'], ['Kumar', 'Cashier', true, '₹15,500'], ['Anitha', 'Kitchen', false, '₹14,000'], ['Ravi', 'Waiter', true, '₹12,000']].map(([n, r, p, s], i) => (
+          <div key={n as string} className={clsx(row, 'lp-swap')} style={D(i * 55)}>
+            <span className="flex items-center gap-3"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/5 text-[12px] font-semibold text-white/80" data-no-i18n>{(n as string)[0]}</span><span><span className="block text-white/85" data-no-i18n>{n}</span><span className="text-[11px] text-white/40">{r}</span></span></span>
+            <span className="flex items-center gap-3"><span className="hidden text-[12px] text-white/50 sm:inline">{s as string}</span><span className={clsx('rounded-full px-2.5 py-0.5 text-[11px] font-semibold', p ? 'bg-[#7ffaab]/10 text-[#7ffaab]' : 'bg-white/5 text-white/40')}>{p ? 'Present' : 'Leave'}</span></span>
+          </div>
+        ))}
+      </div>
+    )
+    case 'money': return (
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="lp-swap rounded-xl border border-white/5 bg-white/[.04] p-4">
+          <div className="text-[11px] uppercase tracking-wider text-white/40">Collected today</div>
+          {[['UPI', 62, '₹29,900'], ['Cash', 28, '₹13,500'], ['Card', 10, '₹4,850']].map(([m, p, v]) => (
+            <div key={m as string} className="mt-3">
+              <div className="flex justify-between text-[12px]"><span className="text-white/75">{m}</span><span className="text-white/50">{v}</span></div>
+              <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/5"><div className="h-full rounded-full bg-[#7ffaab]" style={{ width: `${p}%` }} /></div>
+            </div>
+          ))}
+        </div>
+        <div className="lp-swap rounded-xl border border-white/5 bg-white/[.04] p-4" style={D(150)}>
+          <div className="text-[11px] uppercase tracking-wider text-white/40">Dues to collect</div>
+          {[['Raja Stores', '₹4,200'], ['Meena', '₹1,150'], ['Hotel Saravana', '₹7,450']].map(([n, v]) => <div key={n} className="mt-2.5 flex justify-between text-[13px]"><span className="text-white/80" data-no-i18n>{n}</span><span className="font-semibold text-amber-200">{v}</span></div>)}
+          <div className="mt-3 rounded-lg bg-white/5 py-1.5 text-center text-[11px] text-white/60">Collect due</div>
+        </div>
+      </div>
+    )
+    case 'grow': return (
+      <div className="mx-auto max-w-sm rounded-2xl border border-white/5 bg-[#0b141a] p-3">
+        <div className="flex items-center gap-2 border-b border-white/5 pb-2.5"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#25d366] text-white"><MessageCircle className="h-4 w-4" /></span><span className="text-[13px] font-semibold text-white" data-no-i18n>Murugan Tea Stall</span></div>
+        <div className="lp-swap mt-3 rounded-xl rounded-tl-sm bg-[#1f2c34] p-2.5">
+          <div className="flex h-24 items-center justify-center rounded-lg bg-gradient-to-br from-[#61ce70]/50 to-[#605be5]/40 text-center">
+            <span className="lp-display text-lg text-white">Evening offer<br /><span className="text-sm font-normal text-white/80">Samosa + Tea ₹30</span></span>
+          </div>
+          <div className="mt-2 text-[12px] text-white/80">Hi Meena! Today’s evening offer — see you at the shop 🙂</div>
+          <div className="mt-1 text-right text-[10px] text-white/40">5:30 PM ✓✓</div>
+        </div>
+        <div className="lp-swap mt-2 ml-auto w-fit rounded-xl rounded-tr-sm bg-[#005c4b] px-3 py-2 text-[12px] text-white/90" style={D(250)}>Bill INV-10482 · ₹126 · Thank you!</div>
+      </div>
+    )
+    default: return (
+      <div className="grid gap-3 sm:grid-cols-3">
+        {[['Sales', '₹14.2L'], ['Expenses', '₹2.1L'], ['Bills', '9,840']].map(([l, v], i) => (
+          <div key={l} className="lp-swap rounded-xl border border-white/5 bg-white/[.04] p-3.5" style={D(i * 70)}><div className="text-[11px] text-white/40">{l} · this month</div><div className="lp-display mt-1 text-xl text-white">{v}</div></div>
+        ))}
+        <div className="lp-swap rounded-xl border border-white/5 bg-white/[.04] p-4 sm:col-span-3" style={D(220)}>
+          <div className="text-[11px] text-white/40">Branch-wise sales</div>
+          <div className="mt-3 flex h-24 items-end gap-3">
+            {[70, 52, 88, 40, 64, 76].map((v, i) => <div key={i} className="lp-bar flex-1 rounded-t-md bg-gradient-to-t from-[#605be5]/50 to-[#7ffaab]" style={{ height: `${v}%`, ...D(300 + i * 60) }} />)}
           </div>
         </div>
       </div>
-      {/* what happened behind the bill */}
-      {step >= steps && !torn && (
-        <>
-          <div className="lp-chip absolute right-[calc(100%-26px)] top-[30%] hidden whitespace-nowrap rounded-2xl px-3.5 py-2.5 text-xs text-white xl:flex xl:items-center xl:gap-2">
-            <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_10px] shadow-emerald-400" />{s.chips[0]}
-          </div>
-          <div className="lp-chip absolute left-[calc(100%-26px)] top-[64%] hidden whitespace-nowrap rounded-2xl px-3.5 py-2.5 text-xs text-white xl:flex xl:items-center xl:gap-2" style={{ animationDelay: '180ms' }}>
-            <Sparkles className="h-3.5 w-3.5 text-[#f5a524]" />{s.chips[1]}
-          </div>
-        </>
-      )}
-      <div className="mt-5 flex min-h-[34px] flex-wrap justify-center gap-2 xl:hidden">
-        {step >= steps && !torn && s.chips.map((c, k) => <span key={c} className="lp-chip rounded-full px-3 py-1.5 text-[11px] text-white" style={{ animationDelay: `${k * 150}ms` }}>{c}</span>)}
+    )
+  }
+}
+
+function FeatureExplorer() {
+  const [i, setI] = useState(0)
+  const [auto, setAuto] = useState(true)
+  const [ref, seen] = useInView<HTMLDivElement>('0px 0px -25% 0px')
+  useEffect(() => {
+    if (!auto || !seen || reduced()) return
+    const id = setTimeout(() => setI((x) => (x + 1) % MODULES.length), MODULE_MS)
+    return () => clearTimeout(id)
+  }, [i, auto, seen])
+  const m = MODULES[i]
+  return (
+    <div ref={ref} className="grid gap-6 lg:grid-cols-[minmax(0,.9fr)_minmax(0,1.4fr)]">
+      <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar lg:flex-col lg:overflow-visible">
+        {MODULES.map((x, k) => (
+          <button key={x.key} type="button" onClick={() => { setI(k); setAuto(false) }}
+            className={clsx('lp-tab relative flex shrink-0 items-center gap-3.5 overflow-hidden rounded-2xl border border-transparent px-4 py-3 text-left lg:py-3.5', k === i && 'is-on')}>
+            <span className={clsx('flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border', k === i ? 'border-[#7ffaab]/40 bg-[#7ffaab]/15 text-[#7ffaab]' : 'border-white/10 bg-white/[.03] text-white/50')}><x.icon className="h-[18px] w-[18px]" /></span>
+            <span>
+              <span className="block text-[11px] font-semibold uppercase tracking-[.16em] text-white/35">{x.tag}</span>
+              <span className="lp-tab-title block whitespace-nowrap text-[15px] font-semibold text-white/65">{x.title}</span>
+            </span>
+            {k === i && auto && seen && <span key={`p${i}`} className="lp-progress absolute bottom-0 left-0 h-0.5 w-full bg-[#7ffaab]/70" style={{ animationDuration: `${MODULE_MS}ms` }} />}
+          </button>
+        ))}
       </div>
-      <div className="mt-6 flex justify-center gap-1.5">
-        {SHOPS.map((x, i) => <span key={x.name} className={clsx('h-1.5 rounded-full transition-all duration-500', i === shop ? 'w-6 bg-[#f5a524]' : 'w-1.5 bg-white/25')} />)}
+      <div className="lp-card p-6 sm:p-8" key={m.key}>
+        <div className="lp-swap flex items-center gap-3"><span className="lp-icon h-11 w-11"><m.icon className="h-5 w-5" /></span><h3 className="lp-display text-2xl text-white sm:text-3xl">{m.title}</h3></div>
+        <p className="lp-swap lp-muted mt-4 max-w-2xl text-[16px] leading-relaxed" style={D(60)}>{m.blurb}</p>
+        <ul className="mt-5 grid gap-x-6 gap-y-2.5 sm:grid-cols-2">
+          {m.points.map((p, k) => (
+            <li key={p} className="lp-swap flex items-start gap-2.5 text-[14px] text-white/80" style={D(100 + k * 50)}>
+              <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#7ffaab]/15 text-[#7ffaab]"><Check className="h-3 w-3" /></span>{p}
+            </li>
+          ))}
+        </ul>
+        <div className="mt-7 rounded-2xl border border-white/5 bg-black/20 p-4 sm:p-5"><ModuleMock k={m.key} /></div>
       </div>
     </div>
   )
@@ -186,49 +301,22 @@ function PrintingReceipt() {
 
 // ======================================================================= one app, four shapes
 
-interface Shape {
-  key: string; label: string; sub: string; icon: LucideIcon
-  nav: [LucideIcon, string][]
-  title: string; search: string
-  tiles?: [string, number][]; tables?: [string, 'free' | 'busy' | 'bill'][]
-  cart: [string, number][]
-  extras: string[]
-}
+interface Shape { key: string; label: string; sub: string; icon: LucideIcon; nav: [LucideIcon, string][]; terms: [string, string][] }
 const SHAPES: Shape[] = [
-  {
-    key: 'retail', label: 'Retail', sub: 'Supermarket · Grocery · Hardware', icon: ShoppingCart,
-    nav: [[LayoutDashboard, 'Dashboard'], [ReceiptText, 'Billing'], [PackageOpen, 'Customer Orders'], [Tag, 'Products'], [Boxes, 'Inventory'], [Users, 'Customers'], [BarChart3, 'Reports']],
-    title: 'Billing', search: 'Scan barcode or search products…',
-    tiles: [['Aavin Milk 500 ml', 27], ['Ponni Rice 5 kg', 365], ['Sunflower Oil 1 L', 148], ['Toor Dal 1 kg', 162], ['Brown Bread', 45], ['Bath Soap', 38]],
-    cart: [['Ponni Rice 5 kg', 365], ['Aavin Milk ×2', 54], ['Brown Bread', 45]],
-    extras: ['Barcode scanning', 'Batch & expiry', 'Wholesale prices'],
-  },
-  {
-    key: 'food', label: 'Food', sub: 'Tea shop · Bakery · Fast food', icon: ChefHat,
-    nav: [[LayoutDashboard, 'Dashboard'], [ReceiptText, 'Billing'], [ChefHat, 'Kitchen (KOT)'], [Tag, 'Menu Items'], [Flame, 'Daily Specials'], [QrCode, 'QR Orders'], [BarChart3, 'Reports']],
-    title: 'Billing', search: 'Search menu items…',
-    tiles: [['Filter Coffee', 25], ['Masala Tea', 20], ['Veg Puff', 22], ['Onion Samosa', 15], ['Plum Cake', 60], ['Rose Milk', 35]],
-    cart: [['Filter Coffee ×2', 50], ['Veg Puff ×2', 44], ['Rose Milk', 35]],
-    extras: ['Kitchen tickets', "Today's specials", 'QR menu'],
-  },
-  {
-    key: 'restaurant', label: 'Restaurant', sub: 'Hotel · Cafe · Dine-in', icon: UtensilsCrossed,
-    nav: [[LayoutDashboard, 'Dashboard'], [UtensilsCrossed, 'Tables'], [NotebookPen, 'Take Order'], [ChefHat, 'Kitchen (KOT)'], [Tag, 'Menu Items'], [Users, 'Guests'], [BarChart3, 'Reports']],
-    title: 'Tables', search: 'Ground floor · 8 tables',
-    tables: [['T1', 'busy'], ['T2', 'free'], ['T3', 'bill'], ['T4', 'busy'], ['T5', 'free'], ['T6', 'busy'], ['T7', 'free'], ['T8', 'bill']],
-    cart: [['Veg Meals ×2', 280], ['Paneer Butter Masala', 220], ['Butter Naan ×3', 135]],
-    extras: ['Table transfer & merge', 'Waiter phones', 'QR at the table'],
-  },
-  {
-    key: 'service', label: 'Service', sub: 'Salon · Spa · Laundry · Repair', icon: Scissors,
-    nav: [[LayoutDashboard, 'Dashboard'], [ReceiptText, 'Billing'], [Tag, 'Services'], [Users, 'Clients'], [UserCheck, 'Staff'], [CreditCard, 'Payments'], [BarChart3, 'Reports']],
-    title: 'Billing', search: 'Search services…',
-    tiles: [['Haircut', 250], ['Beard Styling', 120], ['Hair Spa', 799], ['Facial', 650], ['Manicure', 400], ['Hair Colour', 1200]],
-    cart: [['Haircut', 250], ['Hair Spa', 799], ['Beard Styling', 120]],
-    extras: ['Staff commission', 'Client history', 'Dues & credit'],
-  },
+  { key: 'retail', label: 'Retail', sub: 'Supermarket · Grocery · Hardware · Electronics', icon: ShoppingCart,
+    nav: [[ReceiptText, 'Billing'], [PackageOpen, 'Customer Orders'], [Tag, 'Products'], [Boxes, 'Inventory'], [Users, 'Customers'], [BarChart3, 'Reports']],
+    terms: [['Items called', 'Products'], ['Buyers called', 'Customers'], ['Extras', 'Barcode, batches & expiry, wholesale prices']] },
+  { key: 'food', label: 'Food', sub: 'Tea shop · Bakery · Fast food · Juice', icon: ChefHat,
+    nav: [[ReceiptText, 'Billing'], [ChefHat, 'Kitchen (KOT)'], [Tag, 'Menu Items'], [QrCode, 'QR Orders'], [Users, 'Customers'], [BarChart3, 'Reports']],
+    terms: [['Items called', 'Menu Items'], ['Buyers called', 'Customers'], ['Extras', 'Kitchen tickets, today’s specials, QR menu']] },
+  { key: 'restaurant', label: 'Restaurant', sub: 'Hotel · Cafe · Dine-in · Cloud kitchen', icon: UtensilsCrossed,
+    nav: [[UtensilsCrossed, 'Tables'], [NotebookPen, 'Take Order'], [ChefHat, 'Kitchen (KOT)'], [Tag, 'Menu Items'], [Users, 'Guests'], [BarChart3, 'Reports']],
+    terms: [['Items called', 'Menu Items'], ['Buyers called', 'Guests'], ['Extras', 'Tables, waiter phones, QR at the table']] },
+  { key: 'service', label: 'Service', sub: 'Salon · Spa · Laundry · Repair', icon: Scissors,
+    nav: [[ReceiptText, 'Billing'], [Tag, 'Services'], [Users, 'Clients'], [UserCheck, 'Staff'], [CreditCard, 'Payments'], [BarChart3, 'Reports']],
+    terms: [['Items called', 'Services'], ['Buyers called', 'Clients'], ['Extras', 'Staff commission, client history, dues']] },
 ]
-const AUTO_MS = 5200
+const SHAPE_MS = 5000
 
 function ShapeShifter() {
   const [i, setI] = useState(0)
@@ -236,129 +324,102 @@ function ShapeShifter() {
   const [ref, seen] = useInView<HTMLDivElement>('0px 0px -20% 0px')
   useEffect(() => {
     if (!auto || !seen || reduced()) return
-    const id = setTimeout(() => setI((x) => (x + 1) % SHAPES.length), AUTO_MS)
+    const id = setTimeout(() => setI((x) => (x + 1) % SHAPES.length), SHAPE_MS)
     return () => clearTimeout(id)
   }, [i, auto, seen])
   const s = SHAPES[i]
-  const total = s.cart.reduce((a, [, p]) => a + p, 0)
   return (
-    <div ref={ref}>
-      <div className="relative mx-auto grid w-full max-w-xl grid-cols-4 rounded-full border border-black/10 bg-white/70 p-1.5">
-        <span className="lp-tab-ind absolute bottom-1.5 left-1.5 top-1.5 w-[calc((100%-12px)/4)] rounded-full bg-[#17140e]" style={{ transform: `translateX(${i * 100}%)` }} />
-        {SHAPES.map((x, k) => (
-          <button key={x.key} onClick={() => { setI(k); setAuto(false) }}
-            className={clsx('relative z-10 flex items-center justify-center gap-1.5 rounded-full px-1 py-2 text-xs font-semibold transition-colors sm:gap-2 sm:text-sm', k === i ? 'text-white' : 'text-[#6b6457] hover:text-[#17140e]')}>
-            <x.icon className="hidden h-4 w-4 min-[400px]:block" />{x.label}
-          </button>
-        ))}
-      </div>
-      <p className="lp-muted mt-3 text-center text-sm" key={`sub-${s.key}`}><span className="lp-swap inline-block">{s.sub}</span></p>
-      {auto && seen && <div className="mx-auto mt-3 h-0.5 w-24 overflow-hidden rounded bg-black/10"><div key={`p-${i}`} className="lp-progress h-full bg-[#f5a524]" style={{ animationDuration: `${AUTO_MS}ms` }} /></div>}
-
-      <div className="lp-window mx-auto mt-10 max-w-5xl overflow-hidden">
-        <div className="flex items-center gap-2 border-b border-black/5 px-4 py-3">
-          <span className="h-3 w-3 rounded-full bg-[#ff5f57]" /><span className="h-3 w-3 rounded-full bg-[#febc2e]" /><span className="h-3 w-3 rounded-full bg-[#28c840]" />
-          <div className="mx-auto hidden rounded-md bg-slate-100 px-10 py-1 text-[11px] text-slate-500 sm:block">app.billpoodum.in</div>
+    <div ref={ref} className="grid items-center gap-10 lg:grid-cols-2">
+      <div>
+        <div className="relative grid w-full max-w-lg grid-cols-4 rounded-2xl border border-white/10 bg-white/[.03] p-1.5">
+          <span className="lp-seg-ind absolute bottom-1.5 left-1.5 top-1.5 w-[calc((100%-12px)/4)] rounded-xl bg-[#7ffaab]" style={{ transform: `translateX(${i * 100}%)` }} />
+          {SHAPES.map((x, k) => (
+            <button key={x.key} type="button" onClick={() => { setI(k); setAuto(false) }}
+              className={clsx('relative z-10 flex items-center justify-center gap-1.5 rounded-xl px-1 py-2.5 text-xs font-semibold transition-colors sm:text-sm', k === i ? 'text-[#07130b]' : 'text-white/60 hover:text-white')}>
+              <x.icon className="hidden h-4 w-4 min-[400px]:block" />{x.label}
+            </button>
+          ))}
         </div>
-        <div className="grid min-h-[420px] grid-cols-12" key={s.key}>
-          <aside className="col-span-3 hidden border-r border-slate-100 bg-[#0f1f3d] p-3 text-[13px] md:block">
-            <div className="mb-4 flex items-center gap-2 px-2 pt-1 text-white"><Store className="h-4 w-4 text-[#93bbfd]" /><span className="font-semibold">Main branch</span></div>
-            {s.nav.map(([I, l], k) => (
-              <div key={l} className={clsx('lp-swap mb-1 flex items-center gap-2.5 rounded-lg px-2.5 py-2', l === s.title ? 'bg-white/10 text-white' : 'text-slate-400')} style={{ ['--d' as string]: `${k * 45}ms` }}>
-                <I className="h-4 w-4" />{l}
-              </div>
-            ))}
-          </aside>
-          <main className="col-span-12 bg-slate-50 p-4 sm:p-5 md:col-span-6">
-            <div className="flex items-center justify-between">
-              <div className="text-lg font-bold text-slate-900">{s.title}</div>
-              <div className="flex gap-1.5">{s.extras.map((e, k) => <span key={e} className="lp-swap hidden rounded-full bg-[#fff4dc] px-2.5 py-1 text-[11px] font-medium text-[#8a5a00] lg:inline" style={{ ['--d' as string]: `${200 + k * 80}ms` }}>{e}</span>)}</div>
+        <p className="lp-muted mt-4 text-sm" key={`s${s.key}`}><span className="lp-swap inline-block">{s.sub}</span></p>
+        <dl className="mt-6 space-y-3" key={`t${s.key}`}>
+          {s.terms.map(([a, b], k) => (
+            <div key={a} className="lp-swap flex gap-4 border-b border-white/5 pb-3" style={D(k * 70)}>
+              <dt className="w-32 shrink-0 text-sm text-white/40">{a}</dt><dd className="text-[15px] font-medium text-white/90">{b}</dd>
             </div>
-            <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-400">{s.search}</div>
-            {s.tiles && (
-              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
-                {s.tiles.map(([n, p], k) => (
-                  <div key={n} className="lp-swap rounded-xl border border-slate-200 bg-white p-3 shadow-card" style={{ ['--d' as string]: `${k * 55}ms` }}>
-                    <div className="mb-6 h-8 w-8 rounded-lg bg-gradient-to-br from-brand-100 to-orange-100" />
-                    <div className="truncate text-[13px] font-medium text-slate-800" data-no-i18n>{n}</div>
-                    <div className="text-[13px] font-semibold text-brand-700">₹{p}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-            {s.tables && (
-              <div className="mt-4 grid grid-cols-4 gap-3">
-                {s.tables.map(([n, st], k) => (
-                  <div key={n} className={clsx('lp-swap flex aspect-square flex-col items-center justify-center rounded-2xl border-2 text-sm font-bold',
-                    st === 'free' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : st === 'busy' ? 'border-brand-200 bg-brand-50 text-brand-700' : 'border-amber-300 bg-amber-50 text-amber-700')}
-                    style={{ ['--d' as string]: `${k * 50}ms` }}>
-                    {n}<span className="mt-1 text-[10px] font-medium opacity-70">{st === 'free' ? 'Free' : st === 'busy' ? 'Running' : 'Bill'}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </main>
-          <section className="col-span-12 border-l border-slate-100 bg-white p-5 md:col-span-3">
-            <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">{s.key === 'restaurant' ? 'Table 4' : 'Current bill'}</div>
-            <div className="mt-3 space-y-2.5">
-              {s.cart.map(([n, p], k) => (
-                <div key={n} className="lp-swap flex justify-between gap-2 text-[13px]" style={{ ['--d' as string]: `${150 + k * 70}ms` }}>
-                  <span className="truncate text-slate-700" data-no-i18n>{n}</span><span className="font-medium text-slate-900">₹{p}</span>
-                </div>
-              ))}
+          ))}
+        </dl>
+      </div>
+      <div className="lp-window mx-auto w-full max-w-md overflow-hidden" key={`w${s.key}`}>
+        <div className="flex items-center gap-2 border-b border-white/5 bg-white/[.02] px-4 py-3 text-sm font-semibold text-white"><Store className="h-4 w-4 text-[#7ffaab]" />Main branch</div>
+        <div className="p-3">
+          {s.nav.map(([I, l], k) => (
+            <div key={l} className={clsx('lp-swap mb-1 flex items-center gap-3 rounded-xl px-3 py-2.5 text-[14px]', k === 0 ? 'bg-[#7ffaab]/10 text-[#7ffaab]' : 'text-white/60')} style={D(k * 50)}>
+              <I className="h-[18px] w-[18px]" />{l}
             </div>
-            <div className="mt-4 flex justify-between border-t border-slate-100 pt-3 text-sm font-bold text-slate-900"><span>Total</span><span>₹{total}</span></div>
-            <div className="mt-4 rounded-xl bg-brand-600 py-2.5 text-center text-sm font-semibold text-white">Pay · UPI / Cash / Card</div>
-          </section>
+          ))}
         </div>
       </div>
     </div>
   )
 }
 
-// ======================================================================= a day in the shop
+// ======================================================================= a day in the business
 
 const DAY: { time: string; title: string; body: string; icon: LucideIcon }[] = [
-  { time: '06:30', title: 'Shutter up.', body: 'Open BillPoodum on the counter PC, a tablet or your phone. Pick your branch — yesterday’s numbers are already waiting.', icon: Store },
-  { time: '09:15', title: 'The morning rush.', body: 'Every counter bills at the same time. Each bill gets its own number, stock goes down item by item, UPI, cash and card are split correctly.', icon: ReceiptText },
-  { time: '13:00', title: 'Kitchen in sync.', body: 'Orders reach the kitchen screen as tickets. Guests order from the QR code on their table; waiters take orders on their phones.', icon: ChefHat },
-  { time: '17:30', title: 'Fill the evening.', body: 'Send today’s offer to your regular customers on WhatsApp — with a poster made from your own menu.', icon: MessageCircle },
-  { time: '22:00', title: 'Close with clarity.', body: 'Sales, expenses, staff salary and dues in one report. Every branch, from home.', icon: BarChart3 },
+  { time: '06:30', title: 'Open the shop.', body: 'Open BillPoodum on the counter PC, a tablet or your phone. Pick your branch — yesterday’s numbers and today’s attendance are ready.', icon: Store },
+  { time: '09:15', title: 'The morning rush.', body: 'Every counter bills at the same time. Each bill gets its own number, stock goes down item by item, and UPI, cash and card are counted correctly.', icon: ReceiptText },
+  { time: '13:00', title: 'Kitchen and tables in sync.', body: 'Orders reach the kitchen screen as tickets. Guests order from the QR code on their table; waiters take orders on their phones.', icon: ChefHat },
+  { time: '16:00', title: 'Restock and pay.', body: 'Low-stock items show up before they run out. Record purchases and expenses, collect customer dues, give a staff advance.', icon: Boxes },
+  { time: '17:30', title: 'Bring customers back.', body: 'Send today’s offer to your regular customers on WhatsApp — with a poster made from your own menu.', icon: MessageCircle },
+  { time: '22:00', title: 'Close with clarity.', body: 'Sales, expenses, salary and dues in one report — for every branch, from home.', icon: BarChart3 },
 ]
 
 function DayTimeline() {
   const [active, setActive] = useState(0)
   const refs = useRef<(HTMLDivElement | null)[]>([])
+  // The card nearest the middle of the screen is the current moment (also when the middle is between cards).
   useEffect(() => {
-    const io = new IntersectionObserver((list) => list.forEach((x) => { if (x.isIntersecting) setActive(Number((x.target as HTMLElement).dataset.i)) }), { rootMargin: '-45% 0px -45% 0px' })
-    refs.current.forEach((r) => r && io.observe(r))
-    return () => io.disconnect()
+    const pick = () => {
+      const mid = window.innerHeight / 2
+      let best = 0, dist = Infinity
+      refs.current.forEach((r, k) => {
+        if (!r) return
+        const b = r.getBoundingClientRect()
+        const d = Math.abs(b.top + b.height / 2 - mid)
+        if (d < dist) { dist = d; best = k }
+      })
+      setActive(best)
+    }
+    pick()
+    window.addEventListener('scroll', pick, { passive: true })
+    window.addEventListener('resize', pick)
+    return () => { window.removeEventListener('scroll', pick); window.removeEventListener('resize', pick) }
   }, [])
   const [h, m] = DAY[active].time.split(':').map(Number)
   const hourDeg = (h % 12) * 30 + m * 0.5, minDeg = m * 6
   return (
     <div className="grid gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
-      <div className="lg:sticky lg:top-28 lg:h-[70vh]">
+      <div className="lg:sticky lg:top-32 lg:h-[64vh]">
         <div className="flex items-center gap-8 lg:flex-col lg:items-start">
           <svg viewBox="0 0 200 200" className="h-28 w-28 shrink-0 sm:h-40 sm:w-40 lg:h-56 lg:w-56" aria-hidden>
-            <circle cx="100" cy="100" r="92" fill="none" stroke="rgba(255,255,255,.12)" strokeWidth="2" />
-            {Array.from({ length: 12 }, (_, k) => <line key={k} x1="100" y1="14" x2="100" y2={k % 3 ? 22 : 28} stroke="rgba(255,255,255,.45)" strokeWidth={k % 3 ? 1.5 : 3} strokeLinecap="round" transform={`rotate(${k * 30} 100 100)`} />)}
+            <circle cx="100" cy="100" r="92" fill="rgba(127,250,171,.03)" stroke="rgba(255,255,255,.12)" strokeWidth="2" />
+            {Array.from({ length: 12 }, (_, k) => <line key={k} x1="100" y1="14" x2="100" y2={k % 3 ? 22 : 28} stroke="rgba(255,255,255,.4)" strokeWidth={k % 3 ? 1.5 : 3} strokeLinecap="round" transform={`rotate(${k * 30} 100 100)`} />)}
             <line className="lp-hand" x1="100" y1="100" x2="100" y2="52" stroke="#fff" strokeWidth="5" strokeLinecap="round" style={{ transform: `rotate(${hourDeg}deg)` }} />
-            <line className="lp-hand" x1="100" y1="100" x2="100" y2="30" stroke="#f5a524" strokeWidth="3" strokeLinecap="round" style={{ transform: `rotate(${minDeg}deg)` }} />
-            <circle cx="100" cy="100" r="6" fill="#f5a524" />
+            <line className="lp-hand" x1="100" y1="100" x2="100" y2="30" stroke="#7ffaab" strokeWidth="3" strokeLinecap="round" style={{ transform: `rotate(${minDeg}deg)` }} />
+            <circle cx="100" cy="100" r="6" fill="#7ffaab" />
           </svg>
           <div>
-            <div className="lp-serif text-6xl leading-none text-white sm:text-7xl lg:text-8xl" data-no-i18n key={DAY[active].time}><span className="lp-swap inline-block">{DAY[active].time}</span></div>
-            <div className="mt-3 text-sm uppercase tracking-[.25em] text-white/50">A day in the shop</div>
+            <div className="lp-display text-6xl leading-none text-white sm:text-7xl" data-no-i18n key={DAY[active].time}><span className="lp-swap inline-block">{DAY[active].time}</span></div>
+            <div className="mt-3 text-sm uppercase tracking-[.25em] text-white/45">A day in your business</div>
           </div>
         </div>
       </div>
-      <div className="space-y-6 lg:space-y-[22vh] lg:py-[18vh]">
+      <div className="space-y-5 lg:space-y-[18vh] lg:py-[14vh]">
         {DAY.map((d, k) => (
-          <div key={d.time} ref={(el) => { refs.current[k] = el }} data-i={k} className={clsx('lp-step rounded-3xl border border-white/10 bg-white/[.03] p-7 sm:p-9', k === active && 'is-active')}>
-            <div className="flex items-center gap-3 text-[#f5a524]"><d.icon className="h-5 w-5" /><span className="lp-mono text-sm" data-no-i18n>{d.time}</span></div>
-            <h3 className="lp-serif mt-4 text-4xl text-white sm:text-5xl">{d.title}</h3>
-            <p className="mt-4 max-w-lg text-[17px] leading-relaxed text-white/65">{d.body}</p>
+          <div key={d.time} ref={(el) => { refs.current[k] = el }} data-i={k} className={clsx('lp-step lp-card p-7 sm:p-8', k === active && 'is-active')}>
+            <div className="flex items-center gap-3 text-[#7ffaab]"><d.icon className="h-5 w-5" /><span className="lp-mono text-sm" data-no-i18n>{d.time}</span></div>
+            <h3 className="lp-display mt-4 text-2xl text-white sm:text-3xl">{d.title}</h3>
+            <p className="lp-muted mt-3 max-w-lg text-[16px] leading-relaxed">{d.body}</p>
           </div>
         ))}
       </div>
@@ -388,27 +449,20 @@ function Rush() {
   return (
     <div ref={ref} className="grid items-center gap-12 lg:grid-cols-2">
       <div>
-        <div className="text-sm font-semibold uppercase tracking-[.2em] text-[#f5a524]">Built for the rush</div>
-        <h2 className="lp-serif mt-4 text-5xl leading-[1.02] text-white sm:text-6xl">Twenty counters. One second. Zero mix-ups.</h2>
-        <p className="mt-6 max-w-lg text-lg leading-relaxed text-white/65">When every counter presses Pay at once, each bill is saved completely or not at all — its own number, the exact stock, the right payment. Nothing is half-saved, nothing is counted twice.</p>
-        <div className="mt-8 grid max-w-lg grid-cols-3 gap-3">
-          {[['Own database', 'for every shop'], ['Saved instantly', 'on every device'], ['Every change', 'in the audit log']].map(([a, b]) => (
-            <div key={a} className="rounded-2xl border border-white/10 bg-white/[.03] p-4">
-              <div className="text-[15px] font-semibold text-white">{a}</div><div className="mt-1 text-xs text-white/50">{b}</div>
-            </div>
-          ))}
-        </div>
+        <div className="text-sm font-semibold uppercase tracking-[.2em] text-[#7ffaab]">Built for the rush</div>
+        <h2 className="lp-display mt-4 text-4xl leading-[1.1] text-white sm:text-5xl">Twenty counters. One second. Zero mix-ups.</h2>
+        <p className="lp-muted mt-6 max-w-lg text-lg leading-relaxed">When every counter presses Pay at once, each bill is saved completely or not at all — its own number, the exact stock, the right payment. Nothing is half-saved, nothing is counted twice.</p>
       </div>
-      <div className="relative">
+      <div>
         <div className="grid grid-cols-4 gap-2 sm:gap-2.5 xl:grid-cols-5">
           {done.map((d, i) => (
             <div key={i} className={clsx('lp-counter rounded-xl border border-white/10 bg-white/[.03] p-2.5 sm:p-3', d && 'is-done')}>
               <div className="whitespace-nowrap text-[9px] uppercase tracking-wider text-white/40 sm:text-[10px]">Counter {String(i + 1).padStart(2, '0')}</div>
-              <div className="lp-mono mt-2 h-4 text-[11px] text-emerald-300 sm:text-xs" data-no-i18n>{d ? <span className="lp-counter-num inline-block">INV-{plan.num[i]}</span> : <span className="text-white/25">· · ·</span>}</div>
+              <div className="lp-mono mt-2 h-4 text-[11px] text-[#7ffaab] sm:text-xs" data-no-i18n>{d ? <span className="lp-counter-num inline-block">INV-{plan.num[i]}</span> : <span className="text-white/25">· · ·</span>}</div>
             </div>
           ))}
         </div>
-        <div className={clsx('mt-5 flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm transition-all duration-500', all ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200' : 'border-white/10 text-white/40')}>
+        <div className={clsx('mt-5 flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm transition-all duration-500', all ? 'border-[#7ffaab]/40 bg-[#7ffaab]/10 text-[#bae8b7]' : 'border-white/10 text-white/40')}>
           <ShieldCheck className="h-5 w-5 shrink-0" />{all ? '20 bills saved · 20 different numbers · stock exact' : 'Saving…'}
         </div>
       </div>
@@ -416,43 +470,25 @@ function Rush() {
   )
 }
 
-// ======================================================================= pricing as a receipt
-
-const INCLUDED = ['Billing & POS', 'Unlimited bills & items', 'Stock, batches & expiry', 'Kitchen display (KOT)', 'Tables & QR ordering', 'Customers, credit & dues', 'Staff, attendance & salary', 'WhatsApp bills & offers', 'Reports & data export', 'Tamil & English', 'Updates & support']
-
-function PriceReceipt() {
-  return (
-    <div className="relative mx-auto max-w-md" data-reveal>
-      <div className="lp-paper lp-mono rotate-[1.2deg] px-7 pb-10 pt-8 text-[13px] leading-[1.9] text-[#1d1a14] sm:px-9">
-        <div className="text-center">
-          <div className="text-[15px] font-bold uppercase tracking-[.2em]" data-no-i18n>BillPoodum</div>
-          <div className="text-[11px] opacity-60">One plan · everything included</div>
-        </div>
-        <div className="my-4 border-t border-dashed border-black/25" />
-        {INCLUDED.map((x) => (
-          <div key={x} className="flex items-baseline"><span>{x}</span><span className="lp-dots" /><span className="text-[11px] font-semibold text-[#1f9d63]">INCLUDED</span></div>
-        ))}
-        <div className="mt-4 border-t-2 border-black/80 pt-3">
-          <div className="flex items-end justify-between">
-            <span className="font-bold">PER BRANCH</span>
-            <span className="leading-none"><span className="text-[34px] font-bold" data-no-i18n>₹{PRICE_PER_BRANCH}</span><span className="text-xs opacity-60"> / month</span></span>
-          </div>
-        </div>
-        <div className="mt-4 text-center text-[11px] opacity-60">Add a branch any time · Pay for the branches you use</div>
-      </div>
-    </div>
-  )
-}
-
 // ======================================================================= page
 
-const KINDS = ['Tea shops', 'Supermarkets', 'Bakeries', 'Restaurants', 'Salons', 'Hardware stores', 'Juice shops', 'Cafes', 'Sweet stalls', 'Laundries', 'Grocery / Maligai', 'Cloud kitchens', 'Stationery', 'Spas', 'Dhabas', 'Electronics']
+const KINDS = ['Tea shops', 'Supermarkets', 'Bakeries', 'Restaurants', 'Salons', 'Hardware stores', 'Juice shops', 'Cafes', 'Sweet stalls', 'Laundries', 'Grocery stores', 'Cloud kitchens', 'Stationery', 'Spas', 'Dhabas', 'Electronics']
+
+const TRUST: [LucideIcon, string, string][] = [
+  [Lock, 'Your data, kept private', 'Every business gets its own private database. Only you and the staff you add can sign in.'],
+  [Store, 'One branch or many', 'Each branch has its own bill numbers, stock and printer — and you see all of them together.'],
+  [Users, 'The right access for each person', 'Owner, manager, cashier, waiter, kitchen — every login shows only what that role needs.'],
+  [MonitorSmartphone, 'Any device', 'Counter PC, tablet or phone — in the browser, nothing to install. Add it to the home screen like an app.'],
+  [Languages, 'Tamil & English', 'Every screen in Tamil or English, chosen by each person on their own device.'],
+  [FileSpreadsheet, 'Your data is yours', 'Import products from Excel / CSV, and export everything any time.'],
+]
 
 const FAQ: [string, string][] = [
-  ['Do I need the internet?', 'Yes. Every bill is saved online the moment you press Pay, so all your counters and your own phone always see the same numbers — and nothing is lost if a device breaks.'],
-  ['Is my shop’s data kept separate?', 'Yes. Every shop gets its own private database. Only you and the staff you add can sign in, each with the permissions you choose.'],
+  ['Is it only for billing?', 'No. Billing is one part. BillPoodum also runs your stock, kitchen and tables, staff and salary, customer credit, expenses and reports — for every branch.'],
+  ['Which businesses can use it?', 'Retail shops and supermarkets, tea shops and bakeries, restaurants and hotels, salons and other services. The screens and words change to fit the type of business you choose.'],
+  ['Do I need the internet?', 'Yes. Everything is saved online the moment you press Save, so all your counters and your own phone always see the same numbers — and nothing is lost if a device breaks.'],
+  ['Is my business data kept separate?', 'Yes. Every business gets its own private database. Only you and the staff you add can sign in, each with the permissions you choose.'],
   ['Which printers work?', 'Common 58 mm and 80 mm thermal receipt printers — through the browser, USB, serial or Bluetooth — set separately for each branch.'],
-  ['I have more than one branch.', 'Add branches any time. Each branch has its own bill numbers, stock and printer, and you see all of them together in one view.'],
   ['Can my staff use it in Tamil?', 'Yes. Each person can switch between Tamil and English on their own device.'],
 ]
 
@@ -466,7 +502,7 @@ export default function Landing() {
     on(); window.addEventListener('scroll', on, { passive: true })
     return () => window.removeEventListener('scroll', on)
   }, [])
-  useEffect(() => { document.title = 'BillPoodum — Billing & business management for every shop' }, [])
+  useEffect(() => { document.title = 'BillPoodum — Complete business management for every shop' }, [])
   const onMove = (e: React.PointerEvent) => {
     const el = hero.current
     if (!el || e.pointerType !== 'mouse') return
@@ -475,132 +511,127 @@ export default function Landing() {
     el.style.setProperty('--my', `${((e.clientY - r.top) / r.height) * 100}%`)
   }
   const signIn = me
-    ? <Link to="/dashboard" className="lp-btn lp-btn-ghost whitespace-nowrap px-5 py-2.5 text-sm">Open the app<ArrowRight className="h-4 w-4" /></Link>
-    : <Link to="/login" className="lp-btn lp-btn-ghost whitespace-nowrap px-5 py-2.5 text-sm">Sign in</Link>
+    ? <Link to="/dashboard" className="lp-btn lp-btn-line whitespace-nowrap px-5 py-2.5 text-sm">Open the app<ArrowRight className="h-4 w-4" /></Link>
+    : <Link to="/login" className="lp-btn lp-btn-line whitespace-nowrap px-5 py-2.5 text-sm">Sign in</Link>
 
   return (
     <div className="lp min-h-[100dvh]">
       {/* ---------------- nav ---------------- */}
-      <header className={clsx('lp-nav fixed inset-x-0 top-0 z-50', stuck && 'is-stuck')}>
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
-          <Mark className="text-white" />
+      <header className="fixed inset-x-0 top-0 z-50 px-3 pt-3 sm:px-6 sm:pt-4">
+        <div className={clsx('lp-nav-pill mx-auto flex max-w-7xl items-center justify-between gap-4 rounded-2xl px-4 py-3 sm:px-6', stuck && 'is-stuck')}>
+          <Mark />
           <nav className="hidden items-center gap-7 whitespace-nowrap text-sm text-white/70 lg:flex [html[lang=ta]_&]:hidden [html[lang=ta]_&]:xl:flex">
-            <a href="#shapes" className="hover:text-white">For your business</a>
-            <a href="#day" className="hover:text-white">How it works</a>
-            <a href="#pricing" className="hover:text-white">Pricing</a>
-            <a href="#faq" className="hover:text-white">FAQ</a>
+            <button type="button" onClick={() => jump('features')} className="hover:text-white">Features</button>
+            <button type="button" onClick={() => jump('business')} className="hover:text-white">Business types</button>
+            <button type="button" onClick={() => jump('day')} className="hover:text-white">How it works</button>
+            <button type="button" onClick={() => jump('faq')} className="hover:text-white">FAQ</button>
           </nav>
           <div className="flex items-center gap-3">
-            <LanguageToggle className="hidden !border-white/15 !bg-white/5 sm:inline-flex [&_button:not(.bg-brand-600)]:!text-white/70 [&_button:not(.bg-brand-600)]:hover:!bg-white/10" />
+            <LanguageToggle className="hidden !border-white/10 !bg-white/5 sm:inline-flex [&_button.bg-brand-600]:!bg-[#7ffaab] [&_button.bg-brand-600]:!text-[#07130b] [&_button:not(.bg-brand-600)]:!text-white/70 [&_button:not(.bg-brand-600)]:hover:!bg-white/10" />
             {signIn}
           </div>
         </div>
       </header>
 
       {/* ---------------- hero ---------------- */}
-      <section ref={hero} onPointerMove={onMove} className="lp-hero lp-grain relative overflow-hidden pb-20 pt-32 sm:pt-40 lg:pb-28">
-        <div className="lp-hero-glow" /><div className="lp-floor" />
-        <div className="mx-auto grid max-w-7xl items-center gap-16 px-5 sm:px-8 lg:grid-cols-[1.15fr_1fr]">
-          <div>
-            <div className="lp-rise inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/[.04] px-3.5 py-1.5 text-xs text-white/75">
-              <span className="h-1.5 w-1.5 rounded-full bg-[#f5a524] shadow-[0_0_8px_#f5a524]" />Billing & business management · made for Indian shops
-            </div>
-            <h1 style={{ ['--d' as string]: '80ms' }} className="lp-rise lp-serif mt-7 text-[56px] leading-[.95] text-white sm:text-[84px] lg:text-[104px]">
-              Every bill,<br /><em className="lp-gold">beautifully</em><br />in order.
-            </h1>
-            <p style={{ ['--d' as string]: '160ms' }} className="lp-rise mt-8 max-w-xl text-lg leading-relaxed text-white/65 sm:text-xl">
-              One app for billing, stock, kitchen, tables, staff and the day’s money — that takes the shape of your business, from a tea stall to a supermarket.
-            </p>
-            <div style={{ ['--d' as string]: '240ms' }} className="lp-rise mt-10 flex flex-wrap items-center gap-3">
-              <GetStarted />
-              <a href="#shapes" className="lp-btn lp-btn-ghost px-6 py-3 text-[15px]">See it in your shop</a>
-            </div>
-            <div style={{ ['--d' as string]: '320ms' }} className="lp-rise mt-12 flex flex-wrap gap-x-8 gap-y-3 text-sm text-white/55">
-              {[[ShieldCheck, 'Private database per shop'], [Languages, 'Tamil & English'], [Store, 'Multi-branch']].map(([I, l]) => {
-                const Icon = I as LucideIcon
-                return <span key={l as string} className="flex items-center gap-2"><Icon className="h-4 w-4 text-white/40" />{l as string}</span>
-              })}
-            </div>
-          </div>
-          <div style={{ ['--d' as string]: '200ms' }} className="lp-rise lp-float">
-            <PrintingReceipt />
-          </div>
+      <section ref={hero} onPointerMove={onMove} className="lp-hero lp-grain relative overflow-hidden px-5 pb-20 pt-36 text-center sm:px-8 sm:pt-44">
+        <div className="lp-aurora" aria-hidden><span /><span /><span /></div>
+        <div className="lp-gridlines" aria-hidden /><div className="lp-spot" aria-hidden />
+        <div className="lp-rise mx-auto inline-flex items-center gap-2 rounded-full border border-[#7ffaab]/25 bg-[#7ffaab]/[.06] px-4 py-1.5 text-xs font-semibold uppercase tracking-[.18em] text-[#bae8b7]">
+          <span className="h-1.5 w-1.5 rounded-full bg-[#7ffaab] shadow-[0_0_10px_#7ffaab]" />Complete business management
         </div>
+        <h1 className="lp-display lp-rise mx-auto mt-7 max-w-5xl text-[42px] leading-[1.08] text-white sm:text-6xl lg:text-7xl" style={D(80)}>
+          Run your whole business<br /><span className="lp-mint-text">from one app.</span>
+        </h1>
+        <p className="lp-rise lp-muted mx-auto mt-7 max-w-2xl text-lg leading-relaxed sm:text-xl" style={D(160)}>
+          Billing, stock, kitchen, tables, staff, customers, expenses and reports — for every branch, in Tamil or English. Made for Indian shops, restaurants and services.
+        </p>
+        <div className="lp-rise mt-10 flex flex-wrap justify-center gap-3" style={D(240)}>
+          <GetStarted />
+          <button type="button" onClick={() => jump('features')} className="lp-btn lp-btn-line px-6 py-3 text-[15px]">Explore features</button>
+        </div>
+        <div className="lp-rise mt-16 sm:mt-20" style={D(320)}><HeroDashboard /></div>
       </section>
 
-      {/* ---------------- marquee ---------------- */}
-      <section className="border-y border-white/[.06] bg-[#0a0f1e] py-7">
-        <div className="lp-marquee overflow-hidden" data-no-i18n>
+      {/* ---------------- business types marquee ---------------- */}
+      <section className="border-y border-white/[.06] bg-[#0f0e12] py-6" data-no-i18n>
+        <div className="lp-marquee overflow-hidden">
           <div className="lp-marquee-track flex gap-10 whitespace-nowrap">
             {[...KINDS, ...KINDS].map((k, i) => (
-              <span key={i} className="lp-serif flex items-center gap-10 text-3xl italic text-white/40">{k}<span className="text-[#f5a524]/60 not-italic text-xl">✦</span></span>
+              <span key={i} className="lp-display flex items-center gap-10 text-2xl font-medium text-white/30">{k}<span className="text-base text-[#7ffaab]/50">✦</span></span>
             ))}
           </div>
         </div>
       </section>
 
-      {/* ---------------- one app, four shapes ---------------- */}
-      <section id="shapes" className="lp-light scroll-mt-20 px-5 py-24 sm:px-8 sm:py-32">
-        <div className="mx-auto max-w-3xl text-center">
-          <div data-reveal className="text-sm font-semibold uppercase tracking-[.2em] text-[#b7791f]">One app · four shapes</div>
-          <h2 data-reveal style={{ ['--d' as string]: '80ms' }} className="lp-serif mt-4 text-5xl leading-[1.02] sm:text-7xl">It speaks your shop’s language.</h2>
-          <p data-reveal style={{ ['--d' as string]: '160ms' }} className="lp-muted mx-auto mt-6 max-w-xl text-lg leading-relaxed">Tell it what you run. The screens, the words and the features change to fit — Menu Items for a café, Clients for a salon, Tables for a restaurant.</p>
+      {/* ---------------- features ---------------- */}
+      <section id="features" className="scroll-mt-24 px-5 py-24 sm:px-8 sm:py-32">
+        <div className="mx-auto max-w-7xl">
+          <div className="mx-auto mb-14 max-w-3xl text-center">
+            <div data-reveal className="text-sm font-semibold uppercase tracking-[.2em] text-[#7ffaab]">Features</div>
+            <h2 data-reveal style={D(80)} className="lp-display mt-4 text-4xl leading-[1.1] text-white sm:text-5xl">Everything your business runs on.</h2>
+            <p data-reveal style={D(160)} className="lp-muted mx-auto mt-5 max-w-2xl text-lg leading-relaxed">Not just the bill. Seven parts that work together — what you sell, what you stock, who works for you and where the money goes.</p>
+          </div>
+          <div data-reveal style={D(200)}><FeatureExplorer /></div>
         </div>
-        <div className="mt-14" data-reveal style={{ ['--d' as string]: '220ms' }}><ShapeShifter /></div>
       </section>
 
-      {/* ---------------- a day in the shop ---------------- */}
-      <section id="day" className="lp-grain relative scroll-mt-20 px-5 py-24 sm:px-8 sm:py-32">
+      {/* ---------------- business types ---------------- */}
+      <section id="business" className="lp-grain relative scroll-mt-24 border-t border-white/[.06] bg-[#0f0e12] px-5 py-24 sm:px-8 sm:py-32">
+        <div className="mx-auto max-w-7xl">
+          <div className="mb-14 max-w-2xl">
+            <div data-reveal className="text-sm font-semibold uppercase tracking-[.2em] text-[#7ffaab]">One app · four shapes</div>
+            <h2 data-reveal style={D(80)} className="lp-display mt-4 text-4xl leading-[1.1] text-white sm:text-5xl">It speaks your business’s language.</h2>
+            <p data-reveal style={D(160)} className="lp-muted mt-5 text-lg leading-relaxed">Choose what you run. The menus, the words and the features change to fit — Menu Items for a café, Clients for a salon, Tables for a restaurant.</p>
+          </div>
+          <div data-reveal style={D(200)}><ShapeShifter /></div>
+        </div>
+      </section>
+
+      {/* ---------------- a day ---------------- */}
+      <section id="day" className="scroll-mt-24 px-5 py-24 sm:px-8 sm:py-32">
         <div className="mx-auto max-w-7xl">
           <div className="mb-16 max-w-2xl">
-            <div data-reveal className="text-sm font-semibold uppercase tracking-[.2em] text-[#f5a524]">How it works</div>
-            <h2 data-reveal style={{ ['--d' as string]: '80ms' }} className="lp-serif mt-4 text-5xl leading-[1.02] text-white sm:text-7xl">From the first chai to the last report.</h2>
+            <div data-reveal className="text-sm font-semibold uppercase tracking-[.2em] text-[#7ffaab]">How it works</div>
+            <h2 data-reveal style={D(80)} className="lp-display mt-4 text-4xl leading-[1.1] text-white sm:text-5xl">From opening the shutter to closing the day.</h2>
           </div>
           <DayTimeline />
         </div>
       </section>
 
       {/* ---------------- rush ---------------- */}
-      <section className="relative border-t border-white/[.06] bg-[#0a0f1e] px-5 py-24 sm:px-8 sm:py-32">
+      <section className="border-t border-white/[.06] bg-[#0f0e12] px-5 py-24 sm:px-8 sm:py-28">
         <div className="mx-auto max-w-7xl"><Rush /></div>
       </section>
 
-      {/* ---------------- tamil ---------------- */}
-      <section className="lp-light overflow-hidden px-5 py-24 sm:px-8 sm:py-28">
-        <div className="mx-auto grid max-w-7xl items-center gap-12 lg:grid-cols-2">
-          <div data-reveal className="lp-serif select-none text-[120px] leading-none text-[#17140e] sm:text-[180px] lg:text-[220px]" data-no-i18n lang="ta">
-            தமிழ்<span className="lp-gold">.</span>
+      {/* ---------------- trust ---------------- */}
+      <section className="px-5 py-24 sm:px-8 sm:py-32">
+        <div className="mx-auto max-w-7xl">
+          <div className="mx-auto mb-14 max-w-2xl text-center">
+            <div data-reveal className="text-sm font-semibold uppercase tracking-[.2em] text-[#7ffaab]">Made for how you work</div>
+            <h2 data-reveal style={D(80)} className="lp-display mt-4 text-4xl leading-[1.1] text-white sm:text-5xl">Simple for the counter. Complete for the owner.</h2>
           </div>
-          <div>
-            <h2 data-reveal className="lp-serif text-5xl leading-[1.02] sm:text-6xl">Your staff work in the language they think in.</h2>
-            <p data-reveal style={{ ['--d' as string]: '80ms' }} className="lp-muted mt-6 max-w-lg text-lg leading-relaxed">Every screen in Tamil or English — chosen by each person on their own device. The cashier in Tamil, the owner in English, the same bill.</p>
-            <div data-reveal style={{ ['--d' as string]: '160ms' }} className="mt-8"><LanguageToggle className="!text-sm" /></div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {TRUST.map(([I, t, b], k) => (
+              <div key={t} data-reveal style={D(k * 60)} className="lp-card lp-card-hover p-7">
+                <span className="lp-icon h-12 w-12"><I className="h-5 w-5" /></span>
+                <h3 className="lp-display mt-5 text-xl text-white">{t}</h3>
+                <p className="lp-muted mt-2.5 text-[15px] leading-relaxed">{b}</p>
+              </div>
+            ))}
           </div>
-        </div>
-      </section>
-
-      {/* ---------------- pricing ---------------- */}
-      <section id="pricing" className="lp-grain relative scroll-mt-20 px-5 py-24 sm:px-8 sm:py-32">
-        <div className="mx-auto grid max-w-7xl items-center gap-16 lg:grid-cols-2">
-          <div>
-            <div data-reveal className="text-sm font-semibold uppercase tracking-[.2em] text-[#f5a524]">Pricing</div>
-            <h2 data-reveal style={{ ['--d' as string]: '80ms' }} className="lp-serif mt-4 text-5xl leading-[1.02] text-white sm:text-7xl">One simple bill. For us, too.</h2>
-            <p data-reveal style={{ ['--d' as string]: '160ms' }} className="mt-6 max-w-lg text-lg leading-relaxed text-white/65">No modules to buy, no per-user fees. Every feature for every branch — you pay only for the branches you open.</p>
-            <div data-reveal style={{ ['--d' as string]: '240ms' }} className="mt-10"><GetStarted /></div>
-          </div>
-          <PriceReceipt />
         </div>
       </section>
 
       {/* ---------------- faq ---------------- */}
-      <section id="faq" className="lp-light scroll-mt-20 px-5 py-24 sm:px-8 sm:py-28">
+      <section id="faq" className="scroll-mt-24 border-t border-white/[.06] bg-[#0f0e12] px-5 py-24 sm:px-8 sm:py-28">
         <div className="mx-auto max-w-3xl">
-          <h2 data-reveal className="lp-serif text-center text-5xl sm:text-6xl">Questions, answered.</h2>
-          <div className="mt-12 divide-y divide-black/10 border-y border-black/10">
+          <h2 data-reveal className="lp-display text-center text-4xl text-white sm:text-5xl">Questions, answered.</h2>
+          <div className="mt-12 space-y-3">
             {FAQ.map(([q, a], k) => (
-              <details key={q} className="lp-faq group py-6" data-reveal style={{ ['--d' as string]: `${k * 60}ms` }}>
-                <summary className="flex items-center justify-between gap-6 text-lg font-semibold sm:text-xl">{q}<span className="lp-faq-plus flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-black/15 text-xl font-light">+</span></summary>
-                <p className="lp-muted mt-3 max-w-2xl text-[16px] leading-relaxed">{a}</p>
+              <details key={q} className="lp-faq lp-card px-6 py-5" data-reveal style={D(k * 50)}>
+                <summary className="flex items-center justify-between gap-6 text-[17px] font-semibold text-white">{q}<span className="lp-faq-plus flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/15 text-xl font-light text-white/80">+</span></summary>
+                <p className="lp-muted mt-3 max-w-2xl text-[15px] leading-relaxed">{a}</p>
               </details>
             ))}
           </div>
@@ -608,24 +639,30 @@ export default function Landing() {
       </section>
 
       {/* ---------------- final ---------------- */}
-      <section className="lp-hero lp-grain relative overflow-hidden px-5 py-28 text-center sm:px-8 sm:py-36">
-        <div className="lp-hero-glow" />
-        <h2 data-reveal className="lp-serif mx-auto max-w-4xl text-6xl leading-[.95] text-white sm:text-8xl">Your shop, <em className="lp-gold">in order.</em></h2>
-        <p data-reveal style={{ ['--d' as string]: '80ms' }} className="mx-auto mt-6 max-w-md text-lg text-white/60">We set up your account, your branches and your first items with you.</p>
-        <div data-reveal style={{ ['--d' as string]: '160ms' }} className="mt-10 flex flex-wrap justify-center gap-3"><GetStarted />{signIn}</div>
+      <section className="lp-grain relative overflow-hidden px-5 py-28 text-center sm:px-8 sm:py-36">
+        <div className="lp-aurora" aria-hidden><span /><span /><span /></div>
+        <h2 data-reveal className="lp-display mx-auto max-w-4xl text-4xl leading-[1.1] text-white sm:text-6xl">Your whole business, <span className="lp-mint-text">in one place.</span></h2>
+        <p data-reveal style={D(80)} className="lp-muted mx-auto mt-6 max-w-lg text-lg">We set up your account, your branches and your first items with you.</p>
+        <div data-reveal style={D(160)} className="mt-10 flex flex-wrap justify-center gap-3"><GetStarted />{signIn}</div>
       </section>
 
-      <footer className="border-t border-white/[.06] bg-[#05080f] px-5 py-10 sm:px-8">
+      <footer className="border-t border-white/[.06] bg-[#08070a] px-5 py-10 sm:px-8">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-6 text-sm text-white/45 sm:flex-row">
-          <Mark className="text-white/80" />
+          <Mark />
           <div className="flex flex-wrap items-center justify-center gap-6">
-            <span className="flex items-center gap-2"><Clock className="h-4 w-4" />Support in Tamil & English</span>
-            <span className="flex items-center gap-2"><Wallet className="h-4 w-4" />UPI · Cash · Card</span>
+            <button type="button" onClick={() => jump('features')} className="hover:text-white">Features</button>
+            <button type="button" onClick={() => jump('faq')} className="hover:text-white">FAQ</button>
             <Link to="/login" className="hover:text-white">Sign in</Link>
           </div>
           <span>© {new Date().getFullYear()} BillPoodum</span>
         </div>
       </footer>
+
+      {waLink && (
+        <a href={waLink} target="_blank" rel="noreferrer" aria-label="Chat on WhatsApp" className="lp-wa fixed bottom-5 right-5 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-[#25d366] text-white transition-transform hover:scale-105">
+          <MessageCircle className="h-6 w-6" />
+        </a>
+      )}
     </div>
   )
 }

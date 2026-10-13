@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Logo } from '@/app/Layout'
 import { Button, Field, Input } from '@/components/ui'
-import { api } from '@/data'
+import { api, BACKEND } from '@/data'
 
 /** Product admin sign-in — separate from customer logins. */
 export default function AdminLogin() {
@@ -33,7 +33,7 @@ export default function AdminLogin() {
           {error && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
           <Button type="submit" block size="lg" disabled={busy}>{busy ? 'Please wait…' : 'Sign in'}</Button>
         </form>
-        <p className="mt-5 text-center text-xs text-slate-400">Demo admin is listed in <code>DEMO_ACCOUNTS.md</code> · <Link to="/login" className="hover:underline">Shop sign-in</Link></p>
+        <p className="mt-5 text-center text-xs text-slate-400">{BACKEND === 'mock' && <>Demo admin is listed in <code>DEMO_ACCOUNTS.md</code> · </>}<Link to="/login" className="hover:underline">Shop sign-in</Link></p>
       </div>
     </div>
   )

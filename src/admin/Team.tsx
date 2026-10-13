@@ -6,6 +6,7 @@ import { ADMIN_ROLES } from '@/core/adminRoles'
 import type { AdminRole } from '@/core/types'
 import { api } from '@/data'
 import { fmtDateTime, randomPassword, useAdmin } from './shared'
+import { appUrl } from '@/lib/appUrl'
 
 type Member = Awaited<ReturnType<typeof api.admin.team>>[number]
 const ROLE_TONE: Record<AdminRole, 'violet' | 'blue' | 'slate'> = { super: 'violet', manager: 'blue', support: 'slate' }
@@ -72,7 +73,7 @@ function AdminModal({ initial, self, onClose }: { initial: Partial<Member>; self
     return (
       <Modal open onClose={onClose} size="sm" title={isNew ? 'Admin added' : 'Password reset'} subtitle="Share these sign-in details privately. The password is shown only now.">
         <dl className="grid grid-cols-[90px_1fr] gap-y-1.5 rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 text-sm" data-no-i18n>
-          <dt className="text-slate-500">Sign in at</dt><dd className="font-medium">{location.origin}/admin/login</dd>
+          <dt className="text-slate-500">Sign in at</dt><dd className="font-medium">{appUrl('/admin/login')}</dd>
           <dt className="text-slate-500">Username</dt><dd className="font-mono font-semibold">{f.username}</dd>
           <dt className="text-slate-500">Password</dt><dd className="font-mono font-semibold">{done}</dd>
         </dl>

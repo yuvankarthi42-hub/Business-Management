@@ -7,4 +7,6 @@ interface ImportMetaEnv {
   readonly VITE_API_BASE?: string
   /** Landing page "Get your account" opens WhatsApp to this number (with country code, e.g. 919876543210). */
   readonly VITE_CONTACT_WHATSAPP?: string
+  /** 'hash' = /#/login links, for hosts that only serve real files (Catalyst Slate). */
+  readonly VITE_ROUTER?: 'hash'
 }

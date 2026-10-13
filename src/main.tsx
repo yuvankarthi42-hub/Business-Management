@@ -1,6 +1,7 @@
 import React, { lazy, Suspense } from 'react'
 import ReactDOM from 'react-dom/client'
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { BrowserRouter, HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { HASH_ROUTER } from './lib/appUrl'
 import './index.css'
 import { AppProvider, useApp } from './app/AppContext'
 import { AppLayout, useNavItems } from './app/Layout'
@@ -190,18 +191,33 @@ function App() {
   )
 }
 
+// Slate and other file-only hosts: hash links (/#/login). An address typed without the hash (/login) is moved
+// into it, and a hash link opened on a normal host is moved out of it — old links keep working both ways.
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, '')
+if (HASH_ROUTER && !location.hash.startsWith('#/') && location.pathname !== `${BASE}/` && location.pathname !== BASE) {
+  location.replace(`${location.origin}${BASE}/#${location.pathname.slice(BASE.length) || '/'}${location.search}`)
+} else if (!HASH_ROUTER && location.hash.startsWith('#/')) {
+  history.replaceState(null, '', `${BASE}${location.hash.slice(1)}`)
+}
+const FUTURE = { v7_startTransition: true, v7_relativeSplatPath: true }
+function Router({ children }: { children: React.ReactNode }) {
+  return HASH_ROUTER
+    ? <HashRouter future={FUTURE}>{children}</HashRouter>
+    : <BrowserRouter basename={BASE || undefined} future={FUTURE}>{children}</BrowserRouter>
+}
+
 // Load the (mock) database first; every screen reads it synchronously after this.
 // Demo app: load the in-browser database first. Catalyst: nothing to load — data comes from the server.
 Promise.all([BACKEND === 'mock' ? initDB() : Promise.resolve(), setLanguage(deviceLang(), false)]).then(() => { if (BACKEND === 'mock') void api.system.runDailyJobs() /* on the server: a 9 AM cron */ }).then(() => ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     {/* v7_startTransition: keep the current page on screen while the next one loads (no blank flash). */}
-    <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '') || undefined} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <Router>
       <ToastProvider>
         <AppProvider>
           <App />
         </AppProvider>
       </ToastProvider>
-    </BrowserRouter>
+    </Router>
   </React.StrictMode>,
 ))
 
@@ -210,5 +226,23 @@ if (document.readyState === 'complete') setTimeout(preloadPages, 500)
 else window.addEventListener('load', () => setTimeout(preloadPages, 500))
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
-  window.addEventListener('load', () => navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`))
+  window.addEventListener('load', () => navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, { updateViaCache: 'none' }))
 }
+
+// A new version on the server while this browser still runs an old one (hosts like Slate tell browsers to keep
+// files for a year): compare the app file named in the live index.html with ours, and reload once if different.
+async function checkForNewVersion() {
+  if (import.meta.env.DEV) return
+  const mine = [...document.scripts].map((x) => x.src).find((src) => /\/assets\/index-[^/]+\.js$/.test(src))
+  if (!mine) return
+  const html = await fetch(`${BASE}/index.html`, { cache: 'no-store' }).then((r) => (r.ok ? r.text() : null)).catch(() => null)
+  const live = html?.match(/assets\/index-[^"']+\.js/)?.[0]
+  if (!live || mine.endsWith(live)) return
+  try { if (sessionStorage.getItem('billpoodum.reloadedFor') === live) return; sessionStorage.setItem('billpoodum.reloadedFor', live) } catch { return }
+  location.reload()
+}
+window.addEventListener('load', () => { void checkForNewVersion() })
+let lastCheck = Date.now()
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && Date.now() - lastCheck > 30 * 60_000) { lastCheck = Date.now(); void checkForNewVersion() }
+})

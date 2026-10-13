@@ -34,3 +34,27 @@ test('schema check passes on a complete database', async () => {
     assert.equal((await fetch(`${s.base}/schema-check`)).status, 403)
   } finally { s.close() }
 })
+
+test('"simple" cross-site requests: text/plain body carries the token and branch', async () => {
+  const s = await startServer()
+  try {
+    await s.call('admin.setup', 'test-setup-key-1234567890', { name: 'A', username: 'admin1', password: 'secret123' })
+    const post = (name: string, body: unknown) => fetch(`${s.base}/rpc/${name}`, { method: 'POST', headers: { 'content-type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(body) }).then((r) => r.json() as Promise<{ data?: { token?: string; username?: string }; error?: { code: string } }>)
+    const login = await post('admin.login', { args: ['admin1', 'secret123'], h: { 'x-request-id': 'r1' } })
+    assert.ok(login.data?.token)
+    const me = await post('admin.me', { args: [], h: { authorization: `Bearer ${login.data!.token}` } })
+    assert.equal(me.data?.username, 'admin1')
+    assert.equal((await post('admin.me', { args: [], h: {} })).error?.code, 'UNAUTHORIZED')
+  } finally { s.close() }
+})
+
+test('ALLOWED_ORIGINS also allows the .in / .com twin', async () => {
+  process.env.ALLOWED_ORIGINS = 'https://web-abc.onslate.com'
+  const s = await startServer()
+  try {
+    const allow = async (origin: string) => (await fetch(`${s.base}/health`, { headers: { origin } })).headers.get('access-control-allow-origin')
+    assert.equal(await allow('https://web-abc.onslate.com'), 'https://web-abc.onslate.com')
+    assert.equal(await allow('https://web-abc.onslate.in'), 'https://web-abc.onslate.in')
+    assert.equal(await allow('https://evil.example.com'), null)
+  } finally { s.close(); delete process.env.ALLOWED_ORIGINS }
+})

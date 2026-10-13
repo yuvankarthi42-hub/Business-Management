@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "dev:catalyst": "vite --mode catalyst --port 5180",
-    "build:catalyst": "tsc -b && vite build --mode catalyst --outDir dist-catalyst",
+    "build:catalyst": "tsc -b && vite build --mode catalyst --outDir dist-catalyst && cp dist-catalyst/index.html dist-catalyst/404.html",
     "backend:build": "npm --prefix backend run build",
     "backend:test": "npm --prefix backend test",
     "build:catalyst-webclient": "tsc -b && vite build --mode catalyst --base=/app/ --outDir dist-catalyst && node scripts/catalyst-client.mjs"

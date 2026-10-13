@@ -124,7 +124,7 @@ export function qrSettings(b: Pick<Business, 'qr' | 'billing'>): QrSettings {
     orderTypes: b.billing.orderTypes.filter((t) => t !== 'counter'),
     autoAccept: false,
     // The app's own address (with its path prefix when hosted under one, e.g. Catalyst web client hosting at /app/).
-    baseUrl: typeof window !== 'undefined' ? `${window.location.origin}${((import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? '/').replace(/\/$/, '')}` : '',
+    baseUrl: typeof window !== 'undefined' ? `${window.location.origin}${((import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? '/').replace(/\/$/, '')}${(import.meta as { env?: { VITE_ROUTER?: string } }).env?.VITE_ROUTER === 'hash' ? '/#' : ''}` : '',
     ...b.qr,
   }
 }
