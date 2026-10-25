@@ -2,7 +2,7 @@
   "name": "billpoodum-backend",
   "version": "1.0.0",
   "private": true,
-  "description": "BillPoodum API \u2014 Zoho Catalyst Advanced I/O function (Node.js). Source in TypeScript, bundled into catalyst/functions/api.",
+  "description": "BillPoodum API — Zoho Catalyst Advanced I/O function (Node.js). Source in TypeScript, bundled into catalyst/functions/api.",
   "type": "commonjs",
   "scripts": {
     "gen": "node scripts/gen-schema.mjs && node scripts/gen-sqlite.mjs && node scripts/gen-checklist.mjs",
@@ -12,7 +12,8 @@
     "test": "node scripts/gen-schema.mjs && node scripts/gen-sqlite.mjs && npm run test:sqlite && npm run test:hrana && npm run test:memory",
     "test:sqlite": "TEST_DB=sqlite tsx --test test/*.test.ts",
     "test:memory": "TEST_DB=memory tsx --test test/*.test.ts",
-    "test:hrana": "TEST_DB=hrana tsx --test test/*.test.ts"
+    "test:hrana": "TEST_DB=hrana tsx --test test/*.test.ts",
+    "vapid": "node scripts/vapid.mjs"
   },
   "engines": {
     "node": ">=18"

@@ -31,7 +31,7 @@ export default function AdminRenewals() {
       {!data.whatsapp.ready && (
         <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600" />
-          <p className="min-w-0 flex-1">{!data.whatsapp.connected ? 'Reminders aren’t going out — connect BillPoodum’s WhatsApp number first.' : data.whatsapp.templateStatus === 'pending' ? 'Reminders start once Meta approves the reminder template.' : 'Reminders aren’t going out — submit the reminder template to Meta.'}</p>
+          <p className="min-w-0 flex-1">{!data.whatsapp.connected ? 'Reminders aren’t going out — connect Kadai Kalanjiyam’s WhatsApp number first.' : data.whatsapp.templateStatus === 'pending' ? 'Reminders start once Meta approves the reminder template.' : 'Reminders aren’t going out — submit the reminder template to Meta.'}</p>
           <Link to="/admin/whatsapp" className="font-semibold text-amber-900 underline">Set up WhatsApp</Link>
         </div>
       )}
@@ -117,7 +117,7 @@ function SettingsCard({ s, preview, editable }: { s: ReminderSettings; preview: 
           <div className="mb-1.5 flex items-center justify-between"><p className="text-sm font-medium text-slate-700">WhatsApp message</p><Link to="/admin/whatsapp" className="text-xs font-medium text-brand-700 hover:underline">Edit template</Link></div>
           <div className="rounded-xl bg-[#e5ddd5] p-3" data-no-i18n><p className="ml-auto max-w-[320px] rounded-lg rounded-tr-none bg-[#dcf8c6] px-3 py-2 text-[12.5px] leading-snug text-slate-800 shadow-sm">{preview}</p></div>
         </div>
-        <p className="text-xs text-slate-500">Sent from BillPoodum’s WhatsApp number every morning at 9 (demo mode: logged here, not really sent).</p>
+        <p className="text-xs text-slate-500">Sent from Kadai Kalanjiyam’s WhatsApp number every morning at 9 (demo mode: logged here, not really sent).</p>
         {editable && dirty && <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setF(s)}>Undo</Button><Button onClick={() => run(() => api.admin.updateReminderSettings(f), 'Reminder settings saved')}>Save</Button></div>}
       </div>
     </Card>

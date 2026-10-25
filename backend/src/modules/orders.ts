@@ -1,4 +1,5 @@
 // Billing & orders, kitchen tickets, tables, payments, customers & dues, QR orders and the public QR menu.
+import { cleanPartyGst } from '@/core/gst'
 import { r2 } from '@/core/pricing'
 import { qrSettings } from '@/core/config'
 import { applySpecials } from '@/core/specials'
@@ -8,23 +9,34 @@ import type { Ctx, Session } from '../core/context'
 import { ApiError } from '../core/errors'
 import { define, publicRead, publicWrite, userRead, userWrite } from '../core/registry'
 import { DuplicateError, type Row, type Where } from '../db/types'
-import { loadBusiness } from '../domain/business'
-import { loadCategories, loadProducts, wholesaleList } from '../domain/catalog'
+import { DEFAULT_SEQ, loadBusiness } from '../domain/business'
+import { forCustomers, loadCategories, loadProducts, wholesaleList } from '../domain/catalog'
 import {
   customerFrom, kitchenDelta, kotsFrom, loadOrder, loadOrders, paymentFrom, priceItems, selectIn, settle, tableFrom, withItems, writeOrder, clientUuid,
   type OrderDraft, type PaymentInput,
 } from '../domain/orders'
+import { movePoints, pointsFrom } from '../domain/points'
 import { moveStock, stockProduct } from '../domain/stock'
-import { audit, bizDay, bizDayStart, code, E, fromMinor, isId, keyPart, own, str, toMinor } from '../domain/util'
+import { audit, bizDay, bizDayStart, code, E, fromMinor, isId, keyPart, own, readSequence, str, toMinor } from '../domain/util'
 import { cleanPhone } from './business'
+import { buildView, markPushOn, rateLimit, trackedView } from '../domain/tracking'
+import { cachedPublic, rememberTableBranch, tableBranch } from '../domain/menuCache'
+import { cachedStats } from '../domain/statsCache'
+import { isPushEndpoint } from '../core/webpush'
+import { orderNumberCandidates, trackStage, trackStamp, TRACK_WINDOW_MS } from '@/core/tracking'
+import { createHash } from 'node:crypto'
 import { specialsFor } from './catalog'
+
+/** Customer GST columns from the form (throws a readable error for a wrong GSTIN). */
+function customerGst(input: { gstin?: string | null; stateCode?: string | null }) {
+  try { const g = cleanPartyGst(input); return { gstin: g.gstin, state_code: g.stateCode } } catch (e) { throw new ApiError((e as Error).message) }
+}
 
 const inScope = (c: Ctx): Where => ({ business_id: c.businessId, branch_id: { in: c.scope() } })
 const isoArg = (v: unknown) => { const d = new Date(String(v)); if (Number.isNaN(d.getTime())) throw new ApiError('Choose a date range'); return d.toISOString() }
 const one = async (c: Ctx, id: string) => (await loadOrder(c, id, { inScope: false })).order
 
 /** Merge two lists of orders (two queries for an OR) without duplicates. */
-const merged = (a: Order[], b: Order[]) => { const m = new Map(a.map((o) => [o.id, o])); for (const o of b) m.set(o.id, o); return [...m.values()] }
 
 // ---------- QR helpers ----------
 /** Merge a QR request into the table's running order (if any), then send to kitchen. */
@@ -37,7 +49,7 @@ async function acceptQr(c: Ctx, orderId: string) {
       .find((o) => o.id !== order.id && o.qrStatus !== 'pending')
     if (running) {
       const draft: OrderDraft = { id: running.id, type: running.type, tableId: running.tableId, customerId: running.customerId ?? order.customerId, items: [...running.items, ...order.items.map((i) => ({ ...i, id: `new_${i.id}` }))], discount: running.discount, notes: running.notes, source: running.source }
-      await writeOrder(c, draft)
+      await writeOrder(c, draft, { trustedDiscount: true })
       await c.db.update('orders', row.ROWID, { status: E.OrderStatus.cancelled, cancelled_at: c.now.toISOString(), cancel_reason: `Merged into ${running.number}` })
       target = await one(c, running.id)
     }
@@ -66,25 +78,51 @@ async function guestSession(c: Ctx, businessId: string, branchId?: string | null
   return { branch: (await c.db.get('branches', br.id))! }
 }
 
+/**
+ * Each customer's all-time totals. For the whole list they come from the shared cache while no bill, payment or
+ * return changed since (the version is bumped by those writes in app.ts); a few customers are always read fresh.
+ */
 async function customerStats(c: Ctx, ids?: string[]) {
-  const where: Where = { business_id: c.businessId, status: E.OrderStatus.completed, customer_id: ids ? { in: ids } : { ne: null } }
-  const [o, r] = await Promise.all([
-    c.db.aggregate('orders', { where, groupBy: ['customer_id'], fns: { total: ['SUM', 'total_minor'], n: ['COUNT', 'ROWID'], due: ['SUM', 'balance_minor'], last: ['MAX', 'billed_at'] } }),
-    c.db.aggregate('sale_returns', { where: { business_id: c.businessId, customer_id: ids ? { in: ids } : { ne: null } }, groupBy: ['customer_id'], fns: { total: ['SUM', 'total_minor'] } }),
-  ])
+  const read = async () => {
+    const where: Where = { business_id: c.businessId, status: E.OrderStatus.completed, customer_id: ids ? { in: ids } : { ne: null } }
+    const [o, r] = await Promise.all([
+      c.db.aggregate('orders', { where, groupBy: ['customer_id'], fns: { total: ['SUM', 'total_minor'], n: ['COUNT', 'ROWID'], due: ['SUM', 'balance_minor'], last: ['MAX', 'billed_at'] } }),
+      c.db.aggregate('sale_returns', { where: { business_id: c.businessId, customer_id: ids ? { in: ids } : { ne: null } }, groupBy: ['customer_id'], fns: { total: ['SUM', 'total_minor'] } }),
+    ])
+    return { o, r }
+  }
+  const { o, r } = ids ? await read() : await cachedStats(c, read)
+  const om = new Map(o.map((y) => [String(y.customer_id), y])), rm = new Map(r.map((y) => [String(y.customer_id), y]))
   return (id: string) => {
-    const x = o.find((y) => y.customer_id === id), ret = r.find((y) => y.customer_id === id)
+    const x = om.get(id), ret = rm.get(id)
     return { totalPurchases: r2(fromMinor(x?.total) - fromMinor(ret?.total)), orderCount: Number(x?.n ?? 0), outstanding: fromMinor(x?.due), lastPurchase: (x?.last as string | null) ?? null }
   }
 }
 
+/** Gives back credit-note money used on a bill that is now cancelled. */
+async function restoreCreditNote(c: Ctx, returnId: string, amount: number) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const cn = await c.db.first('sale_returns', { ROWID: returnId, business_id: c.businessId })
+    if (!cn) return
+    const next = Math.min(Number(cn.credit_issued_minor ?? 0), Number(cn.credit_remaining_minor ?? 0) + (toMinor(amount) ?? 0))
+    if (await c.db.updateIfVersion('sale_returns', cn.ROWID, Number(cn.row_version), { credit_remaining_minor: next })) return
+  }
+  throw new ApiError('Busy — please try again', 409, 'CONFLICT')
+}
+
 define('orders', {
-  list: userRead(async (c, filter: { from?: string; to?: string; status?: Order['status'] | 'all' } = {}) => {
+  /** `limit`: only the newest n (e.g. the dashboard's last 6 bills) — never more than 500 without a date range. */
+  list: userRead(async (c, filter: { from?: string; to?: string; status?: Order['status'] | 'all'; limit?: number } = {}) => {
     const st: Where = filter.status && filter.status !== 'all' ? { status: code(E.OrderStatus, filter.status) } : {}
-    if (!filter.from || !filter.to) return loadOrders(c, { ...inScope(c), ...st }, { limit: 500 })
+    const want = filter.limit != null && Number.isFinite(Number(filter.limit)) ? Math.min(Math.max(1, Math.floor(Number(filter.limit))), 500) : null
+    if (!filter.from || !filter.to) return loadOrders(c, { ...inScope(c), ...st }, { limit: want ?? 500 })
     const range = { gte: isoArg(filter.from), lte: isoArg(filter.to) }
-    const [created, billed] = await Promise.all([loadOrders(c, { ...inScope(c), ...st, CREATEDTIME: range }), loadOrders(c, { ...inScope(c), ...st, billed_at: range })])
-    return merged(created, billed).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    // Orders created or billed in the range: each row once, then their items in one go (not twice).
+    const rowsWhere = (w: Where) => c.db.select('orders', { where: { ...inScope(c), ...st, ...w, business_id: c.businessId }, orderBy: [['CREATEDTIME', 'DESC']], limit: 2000 })
+    const [created, billed] = await Promise.all([rowsWhere({ CREATEDTIME: range }), rowsWhere({ billed_at: range })])
+    const rows = [...new Map([...created, ...billed].map((r) => [r.ROWID, r])).values()]
+    const list = (await withItems(c, rows)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    return want ? list.slice(0, want) : list
   }),
   running: userRead(async (c) => loadOrders(c, { ...inScope(c), status: E.OrderStatus.open }, { orderBy: [['CREATEDTIME', 'ASC']] })),
   get: userRead(async (c, id: string) => {
@@ -97,7 +135,7 @@ define('orders', {
   save: userWrite(async (c, draft: OrderDraft, opts: { sendToKitchen?: boolean } = {}) => {
     if (draft.type === 'dine_in' && !draft.tableId) throw new ApiError('Select a table')
     if (draft.tableId && !draft.id && await c.db.first('orders', { ...inScope(c), status: E.OrderStatus.open, table_id: draft.tableId })) throw new ApiError('This table already has a running order')
-    const id = await writeOrder(c, draft)
+    const id = await writeOrder(c, { ...draft, pointsToRedeem: undefined }) // points are used only when the bill is paid (checkout)
     const kot = opts.sendToKitchen && c.business.modules.kitchen ? await kitchenDelta(c, id) : null
     return { order: await one(c, id), kot }
   }),
@@ -128,10 +166,21 @@ define('orders', {
     // Prices, variants, add-ons and specials are read first, outside the shop's write lock (and checked:
     // a wrong item fails here). Inside the transaction the same reads come from memory.
     c.memoCatalog()
-    await priceItems(c, draft.items, new Map(), c.businessId, undefined)
+    await priceItems(c, draft.items, new Map(), c.businessId, undefined, true) // warm-up read only; the checks run in writeOrder
     await selectIn(c, 'products', 'ROWID', draft.items.map((i) => String(i.productId)), { business_id: c.businessId }) // what settle() reads for stock
     if (draft.items.some((i) => i.priceTier === 'wholesale')) await wholesaleList(c)
     const id = await c.tx(async () => {
+      // A running order opened on the Billing page: update that same order, send the kitchen only what it
+      // hasn't seen yet, and bill it — never a second order (which would send every item to the kitchen again).
+      if (draft.id) {
+        const { row } = await loadOrder(c, draft.id)
+        if (Number(row.status) === E.OrderStatus.completed) return row.ROWID // same request sent twice: already billed
+        if (Number(row.status) !== E.OrderStatus.open) throw new ApiError('This order is no longer running')
+        await writeOrder(c, draft)
+        if (c.business.modules.kitchen && draft.type !== 'counter') await kitchenDelta(c, row.ROWID)
+        await settle(c, row.ROWID, pays)
+        return row.ROWID
+      }
       const info: { existing?: boolean } = {}
       const id = await writeOrder(c, { ...draft, id: undefined }, { info })
       if (info.existing) return id // same request sent twice: the bill already made
@@ -144,7 +193,11 @@ define('orders', {
 
   settle: userWrite(async (c, orderId: string, pays: PaymentInput[], patch?: { discount?: number; customerId?: string | null }) => {
     const { row, order } = await loadOrder(c, orderId)
-    if (Number(row.status) !== E.OrderStatus.open) throw new ApiError('Order is not running')
+    if (Number(row.status) !== E.OrderStatus.open) {
+      // The same request again (its answer was lost on the way): it was already paid by it — return the bill.
+      if (c.requestId && await c.db.first('payments', { client_uuid: clientUuid(c, ':p0'), order_id: row.ROWID })) return one(c, orderId)
+      throw new ApiError('Order is not running')
+    }
     if (patch && (patch.customerId !== undefined || patch.discount !== undefined)) {
       if (patch.discount !== undefined && !c.can('billing.discount') && patch.discount !== order.discount) throw new ApiError('You do not have permission to give a discount', 403)
       await writeOrder(c, { id: order.id, type: order.type, tableId: order.tableId, customerId: patch.customerId !== undefined ? patch.customerId : order.customerId, items: order.items, discount: patch.discount ?? order.discount, notes: order.notes, source: order.source })
@@ -164,9 +217,16 @@ define('orders', {
     // Reverse money and stock instead of deleting.
     const pays = await c.db.select('payments', { where: { business_id: c.businessId, order_id: row.ROWID, is_voided: false } })
     if (pays.length) await c.db.updateMany('payments', pays.map((p) => ({ ROWID: p.ROWID, is_voided: true, voided_at: c.now.toISOString(), void_reason: reason.trim().slice(0, 255) })))
+    // Paid with a credit note: the customer gets that credit back (never more than the note was worth).
+    for (const p of pays) if (p.return_id) await restoreCreditNote(c, str(p.return_id), fromMinor(p.amount_minor))
     if (wasBilled) {
       const prows = await selectIn(c, 'products', 'ROWID', order.items.map((i) => i.productId), { business_id: c.businessId })
       for (const i of order.items) { const p = prows.find((x) => x.ROWID === i.productId); if (p) await moveStock(c, stockProduct(p), str(row.branch_id), i.qty, 'return', { note: `Cancelled — ${order.invoiceNumber}`, refType: 'order', refId: row.ROWID }) }
+    }
+    // Loyalty: points the bill earned go away; points used on it come back.
+    if (wasBilled && order.customerId) {
+      if (order.pointsEarned) await movePoints(c, order.customerId, 'cancel', -order.pointsEarned, { orderId: row.ROWID, note: `Bill ${order.invoiceNumber} cancelled`, cap: true })
+      if (order.pointsRedeemed) await movePoints(c, order.customerId, 'cancel', order.pointsRedeemed, { orderId: row.ROWID, note: `Bill ${order.invoiceNumber} cancelled — points back` })
     }
     const kots = await c.db.select('kitchen_tickets', { where: { business_id: c.businessId, order_id: row.ROWID } })
     const open = kots.filter((k) => Number(k.status) !== E.KotStatus.completed && Number(k.status) !== E.KotStatus.cancelled)
@@ -196,7 +256,7 @@ define('orders', {
     const t = await own(c, 'dining_tables', otherTableId, 'Table not found')
     const other = (await loadOrders(c, { ...inScope(c), status: E.OrderStatus.open, table_id: t.ROWID }))[0]
     if (other) {
-      await writeOrder(c, { id: primary.id, type: primary.type, tableId: primary.tableId, customerId: primary.customerId, items: [...primary.items, ...other.items.map((i) => ({ ...i, id: `new_${i.id}` }))], discount: primary.discount + other.discount, notes: primary.notes, source: primary.source })
+      await writeOrder(c, { id: primary.id, type: primary.type, tableId: primary.tableId, customerId: primary.customerId, items: [...primary.items, ...other.items.map((i) => ({ ...i, id: `new_${i.id}` }))], discount: primary.discount + other.discount, notes: primary.notes, source: primary.source }, { trustedDiscount: true })
       // The other order's lines already in the kitchen stay counted as sent.
       await c.db.update('orders', other.id, { status: E.OrderStatus.cancelled, cancelled_at: c.now.toISOString(), cancel_reason: `Merged into ${primary.number}`, updated_by: c.actorId })
       const kots = await c.db.select('kitchen_tickets', { where: { business_id: c.businessId, order_id: other.id } })
@@ -215,14 +275,16 @@ define('payments', {
   list: userRead(async (c, from: string, to: string) => {
     const rows = await c.db.select('payments', { where: { ...inScope(c), CREATEDTIME: { gte: isoArg(from), lte: isoArg(to) } }, orderBy: [['CREATEDTIME', 'DESC']], limit: 3000 })
     return rows.map(paymentFrom)
-  }),
+  }, { perm: 'payments.view' }),
 })
 
 define('kitchen', {
   list: userRead(async (c) => {
+    // Open tickets from before today + all of today's: two reads that never return the same ticket twice.
+    const start = bizDayStart(c)
     const [open, today] = await Promise.all([
-      c.db.select('kitchen_tickets', { where: { ...inScope(c), status: { in: [E.KotStatus.new, E.KotStatus.preparing, E.KotStatus.ready] } } }),
-      c.db.select('kitchen_tickets', { where: { ...inScope(c), CREATEDTIME: { gte: bizDayStart(c) } } }),
+      c.db.select('kitchen_tickets', { where: { ...inScope(c), status: { in: [E.KotStatus.new, E.KotStatus.preparing, E.KotStatus.ready] }, CREATEDTIME: { lt: start } } }),
+      c.db.select('kitchen_tickets', { where: { ...inScope(c), CREATEDTIME: { gte: start } } }),
     ])
     const all = new Map([...open, ...today].map((k) => [k.ROWID, k]))
     return (await kotsFrom(c, [...all.values()])).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
@@ -266,6 +328,14 @@ define('customers', {
     const stats = await customerStats(c)
     return rows.map((r) => ({ ...customerFrom(r, list?.ROWID ?? null), stats: stats(r.ROWID) }))
   }),
+  /** One customer with totals (a bill's drawer) — instead of the whole list. null when not found. */
+  one: userRead(async (c, id: string) => {
+    if (!isId(id)) return null
+    const [r, list] = await Promise.all([c.db.first('customers', { ROWID: id, business_id: c.businessId }), wholesaleList(c)])
+    if (!r) return null
+    const stats = await customerStats(c, [r.ROWID])
+    return { ...customerFrom(r, list?.ROWID ?? null), stats: stats(r.ROWID) }
+  }),
   history: userRead(async (c, customerId: string) => {
     await own(c, 'customers', customerId, 'Customer not found')
     const [orders, pays] = await Promise.all([
@@ -282,7 +352,10 @@ define('customers', {
     if (key) { const dup = await c.db.first('customers', { phone_key: key }); if (dup && dup.ROWID !== input.id) throw new ApiError('A customer with this phone already exists') }
     const list = input.priceTier !== undefined ? await wholesaleList(c) : null
     const email = String(input.email ?? '').trim().toLowerCase()
+    // GST: a business customer's GSTIN (B2B bills); the state comes from it, or is chosen for other-state buyers.
+    const gst = input.gstin !== undefined || input.stateCode !== undefined ? customerGst(input) : {}
     const data = {
+      ...gst,
       name: name.slice(0, 120), phone: phone || null, phone_key: key, email: email.slice(0, 150) || null, address: String(input.address ?? '').slice(0, 255) || null, notes: String(input.notes ?? '').slice(0, 255) || null,
       ...(input.marketingOptIn !== undefined ? { marketing_opt_in: input.marketingOptIn !== false } : {}),
       ...(input.priceTier !== undefined ? { price_list_id: input.priceTier === 'wholesale' && list ? list.ROWID : null } : {}),
@@ -292,6 +365,32 @@ define('customers', {
     else { row = await c.db.insert('customers', { business_id: c.businessId, marketing_opt_in: true, is_active: true, ...data }); await audit(c, 'customer', row.ROWID, 'create', name) }
     return customerFrom(row, (list ?? await wholesaleList(c))?.ROWID ?? null)
   }, { perm: 'customers.manage' }),
+
+  /** Loyalty points history (newest first) with the bill / credit-note numbers. */
+  points: userRead(async (c, customerId: string) => {
+    await own(c, 'customers', customerId, 'Customer not found')
+    const rows = await c.db.select('customer_points', { where: { business_id: c.businessId, customer_id: customerId }, orderBy: [['CREATEDTIME', 'DESC'], ['ROWID', 'DESC']], limit: 500 })
+    const orderIds = [...new Set(rows.map((r) => str(r.order_id)).filter(Boolean))]
+    const returnIds = [...new Set(rows.map((r) => str(r.return_id)).filter(Boolean))]
+    const [orders, rets] = await Promise.all([
+      orderIds.length ? selectIn(c, 'orders', 'ROWID', orderIds, { business_id: c.businessId }) : [],
+      returnIds.length ? selectIn(c, 'sale_returns', 'ROWID', returnIds, { business_id: c.businessId }) : [],
+    ])
+    const ref = (r: Row) => (r.return_id ? str(rets.find((x) => x.ROWID === str(r.return_id))?.number) : r.order_id ? str(orders.find((x) => x.ROWID === str(r.order_id))?.invoice_number) : '')
+    return rows.map((r) => pointsFrom(r, ref(r)))
+  }),
+
+  /** Owner adds or removes points by hand (festival gift, correction) — always with a reason. */
+  adjustPoints: userWrite(async (c, customerId: string, points: number, reason: string) => {
+    await own(c, 'customers', customerId, 'Customer not found')
+    const n = Math.trunc(Number(points))
+    if (!n || Math.abs(n) > 1_000_000) throw new ApiError('Enter the points to add or remove')
+    const why = String(reason ?? '').trim()
+    if (!why) throw new ApiError('Enter a reason')
+    const r = await movePoints(c, customerId, 'adjust', n, { note: why })
+    await audit(c, 'customer', customerId, 'update', `points ${n > 0 ? '+' : ''}${n}: ${why}`.slice(0, 250))
+    return { balance: r.balance }
+  }, { perm: 'settings.manage' }),
 
   /** Collect outstanding dues — allocated to the oldest unpaid bills first. */
   collectDue: userWrite(async (c, customerId: string, amount: number, method: PaymentMethod, reference = '') => {
@@ -341,23 +440,45 @@ export interface PublicOrderInput {
 }
 
 /** Endpoints that work without staff login (customer QR menu, TV display). */
+/** The QR menu (read from the database; public.menu keeps a copy in the shared cache). */
+async function buildMenu(c: Ctx, businessId: string, branchId?: string | null, tableId?: string | null) {
+  const { branch } = await guestSession(c, businessId, branchId, tableId)
+  const b = c.business
+  const [products, cats, tables, specials] = await Promise.all([
+    loadProducts(c, { activeOnly: true, branches: [branch.ROWID], withExpiry: false }), loadCategories(c),
+    c.db.select('dining_tables', { where: { business_id: b.id, branch_id: branch.ROWID, is_active: true } }), specialsFor(c, b.id, bizDay(c)),
+  ])
+  const sp = applySpecials(products.filter((p) => !(p.trackStock && p.stock <= 0)), specials)
+  return {
+    business: { id: b.id, name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, address: b.address, phone: b.phone, defaultCountry: b.defaultCountry ?? 'IN', currencySymbol: b.currencySymbol, billing: b.billing, modules: b.modules, terminology: b.terminology, qr: qrSettings(b) },
+    categories: cats, products: sp.products.map(forCustomers), specials: sp.specials.map(forCustomers),
+    specialInfo: [...sp.info.entries()].map(([productId, v]) => ({ productId, tag: v.special.tag, originalPrice: v.originalPrice, specialPrice: v.special.specialPrice })),
+    tables: tables.map((t) => ({ id: t.ROWID, label: str(t.label) })),
+    branch: { id: branch.ROWID, name: str(branch.name), address: str(branch.address), phone: str(branch.phone) },
+    branchCount: c.s.allBranches.length,
+  }
+}
+
+/** The TV specials board (public.specials keeps a copy in the shared cache). */
+async function buildSpecials(c: Ctx, businessId: string) {
+  await guestSession(c, businessId)
+  const b = c.business
+  const sp = applySpecials(await loadProducts(c, { activeOnly: true, withExpiry: false }), await specialsFor(c, b.id, bizDay(c)))
+  return { business: { name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, currencySymbol: b.currencySymbol, qr: qrSettings(b), qrOn: b.modules.qrOrdering }, items: sp.specials.map((p) => ({ product: forCustomers(p), ...sp.info.get(p.id)! })) }
+}
+
 define('public', {
   menu: publicRead(async (c, businessId: string, branchId?: string | null, tableId?: string | null) => {
-    const { branch } = await guestSession(c, businessId, branchId, tableId)
-    const b = c.business
-    const [products, cats, tables, specials] = await Promise.all([
-      loadProducts(c, { activeOnly: true, branches: [branch.ROWID], withExpiry: false }), loadCategories(c),
-      c.db.select('dining_tables', { where: { business_id: b.id, branch_id: branch.ROWID, is_active: true } }), specialsFor(c, b.id, bizDay(c)),
-    ])
-    const sp = applySpecials(products.filter((p) => !(p.trackStock && p.stock <= 0)), specials)
-    return {
-      business: { id: b.id, name: b.name, logoEmoji: b.logoEmoji, subType: b.subType, address: b.address, phone: b.phone, defaultCountry: b.defaultCountry ?? 'IN', currencySymbol: b.currencySymbol, billing: b.billing, modules: b.modules, terminology: b.terminology, qr: qrSettings(b) },
-      categories: cats, products: sp.products, specials: sp.specials,
-      specialInfo: [...sp.info.entries()].map(([productId, v]) => ({ productId, tag: v.special.tag, originalPrice: v.originalPrice, specialPrice: v.special.specialPrice })),
-      tables: tables.map((t) => ({ id: t.ROWID, label: str(t.label) })),
-      branch: { id: branch.ROWID, name: str(branch.name), address: str(branch.address), phone: str(branch.phone) },
-      branchCount: c.s.allBranches.length,
+    if (!isId(businessId)) throw new ApiError('Menu not found', 404)
+    // One cached menu per branch: a table's QR is served the menu of its branch (the menu doesn't depend on the table).
+    const tid = isId(tableId) ? String(tableId) : null
+    const br = tid ? await tableBranch(c, businessId, tid) : isId(branchId) ? String(branchId) : ''
+    if (tid && !br) {
+      const value = await buildMenu(c, businessId, branchId, tableId)
+      if (value.tables.some((t) => t.id === tid)) await rememberTableBranch(c, businessId, tid, value.branch.id) // real tables only
+      return cachedPublic(c, businessId, `menu:${value.branch.id}`, async () => ({ value, tz: c.business.timezone }))
     }
+    return cachedPublic(c, businessId, `menu:${br}`, async () => ({ value: await buildMenu(c, businessId, br || branchId, null), tz: c.business.timezone }))
   }),
 
   placeOrder: publicWrite(async (c, businessId: string, input: PublicOrderInput) => {
@@ -406,32 +527,55 @@ define('public', {
   }),
 
   /** Status for the customer's tracking screen — only that one order is exposed. */
+  /** The tracking screen. Answered from the shared cache while nothing in the shop changed (no database read). */
   order: publicRead(async (c, businessId: string, orderId: string) => {
     if (!isId(businessId) || !isId(orderId)) throw new ApiError('Order not found', 404)
-    try { await c.useShop(businessId) } catch { throw new ApiError('Order not found', 404) }
-    const rows = await c.db.select('orders', { where: { ROWID: orderId, business_id: businessId } })
-    if (!rows[0]) throw new ApiError('Order not found', 404)
-    let r = rows[0]
-    const reason = str(r.cancel_reason)
-    const intoNumber = reason.startsWith('Merged into ') ? reason.slice(12).replace(/['"\\]/g, '') : null
-    const into = intoNumber ? await c.db.first('orders', { business_id: businessId, order_number: intoNumber }) : null
-    if (into) r = into
-    const [o] = await withItems(c, [r])
-    const kots = (await c.db.select('kitchen_tickets', { where: { business_id: businessId, order_id: r.ROWID } })).map((k) => Number(k.status))
-    const table = r.table_id ? await c.db.get('dining_tables', str(r.table_id)) : null
-    return {
-      number: o.number, type: o.type, status: o.status, qrStatus: into ? 'accepted' : o.qrStatus, total: o.total, items: o.items, table: table ? str(table.label) : null,
-      cancelReason: into ? null : o.cancelReason,
-      kitchen: kots.length ? (kots.includes(E.KotStatus.new) ? 'new' : kots.includes(E.KotStatus.preparing) ? 'preparing' : kots.includes(E.KotStatus.ready) ? 'ready' : 'completed') : null,
-      paymentStatus: o.paymentStatus,
-    }
+    return trackedView(c, businessId, orderId)
   }),
+  /** "Track my order": today's or yesterday's order with this number → its id for the tracking screen. */
+  track: publicRead(async (c, businessId: string, number: string) => {
+    if (!isId(businessId)) throw new ApiError('Shop not found', 404)
+    await rateLimit(c, `track:${businessId}`, 10, 'Too many tries. Please wait a minute and try again.')
+    // Only what this needs: the shop exists, and its order-number prefix (not the whole business).
+    const biz = await c.platform.get('businesses', businessId)
+    if (!biz || biz.deleted_at) throw new ApiError('Shop not found', 404)
+    try { await c.useShop(businessId) } catch { throw new ApiError('Shop not found', 404) }
+    const seq = await readSequence(c.db, businessId, null, 'order')
+    const want = orderNumberCandidates(number, seq?.prefix != null ? str(seq.prefix) : DEFAULT_SEQ.order.prefix)
+    if (!want.length) throw new ApiError('Enter your order number')
+    const since = new Date(c.now.getTime() - TRACK_WINDOW_MS).toISOString()
+    const [hit] = await c.db.select('orders', { where: { business_id: businessId, order_number: { in: want }, CREATEDTIME: { gte: since } }, orderBy: [['ROWID', 'DESC']], limit: 1 })
+    if (!hit) throw new ApiError('No order with that number today. Check the number on your order screen or bill.', 404)
+    return { orderId: hit.ROWID, number: str(hit.order_number) }
+  }),
+  /** Browser push key for "Notify me" (null = push not set up: the page shows Refresh only). */
+  pushKey: publicRead(async (c) => ({ publicKey: c.push?.publicKey ?? null })),
+  subscribePush: { ...publicWrite(async (c, businessId: string, orderId: string, sub: { endpoint?: string; keys?: { p256dh?: string; auth?: string } }) => {
+    if (!c.push) throw new ApiError('Notifications are not available')
+    if (!isId(businessId) || !isId(orderId)) throw new ApiError('Order not found', 404)
+    await rateLimit(c, `push:${businessId}`, 20, 'Too many tries. Please wait a minute and try again.')
+    const endpoint = String(sub?.endpoint ?? ''), p256dh = String(sub?.keys?.p256dh ?? ''), auth = String(sub?.keys?.auth ?? '')
+    if (!isPushEndpoint(endpoint) || !/^[A-Za-z0-9_-]{80,120}$/.test(p256dh) || !/^[A-Za-z0-9_-]{16,40}$/.test(auth)) throw new ApiError('This browser can’t receive notifications')
+    try { await c.useShop(businessId) } catch { throw new ApiError('Order not found', 404) }
+    const view = await buildView(c, businessId, orderId)
+    const stage = trackStage(view)
+    if (stage === 'done' || stage === 'rejected') return { ok: true, stage }
+    const uniq = `${orderId}:${createHash('sha256').update(endpoint).digest('hex').slice(0, 40)}`
+    const data = { endpoint, p256dh, auth_secret: auth, last_stamp: trackStamp(view), expires_at: new Date(c.now.getTime() + 86_400_000).toISOString() }
+    const ex = await c.db.first('push_subscriptions', { uniq_key: uniq })
+    if (ex) await c.db.update('push_subscriptions', ex.ROWID, data)
+    else {
+      // A few phones per order at most.
+      if (await c.db.count('push_subscriptions', { order_id: orderId }) >= 5) throw new ApiError('Too many devices for this order')
+      try { await c.db.insert('push_subscriptions', { business_id: businessId, order_id: orderId, uniq_key: uniq, ...data }) } catch (e) { if (!(e instanceof DuplicateError)) throw e }
+    }
+    await markPushOn(c, businessId)
+    return { ok: true, stage }
+  }), quiet: true },
 
   specials: publicRead(async (c, businessId: string) => {
-    await guestSession(c, businessId)
-    const b = c.business
-    const sp = applySpecials(await loadProducts(c, { activeOnly: true, withExpiry: false }), await specialsFor(c, b.id, bizDay(c)))
-    return { business: { name: b.name, logoEmoji: b.logoEmoji, subType: b.subType, currencySymbol: b.currencySymbol, qr: qrSettings(b), qrOn: b.modules.qrOrdering }, items: sp.specials.map((p) => ({ product: p, ...sp.info.get(p.id)! })) }
+    if (!isId(businessId)) throw new ApiError('Not found', 404)
+    return cachedPublic(c, businessId, 'specials', async () => ({ value: await buildSpecials(c, businessId), tz: c.business.timezone }))
   }),
 })
 

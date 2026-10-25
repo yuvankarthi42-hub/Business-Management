@@ -12,6 +12,48 @@ import { loadAdmin } from './modules/admin/auth'
 import './modules'
 import { checkSchema } from './modules/admin/schema'
 import { touchActivity } from './domain/directory'
+import { afterOrderWrite } from './domain/tracking'
+import { bumpMenu } from './domain/menuCache'
+import { bumpReports } from './domain/reportCache'
+import { bumpCustomerStats } from './domain/statsCache'
+import { flushEvents, orderIdsFor, recordsFor } from './events/publish'
+import type { HubEvent } from './events/hub'
+import { ALL_BRANCHES } from './core/context'
+
+/** Writes that can change a customer's totals (dues, purchases, last visit). */
+const CUSTOMER_WRITES = /^(orders|payments|returns|customers|points|public)\./
+
+/** Writes that only add or move today's work (never change a finished day's report). Everything else bumps it. */
+const TODAY_ONLY = /^(orders\.(save|checkout|sendToKitchen|setFulfilment|transferTable|mergeTables)|kitchen\.|qr\.|tables\.|public\.|events\.|auth\.|sync\.)/
+
+/** Actions that change what a QR menu / TV board shows (its cached copy is refreshed). */
+const MENU_WRITES = /^(products|categories|specials|tables|branches|business|stock|purchases|returns)\./
+const menuChanged = (name: string, c: Ctx) => MENU_WRITES.test(name) || !!c.effects.stock?.length
+
+/** After a saved write: tell open screens (event hub). Only when the hub is set up; never fails the request. */
+async function sendEvents(c: Ctx, h: Handler, name: string, args: unknown[], data: unknown) {
+  const list: HubEvent[] = c.takeEvents()
+  if (h.write && h.access !== 'admin' && !h.quiet && c.hasShop && c.shopId) {
+    const shop = c.shopId
+    const branch = c.session && c.session.branchId !== ALL_BRANCHES ? c.session.branchId : null
+    // The changed orders / tickets are read only when staff screens of this shop are open (they'd use them).
+    const screens = !!(await c.shared.get(`live:${shop}`))
+    const records = screens ? await recordsFor(c, name, args, data).catch((e) => { console.error(`[${name}] event records`, e); return undefined }) : undefined
+    list.push({ kind: 'change', shop, branch: records?.orders[0]?.branchId ?? branch, name, origin: c.origin, cid: c.changeId, ...(records ? { records } : {}) })
+    // Customers following these orders (tracking page): "your order changed" (no data — they ask the cache).
+    if (TRACKING_WRITES.test(name)) {
+      if (records) for (const o of records.orders) list.push({ kind: 'order', shop, branch: o.branchId, orderId: o.id })
+      else if (await c.shared.get(`trk:open:${shop}`)) {
+        for (const id of await orderIdsFor(c, name, args, data).catch(() => [] as string[])) list.push({ kind: 'order', shop, branch: null, orderId: id })
+      }
+    }
+    if (menuChanged(name, c)) list.push({ kind: 'menu', shop, branch: null })
+  }
+  await flushEvents(c, list)
+}
+
+/** Actions that can change what a customer's tracking screen shows. */
+const TRACKING_WRITES = /^(orders|payments|kitchen|qr|tables|returns)\./
 
 export type { Env }
 export const API_VERSION = '1.0.0'
@@ -76,6 +118,7 @@ export function createApp(envFor: (req: Request) => Env) {
       const c = new Ctx(env, await env.dbs.platform(), (hdr('x-request-id') ?? '').slice(0, 40) || null)
       const device = (hdr('x-device') ?? '').trim()
       c.origin = /^[A-Za-z0-9_-]{6,40}$/.test(device) ? device : null
+      c.ip = String(req.header('x-forwarded-for') ?? req.ip ?? '').split(',')[0].trim().slice(0, 64)
       const token = (hdr('authorization') ?? '').replace(/^Bearer\s+/i, '')
       const claims = verifyToken<Record<string, unknown>>(token)
       if (h.access === 'user') {
@@ -106,8 +149,17 @@ export function createApp(envFor: (req: Request) => Env) {
       if (h.write && h.access !== 'admin' && c.hasShop) {
         // Writes without a transaction still tell the other devices (one extra small write).
         await c.logChange().catch((e) => console.error(`[${name}] change feed`, e))
+        // Customers' tracking screens: their cached status is stale now; send "Notify me" pushes.
+        if (TRACKING_WRITES.test(name)) await afterOrderWrite(c).catch((e) => console.error(`[${name}] tracking`, e))
+        // Customers' cached totals: bills, payments, returns, points and customer edits change them.
+        if (CUSTOMER_WRITES.test(name) && c.shopId) await bumpCustomerStats(c, c.shopId).catch((e) => console.error(`[${name}] stats cache`, e))
+        // Cached reports of finished days: anything but today's new sales may change them.
+        if (!TODAY_ONLY.test(name) && c.shopId) await bumpReports(c, c.shopId).catch((e) => console.error(`[${name}] report cache`, e))
+        // QR menu / TV board copies are stale now (catalogue, settings, or stock changed by a bill).
+        if (menuChanged(name, c) && c.shopId) await bumpMenu(c, c.shopId).catch((e) => console.error(`[${name}] menu cache`, e))
         if (c.session) await touchActivity(c)
       }
+      if (c.events) await sendEvents(c, h, name, args, data)
       res.json({ data: data === undefined ? null : data, ...(Object.keys(c.effects).length ? { effects: c.effects } : {}) })
     } catch (e) {
       if (e instanceof ApiError) { res.status(e.status).json({ error: { message: e.message, code: e.code } }); return }

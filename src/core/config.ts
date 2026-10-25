@@ -1,5 +1,6 @@
 // Business configuration: terminology defaults, module registry, business templates, roles.
 // Adding a new business type = add a template here (+ an optional module). The core stays untouched.
+import { isTextileShop } from './stickers'
 import type {
   Business, BusinessCategory, QrSettings, ExpenseCategory, ModuleConfig, ModuleKey, OrderType, PaymentMethod, Permission, Terminology,
 } from './types'
@@ -62,6 +63,8 @@ export function modulesFor(category: BusinessCategory): ModuleConfig {
 }
 
 export interface BusinessTemplate {
+  /** What the type cards / lists show. Textile is its own card but is stored as a retail business. */
+  key: BusinessCategory | 'textile'
   category: BusinessCategory
   name: string
   emoji: string
@@ -74,7 +77,7 @@ export interface BusinessTemplate {
 
 export const TEMPLATES: BusinessTemplate[] = [
   {
-    category: 'food', name: 'Food', emoji: '🍔', examples: 'Bakery, Fast Food, Tea Shop, Juice',
+    key: 'food', category: 'food', name: 'Food', emoji: '🍔', examples: 'Bakery, Fast Food, Tea Shop, Juice',
     subTypes: ['Fast Food', 'Bakery', 'Tea Shop', 'Coffee Shop', 'Juice Shop', 'Sweets & Snacks', 'Catering'],
     terms: {
       product: { singular: 'Menu Item', plural: 'Menu Items' },
@@ -85,7 +88,7 @@ export const TEMPLATES: BusinessTemplate[] = [
     units: ['pc', 'plate', 'cup', 'glass', 'kg', 'g', 'box'],
   },
   {
-    category: 'restaurant', name: 'Restaurant', emoji: '🍽️', examples: 'Hotel, Cafe, Dine-in, Takeaway',
+    key: 'restaurant', category: 'restaurant', name: 'Restaurant', emoji: '🍽️', examples: 'Hotel, Cafe, Dine-in, Takeaway',
     subTypes: ['Restaurant', 'Hotel', 'Cafe', 'Family Restaurant', 'Dhaba', 'Cloud Kitchen'],
     terms: {
       product: { singular: 'Menu Item', plural: 'Menu Items' },
@@ -97,14 +100,22 @@ export const TEMPLATES: BusinessTemplate[] = [
     units: ['plate', 'pc', 'bowl', 'cup', 'glass', 'half', 'full'],
   },
   {
-    category: 'retail', name: 'Retail', emoji: '🛒', examples: 'Grocery, Supermarket, Fancy Store',
+    key: 'retail', category: 'retail', name: 'Retail', emoji: '🛒', examples: 'Grocery, Supermarket, Fancy Store',
     subTypes: ['Grocery / Maligai', 'Supermarket', 'Fancy Store', 'Electronics', 'Hardware', 'Stationery'],
     terms: {},
     orderTypes: ['counter', 'delivery'],
     units: ['pc', 'kg', 'g', 'ltr', 'ml', 'pack', 'box', 'dozen', 'mtr', 'ft', 'coil', 'roll', 'set', 'bag', 'pair'],
   },
   {
-    category: 'service', name: 'Service', emoji: '✂️', examples: 'Salon, Laundry, Repair',
+    // Shown as its own type; saved as a retail business with one of these sub-types (see isTextile).
+    key: 'textile', category: 'retail', name: 'Textile', emoji: '🥻', examples: 'Silk, Sarees, Fabrics, Garments',
+    subTypes: ['Silk & Sarees', 'Textiles & Fabrics', 'Readymade Garments'],
+    terms: {},
+    orderTypes: ['counter'], // home delivery can be turned on in Settings → Billing & Tax
+    units: ['pc', 'set', 'pair', 'mtr'],
+  },
+  {
+    key: 'service', category: 'service', name: 'Service', emoji: '✂️', examples: 'Salon, Laundry, Repair',
     subTypes: ['Salon', 'Laundry', 'Repair', 'Spa', 'Other Services'],
     terms: {
       product: { singular: 'Service', plural: 'Services' },
@@ -117,7 +128,10 @@ export const TEMPLATES: BusinessTemplate[] = [
   },
 ]
 
-export const templateFor = (c: BusinessCategory) => TEMPLATES.find((t) => t.category === c)!
+export const templateFor = (c: BusinessCategory) => TEMPLATES.find((t) => t.key === c)!
+
+/** The type card a business belongs to (textile shops have their own card). */
+export const templateKeyOf = (b: Pick<Business, 'category' | 'subType'>): BusinessTemplate['key'] => (isTextile(b) ? 'textile' : b.category)
 
 export function qrSettings(b: Pick<Business, 'qr' | 'billing'>): QrSettings {
   return {
@@ -152,6 +166,7 @@ export const PERMISSIONS: { key: Permission; label: string; group: string }[] = 
   { key: 'dashboard.view', label: 'View dashboard', group: 'General' },
   { key: 'billing.create', label: 'Create bills', group: 'Sales' },
   { key: 'billing.discount', label: 'Give discounts', group: 'Sales' },
+  { key: 'billing.price', label: 'Change item price / line discount at billing', group: 'Sales' },
   { key: 'orders.view', label: 'View orders', group: 'Sales' },
   { key: 'orders.cancel', label: 'Cancel / void orders', group: 'Sales' },
   { key: 'tables.manage', label: 'Manage tables & take orders', group: 'Sales' },
@@ -172,7 +187,7 @@ export const DEFAULT_ROLES: { id: string; name: string; permissions: Permission[
   { id: 'owner', name: 'Owner', permissions: ['*'] },
   {
     id: 'manager', name: 'Manager',
-    permissions: ['dashboard.view', 'billing.create', 'billing.discount', 'orders.view', 'orders.cancel', 'tables.manage',
+    permissions: ['dashboard.view', 'billing.create', 'billing.discount', 'billing.price', 'orders.view', 'orders.cancel', 'tables.manage',
       'kitchen.view', 'payments.view', 'payments.collect', 'expenses.manage', 'reports.view', 'products.manage',
       'inventory.manage', 'customers.manage'],
   },
@@ -193,8 +208,11 @@ export function isHardware(b: Pick<Business, 'category' | 'subType'>) {
   return b.category === 'retail' && /hardware|electric/i.test(b.subType)
 }
 
+/** Silk, saree, textile and readymade garment shops: QR price stickers, MRP + discount, salesperson per bill. */
+export const isTextile = isTextileShop
+
 /** Retail shops with the scan-first billing (hold, saved orders) and the Customer Orders board. */
-export const usesRetailPos = (b: Pick<Business, 'category' | 'subType'>) => isSupermarket(b) || isHardware(b)
+export const usesRetailPos = (b: Pick<Business, 'category' | 'subType'>) => isSupermarket(b) || isHardware(b) || isTextile(b)
 
 /** Units sold by weight / volume: open the weight popup and allow decimal quantities. */
 export const WEIGHT_UNITS = ['kg', 'g', 'ltr', 'ml']
@@ -202,6 +220,8 @@ export const WEIGHT_UNITS = ['kg', 'g', 'ltr', 'ml']
 export interface ProductFormProfile {
   namePlaceholder: string
   showMrp?: boolean
+  /** Textile: design no. instead of SKU, fabric / colour / size, and "Add design" (one item per size × colour). */
+  textile?: boolean
   showFoodType: boolean // Veg / Non-veg
   showKitchen: boolean // "Send to kitchen" toggle
   barcodeFirst: boolean // barcode + SKU right under the name (scan-to-fill)
@@ -213,6 +233,15 @@ export interface ProductFormProfile {
 
 export function productFormFor(b: Pick<Business, 'category' | 'subType'>): ProductFormProfile {
   const sub = b.subType.toLowerCase()
+  if (b.category === 'retail' && isTextile(b)) {
+    const garments = /readymade|garment|apparel|boutique/.test(sub)
+    return {
+      namePlaceholder: garments ? 'Cotton Kurti' : /fabric|textile/.test(sub) ? 'Cotton Shirting' : 'Kanchipuram Silk Saree',
+      showFoodType: false, showKitchen: false, barcodeFirst: true, trackStockByDefault: true, isService: false, showMrp: true, textile: true,
+      variants: { title: 'Options', hint: 'Usually not needed — use “Add design” to make one item per size and colour, each with its own stock', placeholder: 'With blouse' },
+      addOns: null,
+    }
+  }
   if (b.category === 'retail') {
     const hardware = /hardware|electric/.test(sub)
     const electronics = /electronic/.test(sub)
@@ -253,6 +282,9 @@ const C = (list: string): StarterCat[] => list.split('|').map((x) => { const [em
 export function defaultCategoriesFor(category: BusinessCategory, subType: string): StarterCat[] {
   const s = subType.toLowerCase()
   if (category === 'retail') {
+    if (/silk|saree|sari/.test(s)) return C('🥻:Silk Sarees|🌸:Cotton Sarees|✨:Fancy Sarees|💒:Bridal Collection|👗:Blouse & Materials|🧣:Dhoti & Veshti')
+    if (/readymade|garment|apparel|boutique/.test(s)) return C('👔:Men|👗:Women|🧒:Kids|👖:Jeans & Trousers|🩲:Innerwear|🧥:Ethnic Wear')
+    if (/textile|fabric|cloth/.test(s)) return C('👔:Shirting|👖:Suiting|🥻:Sarees|👗:Dress Materials|🛏️:Home Linen|🧵:Lining & Accessories')
     if (/hardware/.test(s)) return C('💡:Electricals|🚰:Plumbing|🎨:Paints|🔨:Tools|🔩:Fasteners|🧱:Building Material')
     if (/electronic/.test(s)) return C('📺:TV & Audio|📱:Mobile Accessories|🍳:Kitchen Appliances|🌀:Fans & Lights|🔌:Cables & Chargers')
     if (/fancy/.test(s)) return C('💄:Cosmetics|🎀:Hair Accessories|💍:Jewellery|🎁:Gifts|🧸:Toys')

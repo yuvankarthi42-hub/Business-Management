@@ -9,10 +9,21 @@ import type { Db } from '../db/types'
 import type { Epochs } from './epochs'
 import type { Kv } from './kv'
 import type { Files } from './files'
+import type { PushSender } from './webpush'
+import type { EventSink } from '../events/publish'
+import type { HubEvent } from '../events/hub'
 import { ApiError, forbidden, notSignedIn } from './errors'
 
 /** What every request gets from the host (Catalyst function, local server, tests). */
-export interface Env { dbs: Databases; kv: Kv; files: Files; epochs: Epochs }
+export interface Env {
+  dbs: Databases; kv: Kv; files: Files; epochs: Epochs
+  /** Cache shared by every function instance (Catalyst Cache) — order-tracking snapshots, rate limits. Default: kv. */
+  shared?: Kv
+  /** Browser push for order tracking; null/undefined = not set up. */
+  push?: PushSender | null
+  /** Live updates for open screens (event hub); null/undefined = not set up (screens use the change feed). */
+  events?: EventSink | null
+}
 
 export const ALL_BRANCHES = 'all'
 export const SUPPORT_MESSAGE = 'Support view is read-only — nothing can be changed from here.'
@@ -57,6 +68,15 @@ export class Ctx {
   readonly kv: Kv
   readonly files: Files
   readonly epochs: Epochs
+  readonly shared: Kv
+  readonly push: PushSender | null
+  readonly events: EventSink | null
+  /** Events of this request, sent to the hub only after everything is saved (app.ts). */
+  private outbox: HubEvent[] = []
+  emit(ev: HubEvent) { if (this.events) this.outbox.push(ev) }
+  takeEvents() { const x = this.outbox; this.outbox = []; return x }
+  /** The caller's address (for rate limits on public lookups). */
+  ip = ''
   /** Raw handles (the open transaction's handle while one runs). Use c.platform / c.db, which check the tables. */
   private rawPlatform: Db
   private rawShop: Db | null = null
@@ -67,6 +87,8 @@ export class Ctx {
   /** Set by app.ts for writes: the action name goes to the change feed when the change commits. */
   changeName: string | null = null
   changeLogged = false
+  /** The change_log row of this request (events carry it, so screens notice a missed one). */
+  changeId: number | null = null
   /** The device that sent the request (x-device), so the change feed can skip its own changes. */
   origin: string | null = null
   /** The signed-in shop's session epoch (changes when users, settings, the subscription… change). */
@@ -74,6 +96,7 @@ export class Ctx {
 
   constructor(env: Env, platform: Db, readonly requestId: string | null, readonly now = new Date()) {
     this.dbs = env.dbs; this.kv = env.kv; this.files = env.files; this.epochs = env.epochs
+    this.shared = env.shared ?? env.kv; this.push = env.push ?? null; this.events = env.events ?? null
     this.rawPlatform = platform
   }
 
@@ -172,7 +195,8 @@ export class Ctx {
   async logChange() {
     if (!this.changeName || this.changeLogged || !this.rawShop || !this.dbs.perShop || !this.shopId) return
     const branch = this.session && this.session.branchId !== ALL_BRANCHES ? this.session.branchId : null
-    await this.db.sql!('INSERT INTO "change_log" ("business_id", "branch_id", "tag", "origin") VALUES (?, ?, ?, ?)', [Number(this.shopId), branch ? Number(branch) : null, this.changeName, this.origin])
+    const rows = await this.db.sql!('INSERT INTO "change_log" ("business_id", "branch_id", "tag", "origin") VALUES (?, ?, ?, ?) RETURNING "id"', [Number(this.shopId), branch ? Number(branch) : null, this.changeName, this.origin])
+    this.changeId = rows[0]?.id != null ? Number(rows[0].id) : null
     // Keep the feed small: now and then, drop rows older than two days (same transaction, uses the index).
     if (Math.random() < 0.02) await this.db.sql!('DELETE FROM "change_log" WHERE "created_at" < ?', [new Date(this.now.getTime() - 2 * 86_400_000).toISOString()])
     this.changeLogged = true

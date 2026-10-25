@@ -1,4 +1,4 @@
-// Talks to the BillPoodum API on Zoho Catalyst: POST /server/api/rpc/<namespace>.<method> { args }.
+// Talks to the Kadai Kalanjiyam API on Zoho Catalyst: POST /server/api/rpc/<namespace>.<method> { args }.
 // Only sign-in tokens and the chosen branch are kept in the browser — never data or pending changes.
 
 export class ApiError extends Error {
@@ -68,8 +68,22 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 let onSignedOut: (kind: 'user' | 'admin') => void = () => {}
 export const setSignedOutHandler = (fn: typeof onSignedOut) => { onSignedOut = fn }
 
+/** A fixed request id for the next call (see withRequestId). */
+let pinned: string | null = null
+/**
+ * Runs `fn` with its first server call using request id `id`. A bill is sent with the same id every time it is
+ * retried (double tap, connection dropped after the server saved it), and the server saves it at most once.
+ * `fn` must make that call straight away (before any await).
+ */
+export function withRequestId<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  pinned = id
+  try { return fn() } finally { pinned = null }
+}
+export const newRequestId = () => randomId()
+
 export async function rpc<T>(name: string, args: unknown[], token: TokenKind): Promise<{ data: T; effects?: Effects }> {
-  const id = randomId()
+  const id = pinned ?? randomId()
+  pinned = null
   for (let attempt = 0; ; attempt++) {
     try { return await rpcOnce<T>(name, args, token, id) } catch (e) {
       // BUSY = another device of the shop was saving and nothing was saved here: try once more, with the same
@@ -99,7 +113,8 @@ async function rpcOnce<T>(name: string, args: unknown[], token: TokenKind, id: s
   } catch {
     if (CANDIDATES.length > 1) forgetBase()
     // No queueing: an offline change is never saved for later. The user sees the error and tries again.
-    throw new ApiError('No internet connection. Nothing was saved — please try again when you are online.', 'OFFLINE')
+    // The request may or may not have reached the server, so never claim either way.
+    throw new ApiError('Connection problem — this may not have been saved. Please check and try again.', 'OFFLINE')
   }
   let body: { data?: T; effects?: Effects; error?: { message: string; code: string } }
   try { body = await res.json() } catch { throw new ApiError('The server did not answer properly. Please try again.', 'BAD_RESPONSE', res.status) }

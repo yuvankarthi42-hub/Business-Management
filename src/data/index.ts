@@ -5,6 +5,7 @@ import { api as mockApi } from './api'
 import { subscribe as mockSubscribe, getChangeVersion as mockVersion } from './db'
 import { createRemoteApi } from './remote/api'
 import { subscribe as remoteSubscribe, getChangeVersion as remoteVersion } from './remote/cache'
+import { newRequestId, withRequestId as remoteWithRequestId } from './remote/http'
 
 export const BACKEND: 'mock' | 'catalyst' = import.meta.env.VITE_BACKEND === 'catalyst' ? 'catalyst' : 'mock'
 const remote = BACKEND === 'catalyst'
@@ -12,6 +13,9 @@ const remote = BACKEND === 'catalyst'
 export const api = remote ? createRemoteApi(mockApi) : mockApi
 export const subscribe = remote ? remoteSubscribe : mockSubscribe
 export const getChangeVersion = remote ? remoteVersion : mockVersion
+/** Same request id for every retry of one bill (the server saves it once). The demo app runs fn as is. */
+export const withRequestId: <T>(id: string, fn: () => Promise<T>) => Promise<T> = remote ? remoteWithRequestId : (_id, fn) => fn()
+export { newRequestId }
 
 export { session, adminSession, ApiError, APP_VERSION } from './api'
 export type { Api, OrderDraft, PaymentInput, Summary, CustomerStats, Session, CustomerRow, Validity, ExportBundle } from './api'

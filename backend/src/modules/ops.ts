@@ -5,7 +5,7 @@ import type { Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
 import { define, userRead, userWrite } from '../core/registry'
 import { DuplicateError, type Row, type Where } from '../db/types'
-import { loadProducts } from '../domain/catalog'
+import { loadProducts, canSeeCost } from '../domain/catalog'
 import { moveStock, stockOf, stockProduct, writeOffBatch, type BatchInput } from '../domain/stock'
 import { audit, bizDay, code, E, fromMilli, fromMinor, isId, nameOf, nameOrNull, own, str, strOrNull, toMilli, toMinor } from '../domain/util'
 
@@ -68,6 +68,7 @@ export function expenseFrom(r: Row, cat: (id: Row['category_id']) => ExpenseCate
   return {
     id: r.ROWID, businessId: str(r.business_id), branchId: str(r.branch_id), date: str(r.expense_date), category: cat(r.category_id),
     amount: fromMinor(r.amount_minor), method: nameOf(E.PayMethod, r.method) as PaymentMethod, notes: str(r.notes), voided: !!r.is_voided,
+    ...(Number(r.ref_type) === E.ExpenseRef.supplier_payment ? { supplierPaymentId: str(r.ref_id) } : {}),
     createdAt: r.CREATEDTIME, createdBy: str(r.created_by), updatedAt: r.MODIFIEDTIME, updatedBy: str(r.created_by),
   }
 }
@@ -122,7 +123,7 @@ define('inventory', {
       const b = batchFrom(r)
       const p = products.find((x) => x.id === b.productId)
       return {
-        ...b, product: p ? { id: p.id, name: p.name, unit: p.unit, emoji: p.emoji, imageUrl: p.imageUrl ?? null, costPrice: p.costPrice, barcode: p.barcode } : null,
+        ...b, product: p ? { id: p.id, name: p.name, unit: p.unit, emoji: p.emoji, imageUrl: p.imageUrl ?? null, costPrice: canSeeCost(c) ? p.costPrice : 0, barcode: p.barcode } : null,
         daysLeft: b.expiry ? Math.round((dayMs(b.expiry) - dayMs(today)) / 86400000) : null,
       }
     }).sort((a, b) => (a.expiry || '9999').localeCompare(b.expiry || '9999'))
@@ -145,7 +146,7 @@ define('expenses', {
       categoryNames(c),
     ])
     return rows.map((r) => expenseFrom(r, cat))
-  }),
+  }, { perm: 'expenses.manage' }),
 
   save: userWrite(async (c, e: Partial<Expense> & { amount: number; category: ExpenseCategory }) => {
     if (!(Number(e?.amount) > 0)) throw new ApiError('Enter a valid amount')
@@ -175,6 +176,8 @@ define('expenses', {
     if (!isId(id)) return
     const e = await c.db.first('expenses', { ROWID: id, business_id: c.businessId })
     if (!e) return
+    // Added for a supplier payment: the payment is the record — void it there so both stay the same.
+    if (Number(e.ref_type) === E.ExpenseRef.supplier_payment) throw new ApiError('This is a supplier payment — void it from the supplier’s statement (Inventory → Suppliers)')
     await c.db.update('expenses', e.ROWID, { is_voided: true })
     await audit(c, 'expense', e.ROWID, 'void', '', str(e.branch_id))
   }, { perm: 'expenses.manage' }),

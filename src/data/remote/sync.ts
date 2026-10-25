@@ -1,10 +1,12 @@
 // Change feed: shows other devices' changes without re-reading everything on a timer.
+// With the event hub (live.ts) connected it doesn't run on a timer at all — only to catch up after a gap.
 // Every ~30 s — only while this tab is on screen and someone used it in the last 5 minutes — asks the server
 // what changed since the last time, and drops just the cached reads those changes affect (the same rules
 // as for this device's own writes, policy.ts). Nothing is stored in the browser.
 import { invalidate, notify, setTtlScale } from './cache'
 import { auth, rpc } from './http'
 import { invalidatesFor } from './policy'
+import { startLive } from './live'
 
 const INTERVAL = 30_000
 const IDLE_AFTER = 5 * 60_000
@@ -42,15 +44,27 @@ async function poll() {
   } finally { running = false; lastPoll = Date.now() }
 }
 
+// ---- Live updates (live.ts) ----
+// While the event hub stream is connected, this feed does not run on a timer: it is asked once only when the
+// stream reports a gap (a missed event), after a reconnect, or when the hub asks for a resync.
+let live = false
+export function setLive(on: boolean) { live = on; if (!on) lastUse = Date.now() }
+/** Change ids seen in live events keep the feed position current, so a catch-up returns only what was missed. */
+export function noteChangeId(id: number) { if (since !== null && id > since) since = id }
+export const feedPosition = () => since
+/** One catch-up read (never two at once). */
+export async function catchUp() { if (!running) await poll() }
+
 let started = false
 export function startSync() {
   if (started || typeof window === 'undefined') return
   started = true
+  startLive()
   for (const ev of ['pointerdown', 'keydown', 'touchstart']) window.addEventListener(ev, () => { lastUse = Date.now() }, { passive: true })
   // Coming back to the tab: catch up at once.
-  document.addEventListener('visibilitychange', () => { if (visible() && Date.now() - lastPoll > 5000) { lastUse = Date.now(); void poll() } })
+  document.addEventListener('visibilitychange', () => { if (!live && visible() && Date.now() - lastPoll > 5000) { lastUse = Date.now(); void poll() } })
   setInterval(() => {
-    if (running || off || !visible() || Date.now() - lastUse > IDLE_AFTER) return
+    if (live || running || off || !visible() || Date.now() - lastUse > IDLE_AFTER) return
     if (Date.now() - lastPoll >= INTERVAL) void poll()
   }, 5000)
 }

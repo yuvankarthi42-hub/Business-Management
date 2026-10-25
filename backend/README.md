@@ -1,4 +1,4 @@
-# BillPoodum API (Zoho Catalyst + Turso)
+# Kadai Kalanjiyam API (Zoho Catalyst + Turso)
 
 TypeScript + Express, bundled into a Catalyst Advanced I/O function (`catalyst/functions/api`) and a Cron function
 (`catalyst/functions/daily`).

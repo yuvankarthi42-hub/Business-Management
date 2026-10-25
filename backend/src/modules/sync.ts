@@ -2,7 +2,13 @@
 // Every committed write adds a change_log row with the action's name (app.ts / Ctx.tx). A device asks
 // "what changed since <id>" every ~30 s while it is on screen and re-reads only what those actions change
 // (the app's cache policy already knows that for its own writes). Its own changes are left out (x-device).
-import { define, userRead } from '../core/registry'
+import { define, publicRead, userRead } from '../core/registry'
+import { signToken } from '../core/tokens'
+
+/** Who may receive the changed orders / kitchen tickets inside events (the same people who can open those screens). */
+const RECORD_PERMS = ['orders.view', 'billing.create', 'tables.manage', 'kitchen.view'] as const
+/** The hub's address as browsers see it (EVENTS_PUBLIC_URL); null = live updates are off (screens use the change feed). */
+const hubUrl = () => process.env.EVENTS_PUBLIC_URL || null
 
 const MAX = 200
 
@@ -35,3 +41,26 @@ define('sync', {
     return { supported: true, latest: Number(rows[rows.length - 1].id), changes: [...names], epoch }
   }),
 })
+
+define('events', {
+  /**
+   * A ticket for one live stream (valid 1 h; the hub ends the stream when it expires and the screen asks again). The hub only checks its signature; it never reads a database.
+   * When users, roles, branches or settings change, the hub closes the shop's streams and screens ask for a new
+   * ticket here — so a removed user is refused at once.
+   */
+  ticket: userRead(async (c) => {
+    const url = hubUrl()
+    if (!url || !c.events) return { url: null, ticket: null, feed: !!c.dbs.perShop }
+    const s = c.s
+    const ticket = signToken({ t: 'ev', bid: c.businessId, uid: c.userId, br: s.allowed, rec: RECORD_PERMS.some((p) => c.can(p)) }, 3600)
+    // This shop has open staff screens: events carry the changed orders / tickets (app.ts) — else they skip that read.
+    await c.shared.set(`live:${c.businessId}`, '1', 2)
+    return { url, ticket, feed: !!c.dbs.perShop, ttl: 3600 }
+  }),
+})
+
+define('public', {
+  /** Live updates for the QR menu, TV board and order tracking (null = off). */
+  live: publicRead(async (c) => ({ url: c.events ? hubUrl() : null })),
+})
+

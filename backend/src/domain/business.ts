@@ -1,8 +1,9 @@
 // Business ⇄ tables: businesses + business_settings (JSON) + tax_rates + sequences + price_lists.
 // Produces exactly the `Business` / `Branch` shapes the app already uses (src/core/types.ts).
-import type { BillingSettings, Branch, BranchPrinter, Business, ModuleConfig, QrSettings, Terminology } from '@/core/types'
+import type { BillingSettings, Branch, BranchPrinter, Business, LoyaltySettings, ModuleConfig, QrSettings, StickerSettings, Terminology } from '@/core/types'
 import { DEFAULT_TERMS, modulesFor, templateFor } from '@/core/config'
 import type { Db, Row } from '../db/types'
+import type { Files } from '../core/files'
 import { code, E, fromBp, json, nameOf, str, strOrNull, toBp, type SeqName } from './util'
 
 export const LOGO_EMOJI: Record<Business['category'], string> = { food: '🍔', restaurant: '🍽️', retail: '🛒', service: '✂️' }
@@ -25,7 +26,7 @@ export const DEFAULT_SEQ: Record<SeqName, { prefix: string; start: number }> = {
 export interface BusinessBundle { business: Business; branches: Branch[] }
 
 /** Loads one business with everything the app keeps on `Business` (≈ 10–20 rows). */
-export async function loadBusiness(c: { platform: Db; db: Db }, businessId: string): Promise<BusinessBundle | null> {
+export async function loadBusiness(c: { platform: Db; db: Db; files?: Files }, businessId: string): Promise<BusinessBundle | null> {
   const row = await c.platform.get('businesses', businessId)
   if (!row || row.deleted_at) return null
   const db = c.db
@@ -36,10 +37,10 @@ export async function loadBusiness(c: { platform: Db; db: Db }, businessId: stri
     db.select('price_lists', { where: { business_id: businessId } }),
     db.select('branches', { where: { business_id: businessId } }),
   ])
-  return { business: businessFrom(row, settings, taxes, seqs, lists), branches: branches.map((b) => branchFrom(b, seqs)) }
+  return { business: businessFrom(row, settings, taxes, seqs, lists, c.files), branches: branches.map((b) => branchFrom(b, seqs)) }
 }
 
-export function businessFrom(row: Row, settings: Row[], taxes: Row[], seqs: Row[], lists: Row[]): Business {
+export function businessFrom(row: Row, settings: Row[], taxes: Row[], seqs: Row[], lists: Row[], files?: Files): Business {
   const category = nameOf(E.BusinessCategory, row.category) as Business['category']
   const setting = <T,>(k: string, fb: T) => { const r = settings.find((s) => s.setting_key === k); return r ? json<T>(r.value_json, fb) : fb }
   const seq = (name: SeqName) => seqs.find((s) => s.branch_id == null && Number(s.name) === code(E.SequenceName, name))
@@ -58,8 +59,10 @@ export function businessFrom(row: Row, settings: Row[], taxes: Row[], seqs: Row[
     ...(wholesaleList ? { wholesale: { enabled: !!wholesaleList.is_active, label: str(wholesaleList.name) } } : {}),
   }
   const start = strOrNull(row.subscription_start_at), end = strOrNull(row.subscription_end_at)
+  const logoKey = setting<{ logoKey?: string }>('brand', {}).logoKey
+  const logoUrl = logoKey && files ? files.url(logoKey) : null
   return {
-    id: row.ROWID, name: str(row.name), category, subType: str(row.sub_type), logoEmoji: LOGO_EMOJI[category],
+    id: row.ROWID, name: str(row.name), category, subType: str(row.sub_type), logoEmoji: LOGO_EMOJI[category], logoUrl,
     address: str(row.address), phone: str(row.phone), email: str(row.email), gstin: str(row.gstin),
     currency: str(row.currency_code) || 'INR', currencySymbol: str(row.currency_symbol) || '₹', timezone: str(row.timezone) || 'Asia/Kolkata',
     defaultCountry: str(row.country_code) || 'IN',
@@ -67,6 +70,9 @@ export function businessFrom(row: Row, settings: Row[], taxes: Row[], seqs: Row[
     modules: { ...modulesFor(category), ...setting<Partial<ModuleConfig>>('modules', {}) },
     billing,
     ...(settings.some((s) => s.setting_key === 'qr') ? { qr: setting<QrSettings>('qr', undefined as unknown as QrSettings) } : {}),
+    ...(settings.some((s) => s.setting_key === 'stickers') ? { stickers: setting<StickerSettings>('stickers', undefined as unknown as StickerSettings) } : {}),
+    ...(setting<{ stateCode?: string }>('gst', {}).stateCode ? { stateCode: setting<{ stateCode: string }>('gst', { stateCode: '' }).stateCode } : {}),
+    ...(settings.some((s) => s.setting_key === 'loyalty') ? { loyalty: setting<LoyaltySettings>('loyalty', undefined as unknown as LoyaltySettings) } : {}),
     onboarded: !!row.onboarded_at, createdAt: row.CREATEDTIME,
     status: nameOf(E.BusinessStatus, row.status) as Business['status'],
     ...(start && end ? { subscription: { startAt: start, endAt: end } } : {}),

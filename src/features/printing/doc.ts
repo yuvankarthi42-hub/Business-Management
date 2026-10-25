@@ -1,8 +1,9 @@
 // Printer-neutral receipt layout. The same lines are sent as ESC/POS text or drawn as an image
 // (for Tamil and other scripts the printer's built-in fonts can't show).
-import { ORDER_TYPE_LABEL } from '@/core/config'
+import { isTextile, ORDER_TYPE_LABEL } from '@/core/config'
 import { itemLabel } from '@/core/orderItem'
-import { lineTotal, r2, taxBreakup } from '@/core/pricing'
+import { discountParts, lineMrp, lineTotal, mrpSaved, preGstLines, r2, taxableValue, taxBreakup, taxIncluded } from '@/core/pricing'
+import { stateLabel } from '@/core/gst'
 import { formatPhone } from '@/core/phone'
 import { amountInWords } from '@/lib/format'
 import type { ReceiptProps } from '../Payment'
@@ -32,7 +33,7 @@ export function receiptDoc({ order: o, business: b, branch, customer, users = []
   const phone = branch?.phone || b.phone
   const who = (id: string) => (id === 'guest' ? 'QR order' : users.find((u) => u.id === id)?.name)
   const cashier = o.billedAt ? who(o.updatedBy) : null
-  const waiter = o.type === 'dine_in' ? who(o.createdBy) : null
+  const waiter = o.type === 'dine_in' ? who(o.createdBy) : o.salespersonId ? who(o.salespersonId) : null
   const gst = b.billing.taxRates.some((r) => /gst/i.test(r.name))
   const taxes = taxBreakup(o.items, o.discount, b.billing, o.tax)
   const qty = o.items.reduce((s, i) => s + i.qty, 0)
@@ -53,31 +54,61 @@ export function receiptDoc({ order: o, business: b, branch, customer, users = []
   out.push(kv(`Bill No: ${o.invoiceNumber ?? '-'}`, fmtBillDate(o.billedAt ?? o.createdAt)))
   out.push(kv(`Order: ${o.number}`, fmtBillTime(o.billedAt ?? o.createdAt)))
   t(`${ORDER_TYPE_LABEL[o.type]}${tableLabel ? ` · Table ${tableLabel}` : ''}`.toUpperCase(), { bold: true })
-  if (cashier || waiter) out.push(kv(cashier ? `Cashier: ${cashier}` : '', waiter ? `Waiter: ${waiter}` : ''))
+  if (cashier || waiter) out.push(kv(cashier ? `Cashier: ${cashier}` : '', waiter ? `${o.type === 'dine_in' ? 'Waiter' : 'Sales'}: ${waiter}` : ''))
   if (customer) out.push(kv(`${b.terminology.customer.singular}: ${customer.name}`, formatPhone(customer.phone)))
   else if (o.guest?.name) out.push(kv(`Name: ${o.guest.name}`, formatPhone(o.guest.phone)))
   if (o.type === 'delivery' && (o.guest?.address || customer?.address)) t(`Deliver to: ${o.guest?.address || customer?.address}`)
+  if (o.customerGstin) t(`Buyer GSTIN: ${o.customerGstin}`, { bold: true })
+  if ((o.customerGstin || o.igst) && o.placeOfSupply) t(`Place of supply: ${stateLabel(o.placeOfSupply)}`)
   out.push({ k: 'hr' })
+  const incl = taxIncluded(b.billing, o.tax)
+  const pre = isTextile(b) && incl ? preGstLines(o) : null
+  if (isTextile(b)) {
+    // Textile: Item | MRP | Disc. price before GST (or the final amount when GST isn't inside the price).
+    const tw = narrow ? [9, 11] : [11, 12]
+    out.push({ k: 'row', cells: ['Item', 'MRP', pre ? 'Disc.Price' : 'Final Amt'], widths: tw, bold: true })
+    out.push({ k: 'hr' })
+    for (const [k, i] of o.items.entries()) {
+      out.push({ k: 'row', cells: [itemLabel(i), d2(lineMrp(i)), d2(pre ? pre.lines[k] : lineTotal(i))], widths: tw })
+      const sub = [i.qty !== 1 ? `${i.qty} x ${d2(i.mrp ?? i.unitPrice)}` : '', i.hsn ? `HSN ${i.hsn}` : ''].filter(Boolean).join(' · ')
+      if (sub) t(`  ${sub}`, { small: true })
+    }
+  } else {
   out.push({ k: 'row', cells: narrow ? ['Item', 'Qty', 'Amt'] : ['Item', 'Qty', 'Rate', 'Amt'], widths: cols, bold: true })
   out.push({ k: 'hr' })
   for (const i of o.items) {
     out.push({ k: 'row', cells: narrow ? [itemLabel(i), String(i.qty), d2(lineTotal(i))] : [itemLabel(i), String(i.qty), d2(i.unitPrice), d2(lineTotal(i))], widths: cols })
-    const sub = [narrow ? `@ ${d2(i.unitPrice)}` : '', i.addOns.length ? `+ ${i.addOns.map((a) => a.name).join(', ')}` : ''].filter(Boolean).join(' · ')
+    const sub = [narrow ? `@ ${d2(i.unitPrice)}` : '', i.listPrice !== undefined && !i.mrp ? `was ${d2(i.listPrice)}` : '', i.mrp ? `MRP ${d2(i.mrp)}` : '', i.hsn ? `HSN ${i.hsn}` : '', i.addOns.length ? `+ ${i.addOns.map((a) => a.name).join(', ')}` : ''].filter(Boolean).join(' · ')
     if (sub) t(`  ${sub}`, { small: true })
+  }
   }
   out.push({ k: 'hr' })
   t(`Items: ${o.items.length} · Qty: ${qty}`)
-  out.push(kv('Subtotal', d2(o.subtotal)))
-  if (o.discount > 0) out.push(kv('Discount', `-${d2(o.discount)}`))
+  // Prices include GST: Taxable value + CGST + SGST (+ round off) = TOTAL, so the lines add up.
+  if (pre) {
+    if (o.items.length > 1 || pre.discount > 0) out.push(kv('Total before GST', d2(pre.lines.reduce((a, x) => a + x, 0))))
+    const pp = discountParts(o, pre.discount)
+    if (pp.manual > 0) out.push(kv('Bill discount', `-${d2(pp.manual)}`))
+    if (pp.points > 0) out.push(kv(`Points used (${o.pointsRedeemed})`, `-${d2(pp.points)}`))
+  } else if (!incl || o.discount > 0) out.push(kv(incl ? 'Items total' : 'Subtotal', d2(o.subtotal)))
+  const parts = discountParts(o)
+  if (!pre && parts.manual > 0) out.push(kv('Discount', `-${d2(parts.manual)}`))
+  if (!pre && parts.points > 0) out.push(kv(`Points used (${o.pointsRedeemed})`, `-${d2(parts.points)}`))
+  if (incl && !pre) out.push(kv('Taxable value', d2(taxableValue(o))))
   for (const x of taxes) {
-    if (gst) { out.push(kv(`CGST @ ${x.rate / 2}%`, d2(r2(x.tax / 2)))); out.push(kv(`SGST @ ${x.rate / 2}%`, d2(r2(x.tax - r2(x.tax / 2))))) }
+    if (o.igst) out.push(kv(`IGST @ ${x.rate}%`, d2(x.tax)))
+    else if (gst) { out.push(kv(`CGST @ ${x.rate / 2}%`, d2(r2(x.tax / 2)))); out.push(kv(`SGST @ ${x.rate / 2}%`, d2(r2(x.tax - r2(x.tax / 2))))) }
     else out.push(kv(`Tax @ ${x.rate}%`, d2(x.tax)))
   }
-  if (b.billing.taxEnabled && b.billing.taxMode === 'inclusive' && o.tax > 0) t('(Prices include tax)', { small: true })
   if (b.billing.roundOff) out.push(kv('Round off', d2(o.roundOff)))
   out.push({ k: 'hr', strong: true })
   out.push({ k: 'row', cells: ['TOTAL', `${b.currencySymbol}${d2(o.total)}`], bold: true, big: true })
   t(amountInWords(o.total), { align: 'center', small: true })
+  if (incl && !pre) t('(Prices include GST)', { align: 'center', small: true })
+  const saved = mrpSaved(o)
+  if (saved > 0) { out.push({ k: 'hr' }); t(`You saved ${b.currencySymbol}${d2(saved)} on MRP`, { align: 'center', bold: true }) }
+  const pts = [o.pointsRedeemed ? `Points used ${o.pointsRedeemed}` : '', o.pointsEarned ? `Earned ${o.pointsEarned}` : '', o.pointsBalance != null && o.customerId ? `Balance ${o.pointsBalance}` : ''].filter(Boolean)
+  if (pts.length) t(pts.join(' · '), { align: 'center' })
   if (o.balance > 0) {
     out.push({ k: 'hr' })
     out.push(kv('Paid', d2(o.paid)))

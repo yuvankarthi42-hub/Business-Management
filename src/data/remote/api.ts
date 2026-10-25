@@ -5,14 +5,16 @@
 import { modulesFor } from '@/core/config'
 import type { ImportItem } from '@/core/productImport'
 import { APP_VERSION, type Api, type ExportBundle } from '../api'
-import { compressImage, ensureStoredImage } from '../media'
+import { compressImage, ensureStoredImage, LOGO_IMAGE } from '../media'
 import { cachedRead, clearAll, confirmedWrite, invalidate, notify } from './cache'
 import { ApiError, auth, rpc, setSignedOutHandler, type TokenKind } from './http'
 import { isRead } from './policy'
 import { startSync } from './sync'
+import { restartLive, stopLive } from './live'
 
 /** Reads that must never be cached (big one-off downloads). */
-const UNCACHED = new Set(['dataExport.mine'])
+// public.order / public.track: the server answers from its own shared cache; Refresh must really ask.
+const UNCACHED = new Set(['dataExport.mine', 'public.order', 'public.track'])
 
 const tokenFor = (name: string): TokenKind => {
   if (name === 'admin.login' || name === 'admin.setup' || name === 'auth.login') return 'none'
@@ -27,7 +29,7 @@ export function call<T>(name: string, ...args: unknown[]): Promise<T> {
 }
 
 // A token that stopped working (password changed, login turned off): forget cached data and show sign-in.
-setSignedOutHandler(() => { clearAll() })
+setSignedOutHandler(() => { stopLive(); clearAll() })
 
 const blobToDataUrl = (b: Blob) => new Promise<string>((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = () => rej(r.error); r.readAsDataURL(b) })
 
@@ -69,11 +71,12 @@ export function createRemoteApi(shape: Api): Api {
     const r = await call<{ token: string; branchId: string }>('auth.login', identifier, password)
     auth.user = r.token; auth.branch = r.branchId || null
     clearAll()
+    restartLive()
     return (await a.auth.me())?.user
   }) as Api['auth']['login']
   a.auth.demoLogin = notAvailable('Demo login') as Api['auth']['demoLogin']
   a.auth.demoUsers = (() => []) as unknown as Api['auth']['demoUsers']
-  a.auth.logout = (async () => { auth.user = null; auth.branch = null; clearAll() }) as Api['auth']['logout']
+  a.auth.logout = (async () => { stopLive(); auth.user = null; auth.branch = null; clearAll() }) as Api['auth']['logout']
   a.auth.me = (async () => {
     if (!auth.user) return null
     try { return await cachedRead('auth.me', [], 'user') } catch (e) { if ((e as ApiError).status === 401 || (e as ApiError).code === 'DEACTIVATED') { auth.user = null; return null } throw e }
@@ -105,11 +108,13 @@ export function createRemoteApi(shape: Api): Api {
     const r = await call<{ onboarded: boolean; token: string; branchId: string }>('admin.startSupport', businessId, reason)
     auth.user = r.token; auth.branch = r.branchId || null
     clearAll()
+    restartLive()
     return { onboarded: r.onboarded }
   }) as Api['admin']['startSupport']
   a.admin.endSupport = (async () => {
     if (!auth.user) return null
     const id = await rpc<string | null>('admin.endSupport', [], 'user').then((r) => r.data).catch(() => null)
+    stopLive()
     auth.user = null; auth.branch = null
     clearAll()
     return id
@@ -122,6 +127,11 @@ export function createRemoteApi(shape: Api): Api {
 
   // ---- files ----
   a.media.upload = ((file: Blob) => uploadPhoto(file)) as Api['media']['upload']
+  a.business.setLogo = (async (file: Blob | null) => {
+    if (!file) return call('business.setLogo', null)
+    const img = await compressImage(file, LOGO_IMAGE)
+    return call('business.setLogo', { image: img.url, width: img.width, height: img.height, quality: img.quality, originalBytes: img.originalBytes })
+  }) as Api['business']['setLogo']
   a.support.uploadScreenshot = ((file: Blob) => uploadScreenshot('support.storeScreenshot', file)) as Api['support']['uploadScreenshot']
   a.admin.uploadScreenshot = ((file: Blob) => uploadScreenshot('admin.storeScreenshot', file)) as Api['admin']['uploadScreenshot']
   a.dataExport.mine = (async () => withImageData(await call('dataExport.mine'))) as Api['dataExport']['mine']

@@ -1,12 +1,15 @@
 import clsx from 'clsx'
 import { Thumb } from '@/components/Thumb'
-import { AlertTriangle, Boxes, CalendarClock, Trash2, PackageCheck, PackagePlus, PackageX, SlidersHorizontal, Wallet } from 'lucide-react'
+import { AlertTriangle, Boxes, CalendarClock, Trash2, PackageCheck, PackagePlus, PackageX, Printer, SlidersHorizontal, Wallet } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useApp, useData } from '@/app/AppContext'
 import { Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, SearchInput, Segmented, Select, Stat, Table, Td, Th, useAction, type Tone } from '@/components/ui'
 import type { Product, StockMovementType } from '@/core/types'
 import { api } from '@/data'
 import { fmtDateTime, money, num } from '@/lib/format'
+import { isTextileShop } from '@/core/stickers'
+import { LabelPrintModal } from '@/features/Labels'
+import { PurchasesView, SuppliersView } from '@/features/purchases/Purchases'
 
 const MOVE: Record<StockMovementType, { label: string; tone: Tone }> = {
   opening: { label: 'Opening', tone: 'slate' }, purchase: { label: 'Purchase', tone: 'green' }, sale: { label: 'Sale', tone: 'blue' },
@@ -15,7 +18,7 @@ const MOVE: Record<StockMovementType, { label: string; tone: Tone }> = {
 
 export default function Inventory() {
   const { t } = useApp()
-  const [tab, setTab] = useState<'stock' | 'expiry' | 'history'>('stock')
+  const [tab, setTab] = useState<'stock' | 'expiry' | 'history' | 'purchases' | 'suppliers'>('stock')
   const { data: batches = [] } = useData(() => api.inventory.batches())
   const expiringSoon = batches.filter((b) => b.daysLeft !== null && b.daysLeft <= 7)
   const [filter, setFilter] = useState<'all' | 'low' | 'out'>('all')
@@ -36,8 +39,9 @@ export default function Inventory() {
       <PageHeader title="Inventory" subtitle={`Stock is reduced automatically on every ${t('invoice').toLowerCase()}`}
         actions={<>
           <Button variant="secondary" onClick={() => setTrackPick(true)}>Track another item</Button>
-          <Segmented value={tab} onChange={setTab} options={[{ value: 'stock', label: 'Stock' }, { value: 'expiry', label: 'Expiry', count: expiringSoon.length || undefined }, { value: 'history', label: 'History' }]} />
+          <Segmented value={tab} onChange={setTab} options={[{ value: 'stock', label: 'Stock' }, { value: 'purchases', label: 'Purchases' }, { value: 'suppliers', label: 'Suppliers' }, { value: 'expiry', label: 'Expiry', count: expiringSoon.length || undefined }, { value: 'history', label: 'History' }]} />
         </>} />
+      {tab === 'purchases' ? <PurchasesView /> : tab === 'suppliers' ? <SuppliersView /> : <>
       <div className={clsx('mb-4 grid grid-cols-2 gap-3', batches.length ? 'lg:grid-cols-5' : 'lg:grid-cols-4')}>
         <Stat icon={Boxes} label="Items tracked" value={tracked.length} />
         <Stat icon={AlertTriangle} tone="amber" label="Low stock" value={low.length} />
@@ -102,6 +106,7 @@ export default function Inventory() {
         </Card>
       )}
 
+      </>}
       {adjust && <AdjustModal product={adjust.p} initialType={adjust.type} onClose={() => setAdjust(null)} />}
       {trackPick && (
         <Modal open onClose={() => setTrackPick(false)} size="sm" title="Track stock for…">
@@ -118,7 +123,9 @@ export default function Inventory() {
 
 function AdjustModal({ product, initialType, onClose }: { product: Product; initialType: StockMovementType; onClose: () => void }) {
   const run = useAction()
-  const { mod } = useApp()
+  const { mod, me } = useApp()
+  // Textile: new pieces need price stickers — offer one per piece after a purchase.
+  const [stickers, setStickers] = useState<{ count: number; print: boolean } | null>(null)
   const [type, setType] = useState<StockMovementType>(initialType)
   const [qty, setQty] = useState('')
   const [cost, setCost] = useState('')
@@ -129,20 +136,33 @@ function AdjustModal({ product, initialType, onClose }: { product: Product; init
   const n = Number(qty) || 0
   const sign = type === 'adjustment' ? Math.sign(n) : ['purchase', 'opening', 'return'].includes(type) ? 1 : -1
   const after = product.stock + sign * Math.abs(n)
+  const offerStickers = !!me && isTextileShop(me.business) && sign > 0 && ['purchase', 'opening', 'return'].includes(type) && Number.isInteger(n) && n > 0 && n <= 500
+  if (stickers?.print) return <LabelPrintModal title="Print stickers for the new stock" initial={[{ id: product.id, count: stickers.count }]} onClose={onClose} />
+  if (stickers) {
+    return (
+      <Modal open onClose={onClose} size="sm" title="Stock updated" subtitle={`${product.name}: ${after} ${product.unit} in stock`}>
+        <p className="text-sm text-slate-600">Print a price sticker for each of the {stickers.count} new piece{stickers.count === 1 ? '' : 's'}?</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>Later</Button>
+          <Button icon={Printer} onClick={() => setStickers({ ...stickers, print: true })}>Print {stickers.count} sticker{stickers.count === 1 ? '' : 's'}</Button>
+        </div>
+      </Modal>
+    )
+  }
   return (
     <Modal open onClose={onClose} size="sm" title={<span className="flex items-center gap-2"><Thumb item={product} className="h-8 w-8 rounded-lg text-xl" />{product.name}</span>} subtitle={`Current stock: ${product.stock} ${product.unit}`}
-      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button disabled={!n || (needsBatch && !expiry)} onClick={async () => { if (await run(() => api.inventory.adjust(product.id, type, n, note || MOVE[type].label, Number(cost) || undefined, needsBatch ? { batchNo, expiry } : undefined), 'Stock updated')) onClose() }}>Save</Button></>}>
+      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button disabled={!n || (needsBatch && !expiry)} onClick={async () => { if (await run(() => api.inventory.adjust(product.id, type, n, note || MOVE[type].label, Number(cost) || undefined, needsBatch ? { batchNo, expiry } : undefined), 'Stock updated')) { if (offerStickers) setStickers({ count: n, print: false }); else onClose() } }}>Save</Button></>}>
       <div className="space-y-4">
-        <Field label="Type">
+        <Field required label="Type">
           <Select value={type} onChange={(e) => setType(e.target.value as StockMovementType)}>
             {(['purchase', 'opening', 'wastage', 'damage', 'return', 'adjustment'] as StockMovementType[]).map((k) => <option key={k} value={k}>{MOVE[k].label}{k === 'adjustment' ? ' (+ / −)' : ''}</option>)}
           </Select>
         </Field>
-        <Field label={`Quantity (${product.unit})`} hint={type === 'adjustment' ? 'Use a negative number to reduce stock' : undefined}><Input autoFocus type="number" inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} /></Field>
+        <Field required label={`Quantity (${product.unit})`} hint={type === 'adjustment' ? 'Use a negative number to reduce stock' : undefined}><Input autoFocus type="number" inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} /></Field>
         {type === 'purchase' && mod('expenses') && <Field label="Total cost paid (₹)" hint="Optional — also recorded as a Purchase expense"><Input type="number" inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} placeholder={String(Math.abs(n) * product.costPrice || '')} /></Field>}
         {needsBatch && (
           <div className="grid grid-cols-2 gap-3 rounded-xl border border-orange-200 bg-orange-50/50 p-3">
-            <Field label="Expiry date"><Input type="date" required value={expiry} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setExpiry(e.target.value)} /></Field>
+            <Field required label="Expiry date"><Input type="date" required value={expiry} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setExpiry(e.target.value)} /></Field>
             <Field label="Batch no." hint="Optional"><Input value={batchNo} onChange={(e) => setBatchNo(e.target.value)} placeholder="B2410A" /></Field>
           </div>
         )}

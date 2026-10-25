@@ -187,7 +187,7 @@ function SettingsView() {
           </div>
           <Toggle checked={v.autoAccept} onChange={(on) => setV({ ...v, autoAccept: on })} label="Auto-accept" />
         </div>
-        <Field label="Public address used in QR codes" hint="The address phones use to reach this app — your network URL now, your domain after going live.">
+        <Field required label="Public address used in QR codes" hint="The address phones use to reach this app — your network URL now, your domain after going live.">
           <Input value={v.baseUrl} onChange={(e) => setV({ ...v, baseUrl: e.target.value.trim() })} placeholder="http://10.89.33.221:5173" />
         </Field>
         <div className="flex justify-end"><Button disabled={!dirty} onClick={() => run(() => api.business.update({ qr: v }), 'QR settings saved')}>Save</Button></div>

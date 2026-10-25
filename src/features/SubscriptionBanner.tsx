@@ -1,3 +1,4 @@
+import { BRAND } from '@/core/brand'
 import clsx from 'clsx'
 import { AlertTriangle, Eye, Lock, LogOut } from 'lucide-react'
 import type { ReactNode } from 'react'
@@ -37,8 +38,8 @@ export function SubscriptionBanner({ className }: { className?: string }) {
       {expired ? <Lock className="mt-0.5 h-4 w-4 shrink-0" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
       <p className="min-w-0">
         {expired
-          ? <><b>Subscription expired on {fmt(s.endAt)}.</b> <span>Your account is read-only — you can view everything, but can’t make bills or change data. Contact the BillPoodum team to renew.</span></>
-          : <><b>Subscription ends in {s.daysLeft} day{s.daysLeft === 1 ? '' : 's'} ({fmt(s.endAt)}).</b> <span>Contact the BillPoodum team to renew and keep billing without a break.</span></>}
+          ? <><b>Subscription expired on {fmt(s.endAt)}.</b> <span>Your account is read-only — you can view everything, but can’t make bills or change data. Call or WhatsApp {BRAND.supportPhoneDisplay} to renew.</span></>
+          : <><b>Subscription ends in {s.daysLeft} day{s.daysLeft === 1 ? '' : 's'} ({fmt(s.endAt)}).</b> <span>Call or WhatsApp {BRAND.supportPhoneDisplay} to renew and keep billing without a break.</span></>}
       </p>
     </div>
   )

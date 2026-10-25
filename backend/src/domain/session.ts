@@ -9,6 +9,7 @@ import type { Db } from '../db/types'
 import { loadBusiness } from './business'
 import { allowedBranches, permissionsOf, roleFrom, userFrom } from './people'
 import { getPlatformSetting, str } from './util'
+import { bumpMenu } from './menuCache'
 
 export interface UserClaims { t: 'u'; uid: string; bid: string; tv: number; sup?: SupportClaim }
 export interface AdminClaims { t: 'a'; aid: string; tv: number }
@@ -18,6 +19,10 @@ interface Cached { user: User; role: Role; business: Business; allBranches: Bran
 /** Call after any write that changes what auth.me returns (business, settings, branches, users, roles, features). */
 export async function bumpEpoch(c: Ctx, businessId: string | 'global') {
   await c.epochs.bump(c, businessId)
+  // Open screens of that shop re-check the sign-in (sent after the request is saved).
+  if (businessId !== 'global') c.emit({ kind: 'session', shop: String(businessId), branch: null })
+  // Subscription / account / settings changes also change what the QR menu may show.
+  if (businessId !== 'global') await bumpMenu(c, String(businessId)).catch(() => {})
 }
 
 export async function featureFlags(db: Db): Promise<FeatureFlags> {
@@ -53,14 +58,23 @@ export async function loadSession(c: Ctx, claims: UserClaims, branchHeader: stri
   c.epoch = await c.epochs.get(c, claims.bid)
   const key = `sess:${claims.bid}:${claims.uid}:${claims.tv}:${c.epoch}`
   let data: Cached | null = null
-  const hit = await c.kv.get(key)
+  // This instance's memory first, then the cache every instance shares (Turso: a cold instance doesn't reload
+  // every session from the database), then the database. The key includes the epoch, so a change is never missed.
+  const shared = c.shared !== c.kv ? c.shared : null
+  let hit = await c.kv.get(key)
+  if (!hit && shared) { hit = await shared.get(key); if (hit) await c.kv.set(key, hit, 6) }
   if (hit) { try { data = JSON.parse(hit) } catch { data = null } }
   if (!data) {
     data = await loadFresh(c, claims)
-    if (data) await c.kv.set(key, JSON.stringify(data), 6)
+    if (data) {
+      const json = JSON.stringify(data)
+      await c.kv.set(key, json, 6)
+      if (shared && json.length <= 60_000) await shared.set(key, json, 6)
+    }
   }
   if (!data || data.tokenVersion !== claims.tv) return null
   if (!data.user.active && !claims.sup) return null
+  if (data.user.canLogin === false && !claims.sup) return null
   const allowed = allowedBranches(data.user, data.role, data.allBranches.map((b) => b.id))
   const wanted = branchHeader || data.user.branchId
   const branchId = wanted === ALL_BRANCHES ? (allowed.length >= 2 ? ALL_BRANCHES : allowed[0]) : allowed.includes(wanted) ? wanted : allowed.includes(data.user.branchId) ? data.user.branchId : allowed[0]

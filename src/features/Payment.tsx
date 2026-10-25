@@ -5,9 +5,10 @@ import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 import { useApp, useData } from '@/app/AppContext'
 import { Button, Input, Modal, useAction, useToast } from '@/components/ui'
-import { ORDER_TYPE_LABEL, PAYMENT_LABEL } from '@/core/config'
+import { isTextile, ORDER_TYPE_LABEL, PAYMENT_LABEL } from '@/core/config'
 import { itemLabel } from '@/core/orderItem'
-import { lineTotal, r2, taxBreakup } from '@/core/pricing'
+import { discountParts, lineMrp, lineTotal, mrpSaved, preGstLines, r2, taxableValue, taxBreakup, taxIncluded } from '@/core/pricing'
+import { stateLabel } from '@/core/gst'
 import type { Branch, Business, Customer, Order, Payment, PaymentMethod } from '@/core/types'
 import { api, type PaymentInput } from '@/data'
 import { formatPhone } from '@/core/phone'
@@ -198,16 +199,25 @@ function FakeQr() {
 // ---------- Receipt ----------
 
 export function receiptText(o: Order, b: Business, customer?: Customer | null) {
+  const pre = isTextile(b) && taxIncluded(b.billing, o.tax) ? preGstLines(o) : null
   const gst = b.billing.taxRates.some((r) => /gst/i.test(r.name))
-  const taxes = taxBreakup(o.items, o.discount, b.billing, o.tax).flatMap((t) => gst
+  const taxes = taxBreakup(o.items, o.discount, b.billing, o.tax).flatMap((t) => o.igst ? [`IGST @ ${t.rate}%: ${money(t.tax, { decimals: true })}`] : gst
     ? [`CGST @ ${t.rate / 2}%: ${money(r2(t.tax / 2), { decimals: true })}`, `SGST @ ${t.rate / 2}%: ${money(r2(t.tax - r2(t.tax / 2)), { decimals: true })}`]
     : [`Tax @ ${t.rate}%: ${money(t.tax, { decimals: true })}`])
   const lines = [
     `*${b.name}*`, b.address, b.gstin ? `GSTIN: ${b.gstin}` : '', '',
-    `Bill No: ${o.invoiceNumber ?? o.number}`, fmtDateTime(o.billedAt ?? o.createdAt), customer ? `${b.terminology.customer.singular}: ${customer.name}` : '', '',
-    ...o.items.map((i) => `${i.qty} x ${itemLabel(i)} = ${money(lineTotal(i))}`), '',
-    `Subtotal: ${money(o.subtotal, { decimals: true })}`, o.discount ? `Discount: -${money(o.discount, { decimals: true })}` : '', ...taxes,
+    `Bill No: ${o.invoiceNumber ?? o.number}`, fmtDateTime(o.billedAt ?? o.createdAt), customer ? `${b.terminology.customer.singular}: ${customer.name}` : '',
+    o.customerGstin ? `Buyer GSTIN: ${o.customerGstin}` : '', (o.customerGstin || o.igst) && o.placeOfSupply ? `Place of supply: ${stateLabel(o.placeOfSupply)}` : '', '',
+    ...o.items.map((i, k) => (isTextile(b)
+      ? `${itemLabel(i)}${i.qty !== 1 ? ` × ${i.qty}` : ''} — MRP ${money(lineMrp(i), { decimals: true })} · ${pre ? 'Disc. price' : 'Final'} ${money(pre ? pre.lines[k] : lineTotal(i), { decimals: true })}`
+      : `${i.qty} x ${itemLabel(i)} = ${money(lineTotal(i))}`)), '',
+    ...(pre ? [pre.discount > 0 ? `Bill discount: -${money(pre.discount, { decimals: true })}` : '', ...taxes] : taxIncluded(b.billing, o.tax)
+      ? [o.discount ? `Items total: ${money(o.subtotal, { decimals: true })}` : '', o.discount ? `Discount: -${money(o.discount, { decimals: true })}` : '', `Taxable value: ${money(taxableValue(o), { decimals: true })}`, ...taxes]
+      : [`Subtotal: ${money(o.subtotal, { decimals: true })}`, o.discount ? `Discount: -${money(o.discount, { decimals: true })}` : '', ...taxes]),
     `*TOTAL: ${money(o.total, { decimals: true })}*`, o.balance > 0 ? `Balance due: ${money(o.balance, { decimals: true })}` : '',
+    mrpSaved(o) > 0 ? `You saved ${money(mrpSaved(o), { decimals: true })} on MRP` : '',
+    o.pointsRedeemed ? `Points used: ${o.pointsRedeemed} (−${money(o.pointsValue ?? 0, { decimals: true })})` : '',
+    o.pointsEarned ? `Points earned: ${o.pointsEarned}` : '', o.pointsBalance != null && o.customerId ? `Points balance: ${o.pointsBalance}` : '',
     b.billing.receiptFooter.trim() ? `\n${b.billing.receiptFooter}` : '',
   ]
   return lines.filter((l, i, a) => l !== '' || a[i - 1] !== '').join('\n').trim()
@@ -235,11 +245,19 @@ export function Receipt({ order: o, business: b, branch, customer, users = [], t
   const narrow = b.billing.paperWidth === '58mm'
   const who = (id: string) => (id === 'guest' ? 'QR order' : users.find((u) => u.id === id)?.name)
   const cashier = o.billedAt ? who(o.updatedBy) : null
-  const waiter = o.type === 'dine_in' ? who(o.createdBy) : null
+  const waiter = o.type === 'dine_in' ? who(o.createdBy) : o.salespersonId ? who(o.salespersonId) : null
   const gst = b.billing.taxRates.some((r) => /gst/i.test(r.name))
   const taxes = taxBreakup(o.items, o.discount, b.billing, o.tax)
   const qty = o.items.reduce((s, i) => s + i.qty, 0)
+  const saved = mrpSaved(o)
+  const textileBill = isTextile(b)
+  const textile = textileBill
+  const incl = taxIncluded(b.billing, o.tax)
+  const pre = textileBill && incl ? preGstLines(o) : null
+  const parts = discountParts(o)
+  const preParts = pre ? discountParts(o, pre.discount) : null
   const cols = narrow ? 'grid-cols-[1fr_22px_52px]' : 'grid-cols-[1fr_24px_48px_56px]'
+  const tCols = narrow ? 'grid-cols-[1fr_52px_62px]' : 'grid-cols-[1fr_64px_80px]'
   const Hr = ({ strong }: { strong?: boolean }) => <div className={strong ? 'my-1.5 border-t-2 border-black' : 'my-1.5 border-t border-dashed border-black'} />
   return (
     <div data-no-i18n className={clsx('font-mono leading-snug text-black', narrow ? 'text-[10px]' : 'text-[11.5px]')} style={{ maxWidth: narrow ? '58mm' : '80mm' }}>
@@ -257,11 +275,28 @@ export function Receipt({ order: o, business: b, branch, customer, users = [], t
       <Kv l={<>Bill No: <b>{o.invoiceNumber ?? '—'}</b></>} r={fmtBillDate(o.billedAt ?? o.createdAt)} />
       <Kv l={`Order: ${o.number}`} r={fmtBillTime(o.billedAt ?? o.createdAt)} />
       <p className="font-bold uppercase">{ORDER_TYPE_LABEL[o.type]}{tableLabel ? ` · Table ${tableLabel}` : ''}</p>
-      {(cashier || waiter) && <Kv l={cashier ? `Cashier: ${cashier}` : ''} r={waiter ? `Waiter: ${waiter}` : ''} />}
+      {(cashier || waiter) && <Kv l={cashier ? `Cashier: ${cashier}` : ''} r={waiter ? `${o.type === 'dine_in' ? 'Waiter' : 'Sales'}: ${waiter}` : ''} />}
       {customer && <Kv l={`${b.terminology.customer.singular}: ${customer.name}`} r={formatPhone(customer.phone)} />}
       {!customer && o.guest?.name && <Kv l={`Name: ${o.guest.name}`} r={formatPhone(o.guest.phone)} />}
+      {/* B2B tax invoice: the buyer's GSTIN; another state → place of supply (IGST). */}
+      {o.customerGstin && <p>Buyer GSTIN: <b>{o.customerGstin}</b></p>}
+      {(o.customerGstin || o.igst) && o.placeOfSupply && <p>Place of supply: {stateLabel(o.placeOfSupply)}</p>}
       {o.type === 'delivery' && (o.guest?.address || customer?.address) && <p>Deliver to: {o.guest?.address || customer?.address}</p>}
       <Hr />
+      {textile ? (
+        <>
+          {/* Textile: Item | MRP | Final amount (quantity under the name when more than one). */}
+          <div className={clsx('grid gap-x-1 font-bold', tCols)}><span>Item</span><span className="text-right">MRP</span><span className="whitespace-nowrap text-right">{pre ? 'Disc. Price' : 'Final Amt'}</span></div>
+          <Hr />
+          {o.items.map((i, k) => (
+            <div key={i.id} className={clsx('mb-0.5 grid gap-x-1', tCols)}>
+              <span className="break-words">{itemLabel(i)}{(i.qty !== 1 || i.hsn) && <span className="block text-[10px]">{[i.qty !== 1 ? `${i.qty} × ${d2(i.mrp ?? i.unitPrice)}` : '', i.hsn ? `HSN ${i.hsn}` : ''].filter(Boolean).join(' · ')}</span>}</span>
+              <span className="text-right">{d2(lineMrp(i))}</span>
+              <span className="text-right font-bold">{d2(pre ? pre.lines[k] : lineTotal(i))}</span>
+            </div>
+          ))}
+        </>
+      ) : <>
       <div className={clsx('grid gap-x-1 font-bold', cols)}>
         <span>Item</span><span className="text-right">Qty</span>{!narrow && <span className="text-right">Rate</span>}<span className="text-right">Amt</span>
       </div>
@@ -274,26 +309,41 @@ export function Receipt({ order: o, business: b, branch, customer, users = [], t
             {!narrow && <span className="text-right">{d2(i.unitPrice)}</span>}
             <span className="text-right">{d2(lineTotal(i))}</span>
           </div>
-          {(i.addOns.length > 0 || narrow) && (
-            <p className="pl-2 text-[10px]">{narrow ? `@ ${d2(i.unitPrice)}` : ''}{i.addOns.length ? `${narrow ? ' · ' : ''}+ ${i.addOns.map((a) => a.name).join(', ')}` : ''}</p>
+          {(i.addOns.length > 0 || narrow || !!i.mrp || !!i.hsn || i.listPrice !== undefined) && (
+            <p className="pl-2 text-[10px]">{[narrow ? `@ ${d2(i.unitPrice)}` : '', i.listPrice !== undefined && !i.mrp ? `was ${d2(i.listPrice)}` : '', i.mrp ? `MRP ${d2(i.mrp)}` : '', i.hsn ? `HSN ${i.hsn}` : '', i.addOns.length ? `+ ${i.addOns.map((a) => a.name).join(', ')}` : ''].filter(Boolean).join(' · ')}</p>
           )}
         </div>
       ))}
+      </>}
       <Hr />
       <p>Items: {o.items.length} · Qty: {qty}</p>
-      <Kv l="Subtotal" r={d2(o.subtotal)} />
-      {o.discount > 0 && <Kv l="Discount" r={`-${d2(o.discount)}`} />}
-      {taxes.map((t) => gst ? (
+      {/* Prices include GST: Taxable value + CGST + SGST (+ round off) = TOTAL, so the lines add up. */}
+      {pre ? <>
+        {/* Textile: lines are before GST, so  lines − discount + CGST + SGST = TOTAL. */}
+        {(o.items.length > 1 || pre.discount > 0) && <Kv l="Total before GST" r={d2(pre.lines.reduce((a, x) => a + x, 0))} />}
+        {preParts!.manual > 0 && <Kv l="Bill discount" r={`-${d2(preParts!.manual)}`} />}
+        {preParts!.points > 0 && <Kv l={`Points used (${o.pointsRedeemed})`} r={`-${d2(preParts!.points)}`} />}
+      </> : <>
+        {(!incl || o.discount > 0) && <Kv l={incl ? 'Items total' : 'Subtotal'} r={d2(o.subtotal)} />}
+        {parts.manual > 0 && <Kv l="Discount" r={`-${d2(parts.manual)}`} />}
+        {parts.points > 0 && <Kv l={`Points used (${o.pointsRedeemed})`} r={`-${d2(parts.points)}`} />}
+        {incl && <Kv l="Taxable value" r={d2(taxableValue(o))} />}
+      </>}
+      {taxes.map((t) => o.igst ? <Kv key={t.rate} l={`IGST @ ${t.rate}%`} r={d2(t.tax)} /> : gst ? (
         <div key={t.rate}>
           <Kv l={`CGST @ ${t.rate / 2}%`} r={d2(r2(t.tax / 2))} />
           <Kv l={`SGST @ ${t.rate / 2}%`} r={d2(r2(t.tax - r2(t.tax / 2)))} />
         </div>
       ) : <Kv key={t.rate} l={`Tax @ ${t.rate}%`} r={d2(t.tax)} />)}
-      {b.billing.taxEnabled && b.billing.taxMode === 'inclusive' && o.tax > 0 && <p className="text-[10px]">(Prices include tax)</p>}
       {b.billing.roundOff && <Kv l="Round off" r={d2(o.roundOff)} />}
       <Hr strong />
       <div className={clsx('flex justify-between font-bold', narrow ? 'text-[13px]' : 'text-[15px]')}><span>TOTAL</span><span>{b.currencySymbol}{d2(o.total)}</span></div>
       <p className="text-center text-[10px]">{amountInWords(o.total)}</p>
+      {incl && !pre && <p className="text-center text-[10px]">(Prices include GST)</p>}
+      {saved > 0 && <p className="mt-1 border border-dashed border-black py-0.5 text-center font-bold">You saved {b.currencySymbol}{d2(saved)} on MRP</p>}
+      {(!!o.pointsEarned || !!o.pointsRedeemed || o.pointsBalance != null) && o.customerId && (
+        <p className="mt-1 text-center">{[o.pointsRedeemed ? `Points used ${o.pointsRedeemed}` : '', o.pointsEarned ? `Earned ${o.pointsEarned}` : '', o.pointsBalance != null ? `Points balance: ${o.pointsBalance}` : ''].filter(Boolean).join(' · ')}</p>
+      )}
       {o.balance > 0 && (
         <>
           <Hr />

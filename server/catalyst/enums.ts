@@ -57,7 +57,7 @@ export const KotStatus = { new: 1, preparing: 2, ready: 3, completed: 4, cancell
 export type KotStatus = keyof typeof KotStatus
 export const ExpenseKey = { purchase: 1, salary: 2, rent: 3, electricity: 4, transport: 5, maintenance: 6, other: 7 } as const
 export type ExpenseKey = keyof typeof ExpenseKey
-export const ExpenseRef = { salary: 1, advance: 2, purchase: 3 } as const
+export const ExpenseRef = { salary: 1, advance: 2, purchase: 3, supplier_payment: 4 } as const
 export type ExpenseRef = keyof typeof ExpenseRef
 export const AttendanceStatus = { present: 1, half: 2, absent: 3, leave: 4 } as const
 export type AttendanceStatus = keyof typeof AttendanceStatus
@@ -81,7 +81,7 @@ export const TicketStatus = { open: 1, in_progress: 2, waiting: 3, resolved: 4, 
 export type TicketStatus = keyof typeof TicketStatus
 export const TicketSide = { customer: 1, admin: 2 } as const
 export type TicketSide = keyof typeof TicketSide
-export const AuditEntity = { order: 1, payment: 2, product: 3, category: 4, customer: 5, inventory: 6, expense: 7, user: 8, role: 9, branch: 10, settings: 11, whatsapp: 12, return: 13, staff: 14, table: 15 } as const
+export const AuditEntity = { order: 1, payment: 2, product: 3, category: 4, customer: 5, inventory: 6, expense: 7, user: 8, role: 9, branch: 10, settings: 11, whatsapp: 12, return: 13, staff: 14, table: 15, supplier: 16, purchase: 17 } as const
 export type AuditEntity = keyof typeof AuditEntity
 export const AuditAction = { create: 1, update: 2, delete: 3, cancel: 4, void: 5, login: 6, printer: 7, enable: 8, disconnect: 9, import: 10, export: 11 } as const
 export type AuditAction = keyof typeof AuditAction
@@ -103,6 +103,8 @@ export const LoginKind = { username: 1, phone: 2, email: 3 } as const
 export type LoginKind = keyof typeof LoginKind
 export const ShopDbStatus = { creating: 1, ready: 2, failed: 3, deleting: 4 } as const
 export type ShopDbStatus = keyof typeof ShopDbStatus
+export const PointsKind = { earn: 1, redeem: 2, return: 3, cancel: 4, expire: 5, adjust: 6 } as const
+export type PointsKind = keyof typeof PointsKind
 
 type EnumMap = Record<string, number>
 /** Name → number for the database. Throws on an unknown name so bad input never reaches a table. */

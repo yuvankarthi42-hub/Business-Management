@@ -35,7 +35,7 @@ export default function AdminCustomers() {
       <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Customers</h1>
-          <p className="text-sm text-slate-500">Every business using BillPoodum — accounts, validity and branch limits.</p>
+          <p className="text-sm text-slate-500">Every business using Kadai Kalanjiyam — accounts, validity and branch limits.</p>
         </div>
         {can('customers.create') && <Button icon={Plus} onClick={() => setCreating(true)}>New customer</Button>}
       </div>
@@ -138,19 +138,19 @@ function CreateCustomerModal({ pricePerBranch, onClose, onCreated }: { pricePerB
         if (ok && res) onCreated({ ...(res as { id: string; username: string }), password: f.password, businessName: f.businessName.trim(), phone: f.phone })
       }}>
         <section className="grid gap-4 sm:grid-cols-2">
-          <Field label="Business name"><Input autoFocus required value={f.businessName} onChange={(e) => set({ businessName: e.target.value, ...(touchedUser ? {} : { username: suggest(e.target.value) }) })} placeholder="e.g. Sri Murugan Stores" /></Field>
-          <Field label="Owner name"><Input required value={f.ownerName} onChange={(e) => set({ ownerName: e.target.value })} placeholder="e.g. Murugan" /></Field>
-          <Field label="Mobile number (login ID)" hint="The owner signs in with this number"><PhoneInput required value={f.phone} onChange={(v) => set({ phone: v })} /></Field>
+          <Field required label="Business name"><Input autoFocus required value={f.businessName} onChange={(e) => set({ businessName: e.target.value, ...(touchedUser ? {} : { username: suggest(e.target.value) }) })} placeholder="e.g. Sri Murugan Stores" /></Field>
+          <Field required label="Owner name"><Input required value={f.ownerName} onChange={(e) => set({ ownerName: e.target.value })} placeholder="e.g. Murugan" /></Field>
+          <Field required label="Mobile number (login ID)" hint="The owner signs in with this number"><PhoneInput required value={f.phone} onChange={(v) => set({ phone: v })} /></Field>
           <Field label="Email (optional)"><Input type="email" value={f.email} onChange={(e) => set({ email: e.target.value })} placeholder="owner@shop.com" /></Field>
         </section>
 
         <section className="rounded-xl border border-slate-200 p-4">
           <p className="mb-3 text-sm font-semibold">Login</p>
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Username" hint="4–30 letters or numbers, no spaces">
+            <Field required label="Username" hint="4–30 letters or numbers, no spaces">
               <Input required value={f.username} onChange={(e) => { setTouchedUser(true); set({ username: e.target.value.toLowerCase().replace(/\s/g, '') }) }} className="font-mono" autoCapitalize="none" spellCheck={false} />
             </Field>
-            <Field label="Password" hint="At least 6 characters">
+            <Field required label="Password" hint="At least 6 characters">
               <div className="flex gap-1.5">
                 <Input required minLength={6} value={f.password} onChange={(e) => set({ password: e.target.value })} className="font-mono" autoComplete="new-password" />
                 <Button type="button" variant="secondary" icon={Wand2} onClick={() => set({ password: randomPassword() })} aria-label="New password" title="Generate a new password" />

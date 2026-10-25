@@ -1,4 +1,4 @@
-# BillPoodum — Zoho Catalyst + Turso implementation plan
+# Kadai Kalanjiyam — Zoho Catalyst + Turso implementation plan
 
 > **Built — see [TURSO.md](TURSO.md) for how it works now.** Main difference from this plan: instead of one database
 > for all shops, there is **one platform database + one database per shop** (a shop's billing never waits for another
@@ -37,7 +37,7 @@ screen, the approved table design, the app's read cache rules, and the demo app.
 ```mermaid
 flowchart LR
   subgraph Device["Counter PC / tablet / phone"]
-    UI["BillPoodum PWA<br/>React screens"]
+    UI["Kadai Kalanjiyam PWA<br/>React screens"]
     RC["Read cache (memory)<br/>no pending writes, ever"]
     UI <--> RC
   end
@@ -449,7 +449,7 @@ or after go-live:
 
 ```mermaid
 flowchart TD
-  SRC{"Source"} -- "BillPoodum export (Excel/ZIP per shop)" --> X1["Read sheets"]
+  SRC{"Source"} -- "Kadai Kalanjiyam export (Excel/ZIP per shop)" --> X1["Read sheets"]
   SRC -- "MySQL dump (if one appears)" --> X2["mysqldump --tab → CSV"]
   X1 --> MAP["Transform: ₹ → paise, qty → thousandths,<br/>names → enum codes, old ids → new ids map"]
   X2 --> MAP

@@ -2,11 +2,13 @@
 // Same rules and return shapes as the app's mock API.
 import { r2 } from '@/core/pricing'
 import type { PaymentMethod, ReturnReason, SaleReturn } from '@/core/types'
+import { pointsForReturn } from '@/core/loyalty'
 import type { Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
 import { define, userRead, userWrite } from '../core/registry'
 import { DuplicateError, type Row } from '../db/types'
 import { clientUuid, loadOrder, selectIn } from '../domain/orders'
+import { movePoints } from '../domain/points'
 import { moveStock, stockProduct } from '../domain/stock'
 import { audit, code, E, fromMilli, fromMinor, nameOf, nameOrNull, nextNumber, str, strOrNull, toMilli, toMinor } from '../domain/util'
 
@@ -163,6 +165,12 @@ define('returns', {
         const p = prows.find((x) => x.ROWID === l.it.productId)
         if (p) await moveStock(c, stockProduct(p), branchId, l.qty, 'return', { refType: 'return', refId: ret.ROWID, note: `Returned — ${str(ret.number)} (${o.invoiceNumber})` })
       }
+    }
+    // Loyalty: take back the points this part of the bill earned (in proportion, never more than were earned).
+    if (o.customerId && o.pointsEarned) {
+      const target = pointsForReturn(o.pointsEarned, o.total, r2(returnedBefore + total))
+      const already = -(await c.db.select('customer_points', { where: { business_id: c.businessId, order_id: o.id, kind: E.PointsKind.return } })).reduce((a, r) => a + Number(r.points), 0)
+      if (target > already) await movePoints(c, o.customerId, 'return', -(target - already), { orderId: o.id, returnId: ret.ROWID, note: `Return ${str(ret.number)}`, cap: true })
     }
     await audit(c, 'order', o.id, 'return', `${str(ret.number)} · ${c.business.currencySymbol}${total} · ${lines.length} item(s)`, str(row.branch_id))
     return (await withLines(c, [ret]))[0]

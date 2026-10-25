@@ -14,12 +14,28 @@ import { LocalProvisioner, localDatabases } from '../src/db/local'
 import { MemoryDb } from '../src/db/memory'
 import { PLATFORM_TABLES, type TableName } from '../src/db/schema.gen'
 import type { Db, Where } from '../src/db/types'
+import type { PushResult, PushSender, PushTarget } from '../src/core/webpush'
+import { Hub } from '../src/events/hub'
+import { LocalSink } from '../src/events/publish'
+
+/** Records browser pushes instead of sending them. */
+export class FakePush implements PushSender {
+  readonly publicKey = 'BFakeTestPublicKey'
+  sent: { target: PushTarget; payload: Record<string, unknown> }[] = []
+  async send(target: PushTarget, payload: string): Promise<PushResult> { this.sent.push({ target, payload: JSON.parse(payload) }); return { ok: true, gone: false, status: 201 } }
+}
 
 export const TEST_DB = process.env.TEST_DB === 'memory' ? 'memory' : process.env.TEST_DB === 'hrana' ? 'hrana' : 'sqlite'
 /** One database per shop (sqlite: in-process; hrana: over HTTP with the production Turso driver). */
 export const PER_SHOP = TEST_DB !== 'memory'
 
-export async function testEnv(): Promise<Env & { prov: LocalProvisioner | null; stop: () => void }> {
+export async function testEnv(): Promise<Env & { prov: LocalProvisioner | null; stop: () => void; hub?: Hub }> {
+  const env = await baseEnv()
+  const hub = new Hub()
+  return { ...env, shared: new MemoryKv(), push: new FakePush(), events: new LocalSink(hub), hub, stop: () => { hub.stop(); env.stop() } }
+}
+
+async function baseEnv(): Promise<Env & { prov: LocalProvisioner | null; stop: () => void }> {
   const kv = new MemoryKv()
   const files = new LocalFiles('/tmp/bp-test-uploads', '/uploads')
   if (TEST_DB === 'memory') return { dbs: new SingleDatabases(new MemoryDb()), kv, files, epochs: new KvEpochs(kv), prov: null, stop: () => {} }
@@ -45,7 +61,8 @@ function router(env: Env, shopId: () => string | null): Db {
     return env.dbs.shop(id)
   }
   return {
-    transaction: async () => { throw new Error('not in tests') },
+    // Shop tables: a real transaction on the test shop's database (e.g. points expiry).
+    transaction: async (fn) => { const id = shopId(); if (!id) throw new Error('No test shop yet'); return (await env.dbs.shop(id)).transaction(fn) },
     aggregate: async (t, o) => (await pick(t, o.where)).aggregate(t, o),
     select: async (t, o) => (await pick(t, o?.where)).select(t, o),
     first: async (t, w, o) => (await pick(t, w)).first(t, w, o),
@@ -70,10 +87,11 @@ export async function startServer() {
   let branch: string | null = null
   let shop: string | null = null
   let device: string | null = null
+  let requestId: string | null = null
   async function call<T = unknown>(name: string, ...args: unknown[]): Promise<T> {
     const res = await fetch(`http://127.0.0.1:${port}/rpc/${name}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}), ...(branch ? { 'x-branch': branch } : {}), ...(device ? { 'x-device': device } : {}) },
+      headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}), ...(branch ? { 'x-branch': branch } : {}), ...(device ? { 'x-device': device } : {}), ...(requestId ? { 'x-request-id': requestId } : {}) },
       body: JSON.stringify({ args }),
     })
     const body = await res.json() as { data?: T; error?: { message: string; code: string } }
@@ -87,7 +105,9 @@ export async function startServer() {
   }
   return {
     db: router(env, () => shop), env, call, bump, close: () => { server.close(); env.stop() }, base: `http://127.0.0.1:${port}`,
-    setToken: (t: string | null) => { token = t }, setBranch: (b: string | null) => { branch = b }, setDevice: (d: string | null) => { device = d },
+    setToken: (t: string | null) => { token = t },
+    /** Send this request id (a retry of the same request uses the same one). */
+    setRequestId: (id: string | null) => { requestId = id }, setBranch: (b: string | null) => { branch = b }, setDevice: (d: string | null) => { device = d },
     /** Which shop `db` reads for shop tables. */
     useShop: (id: string | null) => { shop = id },
   }

@@ -1,4 +1,4 @@
-// Public landing page (/ when signed out, and /welcome). Positions BillPoodum as complete business management —
+// Public landing page (/ when signed out, and /welcome). Positions Kadai Kalanjiyam as complete business management —
 // billing is one part. Its own look (deep charcoal + mint), separate from the app screens. Everything shown here
 // is something the product really does.
 import clsx from 'clsx'
@@ -12,10 +12,12 @@ import { Link } from 'react-router-dom'
 import { useApp } from '@/app/AppContext'
 import { LanguageToggle } from '@/i18n/LanguagePicker'
 import './landing.css'
+import { BRAND, BRAND_LOGO } from '@/core/brand'
+import { SupportContacts } from '@/components/SupportLinks'
 
 /** "Get started" opens WhatsApp when this is set (digits with country code, e.g. 919876543210); else sign-in. */
-const CONTACT_WHATSAPP = (import.meta.env.VITE_CONTACT_WHATSAPP ?? '').replace(/\D/g, '')
-const waLink = CONTACT_WHATSAPP ? `https://wa.me/${CONTACT_WHATSAPP}?text=${encodeURIComponent('Hi, I would like to know more about BillPoodum for my business.')}` : null
+const CONTACT_WHATSAPP = (import.meta.env.VITE_CONTACT_WHATSAPP || BRAND.supportWhatsApp).replace(/\D/g, '')
+const waLink = CONTACT_WHATSAPP ? `https://wa.me/${CONTACT_WHATSAPP}?text=${encodeURIComponent('Hi, I would like to know more about Kadai Kalanjiyam for my business.')}` : null
 
 const reduced = () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 /** Scroll to a section (no #anchors: the app may use # for its own links). */
@@ -54,10 +56,8 @@ function GetStarted({ className, label = 'Get started' }: { className?: string; 
 function Mark({ className }: { className?: string }) {
   return (
     <div className={clsx('flex items-center gap-2.5', className)}>
-      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-[#94f8af] to-[#61ce70] text-[#07130b] shadow-[0_8px_24px_-8px_rgba(97,206,112,.9)]">
-        <LayoutDashboard className="h-[18px] w-[18px]" />
-      </div>
-      <span className="lp-display text-[17px] text-white" data-no-i18n>BillPoodum</span>
+      <img src={BRAND_LOGO} alt="" className="h-9 w-9 rounded-xl shadow-[0_8px_24px_-8px_rgba(31,85,235,.9)]" draggable={false} />
+      <span className="lp-display text-[17px] text-white" data-no-i18n>Kadai Kalanjiyam</span>
     </div>
   )
 }
@@ -303,9 +303,9 @@ function FeatureExplorer() {
 
 interface Shape { key: string; label: string; sub: string; icon: LucideIcon; nav: [LucideIcon, string][]; terms: [string, string][] }
 const SHAPES: Shape[] = [
-  { key: 'retail', label: 'Retail', sub: 'Supermarket · Grocery · Hardware · Electronics', icon: ShoppingCart,
+  { key: 'retail', label: 'Retail', sub: 'Supermarket · Silk & textiles · Hardware · Electronics', icon: ShoppingCart,
     nav: [[ReceiptText, 'Billing'], [PackageOpen, 'Customer Orders'], [Tag, 'Products'], [Boxes, 'Inventory'], [Users, 'Customers'], [BarChart3, 'Reports']],
-    terms: [['Items called', 'Products'], ['Buyers called', 'Customers'], ['Extras', 'Barcode, batches & expiry, wholesale prices']] },
+    terms: [['Items called', 'Products'], ['Buyers called', 'Customers'], ['Extras', 'QR price stickers, batches & expiry, wholesale prices']] },
   { key: 'food', label: 'Food', sub: 'Tea shop · Bakery · Fast food · Juice', icon: ChefHat,
     nav: [[ReceiptText, 'Billing'], [ChefHat, 'Kitchen (KOT)'], [Tag, 'Menu Items'], [QrCode, 'QR Orders'], [Users, 'Customers'], [BarChart3, 'Reports']],
     terms: [['Items called', 'Menu Items'], ['Buyers called', 'Customers'], ['Extras', 'Kitchen tickets, today’s specials, QR menu']] },
@@ -366,7 +366,7 @@ function ShapeShifter() {
 // ======================================================================= a day in the business
 
 const DAY: { time: string; title: string; body: string; icon: LucideIcon }[] = [
-  { time: '06:30', title: 'Open the shop.', body: 'Open BillPoodum on the counter PC, a tablet or your phone. Pick your branch — yesterday’s numbers and today’s attendance are ready.', icon: Store },
+  { time: '06:30', title: 'Open the shop.', body: 'Open Kadai Kalanjiyam on the counter PC, a tablet or your phone. Pick your branch — yesterday’s numbers and today’s attendance are ready.', icon: Store },
   { time: '09:15', title: 'The morning rush.', body: 'Every counter bills at the same time. Each bill gets its own number, stock goes down item by item, and UPI, cash and card are counted correctly.', icon: ReceiptText },
   { time: '13:00', title: 'Kitchen and tables in sync.', body: 'Orders reach the kitchen screen as tickets. Guests order from the QR code on their table; waiters take orders on their phones.', icon: ChefHat },
   { time: '16:00', title: 'Restock and pay.', body: 'Low-stock items show up before they run out. Record purchases and expenses, collect customer dues, give a staff advance.', icon: Boxes },
@@ -472,7 +472,15 @@ function Rush() {
 
 // ======================================================================= page
 
-const KINDS = ['Tea shops', 'Supermarkets', 'Bakeries', 'Restaurants', 'Salons', 'Hardware stores', 'Juice shops', 'Cafes', 'Sweet stalls', 'Laundries', 'Grocery stores', 'Cloud kitchens', 'Stationery', 'Spas', 'Dhabas', 'Electronics']
+const KINDS = ['Tea shops', 'Supermarkets', 'Silk & saree shops', 'Bakeries', 'Restaurants', 'Textiles & garments', 'Salons', 'Hardware stores', 'Juice shops', 'Cafes', 'Sweet stalls', 'Laundries', 'Grocery stores', 'Cloud kitchens', 'Stationery', 'Spas', 'Dhabas', 'Electronics']
+
+const UNLIMITED: [LucideIcon, string, string][] = [
+  [ReceiptText, 'Unlimited bills', 'Every bill, every day, on every counter — no monthly bill count.'],
+  [Users, 'Unlimited users', 'A login for every owner, manager, cashier, waiter and kitchen staff.'],
+  [UserCheck, 'Unlimited customers', 'Save every customer with their history, credit and dues.'],
+  [Tag, 'Unlimited products', 'Your full catalogue or menu — with sizes, add-ons and prices.'],
+  [MonitorSmartphone, 'Unlimited devices', 'Counter PCs, tablets and phones — sign in on as many as you need.'],
+]
 
 const TRUST: [LucideIcon, string, string][] = [
   [Lock, 'Your data, kept private', 'Every business gets its own private database. Only you and the staff you add can sign in.'],
@@ -484,7 +492,8 @@ const TRUST: [LucideIcon, string, string][] = [
 ]
 
 const FAQ: [string, string][] = [
-  ['Is it only for billing?', 'No. Billing is one part. BillPoodum also runs your stock, kitchen and tables, staff and salary, customer credit, expenses and reports — for every branch.'],
+  ['Is it only for billing?', 'No. Billing is one part. Kadai Kalanjiyam also runs your stock, kitchen and tables, staff and salary, customer credit, expenses and reports — for every branch.'],
+  ['Is there a limit on bills, users or customers?', 'No. Bills, users, customers, products and devices are all unlimited. Only the number of branches is set for your account, and you can add more when you open a new one.'],
   ['Which businesses can use it?', 'Retail shops and supermarkets, tea shops and bakeries, restaurants and hotels, salons and other services. The screens and words change to fit the type of business you choose.'],
   ['Do I need the internet?', 'Yes. Everything is saved online the moment you press Save, so all your counters and your own phone always see the same numbers — and nothing is lost if a device breaks.'],
   ['Is my business data kept separate?', 'Yes. Every business gets its own private database. Only you and the staff you add can sign in, each with the permissions you choose.'],
@@ -502,7 +511,7 @@ export default function Landing() {
     on(); window.addEventListener('scroll', on, { passive: true })
     return () => window.removeEventListener('scroll', on)
   }, [])
-  useEffect(() => { document.title = 'BillPoodum — Complete business management for every shop' }, [])
+  useEffect(() => { document.title = 'Kadai Kalanjiyam — Complete business management for every shop' }, [])
   const onMove = (e: React.PointerEvent) => {
     const el = hero.current
     if (!el || e.pointerType !== 'mouse') return
@@ -550,7 +559,10 @@ export default function Landing() {
           <GetStarted />
           <button type="button" onClick={() => jump('features')} className="lp-btn lp-btn-line px-6 py-3 text-[15px]">Explore features</button>
         </div>
-        <div className="lp-rise mt-16 sm:mt-20" style={D(320)}><HeroDashboard /></div>
+        <div className="lp-rise mt-8 flex flex-wrap justify-center gap-x-6 gap-y-2 text-sm text-white/60" style={D(300)}>
+          {['Unlimited bills', 'Unlimited users', 'Unlimited customers'].map((x) => <span key={x} className="flex items-center gap-2"><Check className="h-4 w-4 text-[#7ffaab]" />{x}</span>)}
+        </div>
+        <div className="lp-rise mt-14 sm:mt-16" style={D(340)}><HeroDashboard /></div>
       </section>
 
       {/* ---------------- business types marquee ---------------- */}
@@ -573,6 +585,29 @@ export default function Landing() {
             <p data-reveal style={D(160)} className="lp-muted mx-auto mt-5 max-w-2xl text-lg leading-relaxed">Not just the bill. Seven parts that work together — what you sell, what you stock, who works for you and where the money goes.</p>
           </div>
           <div data-reveal style={D(200)}><FeatureExplorer /></div>
+        </div>
+      </section>
+
+      {/* ---------------- no limits ---------------- */}
+      <section className="lp-grain relative overflow-hidden border-t border-white/[.06] px-5 py-24 sm:px-8 sm:py-28">
+        <div className="lp-aurora opacity-50" aria-hidden><span /><span /><span /></div>
+        <div className="mx-auto max-w-7xl">
+          <div className="mx-auto mb-14 max-w-3xl text-center">
+            <div data-reveal className="text-sm font-semibold uppercase tracking-[.2em] text-[#7ffaab]">No limits</div>
+            <h2 data-reveal style={D(80)} className="lp-display mt-4 text-4xl leading-[1.1] text-white sm:text-5xl">Grow as much as you want. <span className="lp-mint-text">We don’t count.</span></h2>
+            <p data-reveal style={D(160)} className="lp-muted mx-auto mt-5 max-w-2xl text-lg leading-relaxed">No caps on the work you do every day. Bill all day, add every staff member, save every customer — the app never asks you to stop or upgrade.</p>
+          </div>
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+            {UNLIMITED.map(([I, t, b], k) => (
+              <div key={t} data-reveal style={D(k * 70)} className={clsx('lp-card lp-card-hover relative overflow-hidden p-6 text-center', k === UNLIMITED.length - 1 && 'col-span-2 lg:col-span-1')}>
+                <div className="lp-display lp-mint-text text-6xl leading-none" aria-hidden>∞</div>
+                <span className="lp-icon mx-auto mt-5 h-10 w-10"><I className="h-[18px] w-[18px]" /></span>
+                <h3 className="lp-display mt-4 text-lg text-white">{t}</h3>
+                <p className="lp-muted mt-2 text-[14px] leading-relaxed">{b}</p>
+              </div>
+            ))}
+          </div>
+          <p data-reveal className="mt-8 text-center text-sm text-white/40">Branches are set up for your account — add more whenever you open a new one.</p>
         </div>
       </section>
 
@@ -653,9 +688,12 @@ export default function Landing() {
             <button type="button" onClick={() => jump('features')} className="hover:text-white">Features</button>
             <button type="button" onClick={() => jump('faq')} className="hover:text-white">FAQ</button>
             <Link to="/login" className="hover:text-white">Sign in</Link>
+            <Link to="/terms" className="hover:text-white">Terms</Link>
+            <Link to="/privacy" className="hover:text-white">Privacy</Link>
           </div>
-          <span>© {new Date().getFullYear()} BillPoodum</span>
+          <span>© {new Date().getFullYear()} {BRAND.name}</span>
         </div>
+        <div className="mx-auto mt-6 flex max-w-7xl justify-center sm:justify-start"><SupportContacts dark compact /></div>
       </footer>
 
       {waLink && (

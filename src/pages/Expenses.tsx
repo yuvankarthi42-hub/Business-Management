@@ -1,7 +1,7 @@
 import { Plus, Trash2, Wallet } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useApp, useData } from '@/app/AppContext'
-import { Badge, Button, Card, CardHeader, EmptyState, Field, Input, Modal, PageHeader, Segmented, Select, Table, Td, Th, useAction, useReadOnly } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, EmptyState, Field, FieldLabel, Input, Modal, PageHeader, Segmented, Select, Table, Td, Th, useAction, useReadOnly } from '@/components/ui'
 import { EXPENSE_LABEL, PAYMENT_LABEL } from '@/core/config'
 import type { Expense, ExpenseCategory, PaymentMethod } from '@/core/types'
 import { api } from '@/data'
@@ -89,8 +89,9 @@ function ExpenseForm({ onClose }: { onClose: () => void }) {
         if (await run(() => api.expenses.save({ amount: Number(e.amount), category: e.category, method: e.method, notes: e.notes, date: d.toISOString(), ...(e.branchId ? { branchId: e.branchId } : {}) }), `${t('expense')} added`)) onClose()
       }}>Save</Button></>}>
       <div className="space-y-4">
-        <Field label="Amount (₹)"><Input autoFocus type="number" inputMode="decimal" value={e.amount} onChange={(x) => setE({ ...e, amount: x.target.value })} className="h-12 text-lg font-semibold" /></Field>
-        <div className="grid grid-cols-4 gap-2">
+        <Field required label="Amount (₹)"><Input autoFocus type="number" inputMode="decimal" value={e.amount} onChange={(x) => setE({ ...e, amount: x.target.value })} className="h-12 text-lg font-semibold" /></Field>
+        <FieldLabel required>Category</FieldLabel>
+        <div className="-mt-3 grid grid-cols-4 gap-2">
           {(Object.keys(EXPENSE_LABEL) as ExpenseCategory[]).map((c) => (
             <button key={c} type="button" onClick={() => setE({ ...e, category: c })} className={`rounded-lg border-2 px-1 py-2 text-center text-[11px] font-medium ${e.category === c ? 'border-brand-600 bg-brand-50 text-brand-700' : 'border-slate-200 text-slate-600'}`}>
               <span className="block text-lg">{ICON[c]}</span>{EXPENSE_LABEL[c]}
@@ -98,8 +99,8 @@ function ExpenseForm({ onClose }: { onClose: () => void }) {
           ))}
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Date"><Input type="date" value={e.date} max={toDateInput(new Date())} onChange={(x) => setE({ ...e, date: x.target.value })} /></Field>
-          <Field label="Paid via"><Select value={e.method} onChange={(x) => setE({ ...e, method: x.target.value as PaymentMethod })}>{me!.business.billing.paymentMethods.filter((m) => m !== 'credit' && m !== 'bank').map((m) => <option key={m} value={m}>{PAYMENT_LABEL[m]}</option>)}<option value="bank">Bank Transfer</option></Select></Field>
+          <Field required label="Date"><Input type="date" value={e.date} max={toDateInput(new Date())} onChange={(x) => setE({ ...e, date: x.target.value })} /></Field>
+          <Field required label="Paid via"><Select value={e.method} onChange={(x) => setE({ ...e, method: x.target.value as PaymentMethod })}>{me!.business.billing.paymentMethods.filter((m) => m !== 'credit' && m !== 'bank').map((m) => <option key={m} value={m}>{PAYMENT_LABEL[m]}</option>)}<option value="bank">Bank Transfer</option></Select></Field>
         </div>
         <Field label="Notes"><Input value={e.notes} onChange={(x) => setE({ ...e, notes: x.target.value })} placeholder="e.g. Vegetables from market" /></Field>
         {me?.isAll && (

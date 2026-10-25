@@ -2,18 +2,20 @@
 import { randomBytes } from 'node:crypto'
 import { templateFor } from '@/core/config'
 import type { ImportItem } from '@/core/productImport'
+import { cleanHsn, hsnError } from '@/core/gst'
+import { planDesign, planDiscount, type DesignInput, type DiscountInput } from '@/core/textile'
 import type { Category, Product, Special } from '@/core/types'
 import { nextInStoreBarcode } from '@/lib/barcode'
 import type { Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
 import { define, userRead, userWrite } from '../core/registry'
 import { DuplicateError, type Row } from '../db/types'
-import { categoryFrom, loadCategories, loadProducts, mediaMap, productColumns, syncOptions, wholesaleList } from '../domain/catalog'
+import { categoryFrom, loadCategories, loadProducts, mediaMap, productColumns, syncOptions, wholesaleList, withCostFor } from '../domain/catalog'
 import { moveStock, stockProduct, type BatchInput } from '../domain/stock'
 import { audit, bizDay, E, fromMinorOrNull, isId, keyPart, own, str, toMilli, toMinor } from '../domain/util'
 
 // ---------- photos ----------
-const LIMITS = { product: { main: 51_200, thumb: 20_480 }, category: { main: 51_200, thumb: 20_480 }, ticket: { main: 204_800, thumb: 0 }, poster: { main: 204_800, thumb: 0 } } as const
+const LIMITS = { product: { main: 51_200, thumb: 20_480 }, category: { main: 51_200, thumb: 20_480 }, ticket: { main: 204_800, thumb: 0 }, poster: { main: 204_800, thumb: 0 }, logo: { main: 81_920, thumb: 0 } } as const
 type Purpose = keyof typeof LIMITS
 
 function decodeImage(dataUrl: string, max: number) {
@@ -87,7 +89,9 @@ define('categories', {
     const name = String(input.name ?? '').trim()
     if (!name) throw new ApiError('Enter a name')
     const img = input.imageUrl !== undefined ? await mediaIdFor(c, input.imageUrl, 'category') : undefined
-    const data = { name: name.slice(0, 80), uniq_key: `${c.businessId}:${keyPart(name)}`, ...(input.emoji !== undefined ? { emoji: (input.emoji || '').slice(0, 8) || null } : {}), ...(img !== undefined ? { image_media_id: img } : {}) }
+    const hsn = input.hsn !== undefined ? cleanHsn(input.hsn) : undefined
+    if (hsn && hsnError(hsn)) throw new ApiError(hsnError(hsn))
+    const data = { name: name.slice(0, 80), uniq_key: `${c.businessId}:${keyPart(name)}`, ...(input.emoji !== undefined ? { emoji: (input.emoji || '').slice(0, 8) || null } : {}), ...(img !== undefined ? { image_media_id: img } : {}), ...(hsn !== undefined ? { hsn_code: hsn || null } : {}) }
     let row: Row
     try {
       if (input.id) { await own(c, 'categories', input.id, 'Category not found'); row = await c.db.update('categories', input.id, { ...data, is_active: true }) }
@@ -103,7 +107,7 @@ define('categories', {
 })
 
 define('products', {
-  list: userRead(async (c) => loadProducts(c)),
+  list: userRead(async (c) => withCostFor(c, await loadProducts(c))),
 
   save: userWrite(async (c, input: Partial<Product> & { name: string; openingBatch?: BatchInput }) => {
     if (!String(input.name ?? '').trim()) throw new ApiError('Name is required')
@@ -183,7 +187,7 @@ define('products', {
         if (opts.onExisting === 'skip') { skippedRows.push(it.row); continue }
         const patch: Partial<Product> = { name, price: it.price }
         const set = <K extends keyof Product>(k: K, v: Product[K] | undefined) => { if (v !== undefined) patch[k] = v }
-        set('categoryId', categoryId); set('mrp', it.mrp); set('wholesalePrice', it.wholesalePrice); set('costPrice', it.costPrice); set('sku', it.sku)
+        set('categoryId', categoryId); set('mrp', it.mrp); set('wholesalePrice', it.wholesalePrice); set('costPrice', it.costPrice); set('sku', it.sku); set('hsn', it.hsn)
         set('unit', it.unit); set('taxRateId', it.taxRateId); set('isVeg', it.isVeg); set('trackStock', it.trackStock); set('lowStockAt', it.lowStockAt)
         set('trackExpiry', it.trackExpiry); set('sendToKitchen', it.sendToKitchen); set('kind', it.kind); set('active', it.active)
         if (it.variants) patch.variants = it.variants.map((v) => ({ id: '', name: v.name, price: v.price }))
@@ -195,7 +199,7 @@ define('products', {
       }
       const service = it.kind === 'service'
       const p: Partial<Product> = {
-        name, categoryId: categoryId ?? null, kind: it.kind ?? (b.category === 'service' ? 'service' : 'goods'), mrp: it.mrp ?? null, sku: it.sku ?? '',
+        name, categoryId: categoryId ?? null, kind: it.kind ?? (b.category === 'service' ? 'service' : 'goods'), mrp: it.mrp ?? null, sku: it.sku ?? '', hsn: it.hsn ?? null,
         unit: it.unit || (service ? 'service' : tpl.units[0] ?? 'pc'), price: it.price, costPrice: it.costPrice ?? 0, taxRateId: it.taxRateId ?? null,
         trackStock: !service && (it.trackStock ?? b.category === 'retail'), trackExpiry: it.trackExpiry ?? false, lowStockAt: it.lowStockAt ?? (b.category === 'retail' ? 5 : 0),
         isVeg: it.isVeg ?? true, sendToKitchen: it.sendToKitchen ?? (b.category === 'food' || b.category === 'restaurant'), active: it.active ?? true,
@@ -229,6 +233,45 @@ define('products', {
     if (batches.length) await c.db.insertMany('stock_batches', batches)
     await audit(c, 'product', null, 'import', `${created} added, ${updated} updated, ${skippedRows.length} skipped from ${String(opts.fileName ?? '').slice(0, 80)}`)
     return { created, updated, skippedRows, newCategories: newCats, photosCompressed: 0, photosLinked: 0 }
+  }, { perm: 'products.manage' }),
+
+  /**
+   * Textile: one design in many colours / sizes → one item each (own code for its QR sticker, own stock).
+   * Returns the new items so the app can print their stickers straight away.
+   */
+  saveDesign: userWrite(async (c, input: DesignInput) => {
+    if (input?.categoryId) await own(c, 'categories', input.categoryId, 'Choose a category')
+    if (input?.taxRateId) await own(c, 'tax_rates', input.taxRateId, 'Choose a tax rate')
+    const existing = await loadProducts(c, { withStock: false, withExpiry: false })
+    let plan
+    try { plan = planDesign(input, existing) } catch (e) { throw new ApiError((e as Error).message) }
+    const img = input.imageUrl ? await mediaIdFor(c, input.imageUrl, 'product') : null
+    const codes = (await c.db.select('products', { where: { business_id: c.businessId } })).map((p) => str(p.barcode))
+    const branch = c.writeBranch({ fallback: true })
+    const ids: string[] = []
+    for (const p of plan) {
+      const bc = nextInStoreBarcode(codes)
+      codes.push(bc)
+      const row = await c.db.insert('products', {
+        business_id: c.businessId, sort_order: 0, track_batches: false, ...productColumns(p), barcode: bc, barcode_key: `${c.businessId}:${bc}`, image_media_id: img,
+      })
+      if (p.stock > 0) await moveStock(c, stockProduct(row), branch, p.stock, 'opening', { note: 'Opening stock' })
+      ids.push(row.ROWID)
+    }
+    await audit(c, 'product', null, 'create', `Design ${input.design || input.name}: ${plan.length} item${plan.length === 1 ? '' : 's'}`.slice(0, 250))
+    return loadProducts(c, { ids })
+  }, { perm: 'products.manage' }),
+
+  /** New selling prices = MRP less a % for a category (or chosen items). 0% = back to MRP. */
+  setDiscount: userWrite(async (c, input: DiscountInput) => {
+    if (input?.categoryId) await own(c, 'categories', input.categoryId, 'Choose a category')
+    const products = await loadProducts(c, { withStock: false, withExpiry: false })
+    let plan
+    try { plan = planDiscount(input, products) } catch (e) { throw new ApiError((e as Error).message) }
+    if (plan.changes.length) await c.db.updateMany('products', plan.changes.map((x) => ({ ROWID: x.id, price_minor: toMinor(x.price) })))
+    const cat = input.productIds?.length ? `${input.productIds.length} items` : input.categoryId ? str((await c.db.get('categories', input.categoryId))?.name) : 'all items'
+    await audit(c, 'product', null, 'update', `Discount ${Number(input.pct)}% on ${cat}: ${plan.changes.length} prices changed`.slice(0, 250))
+    return { updated: plan.changes.length, ids: plan.ids, noMrp: plan.noMrp, withSizes: plan.withSizes }
   }, { perm: 'products.manage' }),
 
   /** Give every listed product without a barcode its own in-store EAN-13 (prefix 20), for printing labels. */

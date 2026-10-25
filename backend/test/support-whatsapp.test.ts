@@ -216,7 +216,7 @@ test('renewal reminders: platform WhatsApp, manual and daily sends, pause', asyn
     rn = await s.call<Renewals>('admin.renewals')
     assert.equal(rn.log.length, 1)
     assert.deepEqual([rn.log[0].trigger, rn.log[0].adminName, rn.log[0].daysLeft, rn.log[0].status], ['manual', 'Admin', 3, 'sent'])
-    assert.match(rn.log[0].message, /^Hi Lakshmi, your plan for Test Mart ends on .* — 3 days left\. Call \+91 90000 12345 to renew\.$/)
+    assert.match(rn.log[0].message, /^Hi Lakshmi, your plan for Test Mart ends on .* — 3 days left\. Call \+91 70139 05970 to renew\.$/)
     assert.equal(rn.expiring.find((r) => r.id === s.businessId)!.dueToday, true)
 
     // Pause one customer: the daily job skips it.

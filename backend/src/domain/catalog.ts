@@ -4,7 +4,9 @@ import type { AddOn, Category, Product, Variant } from '@/core/types'
 import type { Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
 import type { Row, Where } from '../db/types'
-import { E, fromMilli, fromMinor, fromMinorOrNull, nameOf, str, strOrNull, toMilli, toMinor } from './util'
+import { cleanHsn, hsnError } from '@/core/gst'
+import { cleanDetails } from '@/core/stickers'
+import { E, fromMilli, fromMinor, fromMinorOrNull, json, nameOf, str, strOrNull, toMilli, toMinor } from './util'
 
 export async function mediaMap(c: Ctx, ids: (string | null | undefined)[]) {
   const want = [...new Set(ids.filter(Boolean) as string[])]
@@ -18,7 +20,7 @@ const imageOf = (c: Ctx, m: Row | undefined) => !m ? { imageUrl: null, thumbUrl:
   : { imageUrl: c.files.url(str(m.object_key)), thumbUrl: m.thumb_key ? c.files.url(str(m.thumb_key)) : null }
 
 export function categoryFrom(c: Ctx, r: Row, media: Map<string, Row>): Category {
-  return { id: r.ROWID, businessId: str(r.business_id), name: str(r.name), emoji: str(r.emoji), ...imageOf(c, media.get(str(r.image_media_id))), sort: Number(r.sort_order ?? 0) }
+  return { id: r.ROWID, businessId: str(r.business_id), name: str(r.name), emoji: str(r.emoji), ...imageOf(c, media.get(str(r.image_media_id))), sort: Number(r.sort_order ?? 0), hsn: strOrNull(r.hsn_code) }
 }
 
 export async function loadCategories(c: Ctx): Promise<Category[]> {
@@ -74,6 +76,8 @@ export async function loadProducts(c: Ctx, o: LoadProductsOptions = {}): Promise
       taxRateId: strOrNull(r.tax_rate_id), trackStock: !!r.track_stock, trackExpiry, nextExpiry,
       stockByBranch, stock: Math.round(branches.reduce((n, b) => n + (stockByBranch[b] ?? 0), 0) * 1000) / 1000,
       lowStockAt: fromMilli(r.low_stock_milli), isVeg: r.is_veg !== false, sendToKitchen: r.sends_to_kitchen !== false, active: r.is_active !== false,
+      ...(r.details_json ? { details: cleanDetails(json(r.details_json, null)) } : {}),
+      hsn: strOrNull(r.hsn_code),
       createdAt: r.CREATEDTIME, createdBy: '', updatedAt: r.MODIFIEDTIME, updatedBy: '',
     }
     return p
@@ -99,6 +103,12 @@ export function productColumns(p: Partial<Product>) {
   if (p.isVeg !== undefined) out.is_veg = !!p.isVeg
   if (p.sendToKitchen !== undefined) out.sends_to_kitchen = !!p.sendToKitchen
   if (p.active !== undefined) out.is_active = !!p.active
+  if (p.details !== undefined) { const d = cleanDetails(p.details); out.details_json = d ? JSON.stringify(d) : null }
+  if (p.hsn !== undefined) {
+    const h = cleanHsn(p.hsn)
+    if (hsnError(h)) throw new ApiError(hsnError(h))
+    out.hsn_code = h || null
+  }
   return out
 }
 
@@ -138,3 +148,10 @@ async function syncList(c: Ctx, table: 'product_variants' | 'product_addons', pr
   if (hide.length) await c.db.updateMany(table, hide.map((x) => ({ ROWID: x.ROWID, is_active: false })))
   return ids
 }
+
+/** Cost price is for people who manage products / stock or may see profit; everyone else gets 0. */
+export const canSeeCost = (c: Ctx) => c.can('products.manage') || c.can('inventory.manage') || c.can('reports.profit')
+export const withCostFor = <T extends { costPrice?: number }>(c: Ctx, list: T[]): T[] => (canSeeCost(c) ? list : list.map((p) => ({ ...p, costPrice: 0 })))
+/** What a customer's phone may see of a product (QR menu, TV board): no cost or wholesale prices. */
+export const forCustomers = <T extends { costPrice?: number; wholesalePrice?: number | null }>(p: T): T => ({ ...p, costPrice: 0, wholesalePrice: null })
+

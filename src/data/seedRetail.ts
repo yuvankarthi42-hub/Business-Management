@@ -2,7 +2,7 @@
 // Same common core as the restaurant demo — only the template, catalogue and units differ.
 import { makeItem } from '@/core/orderItem'
 import { computeTotals, r2 } from '@/core/pricing'
-import type { Business, Customer, Order, OrderItem, OrderType, PaymentMethod, Product } from '@/core/types'
+import type { Business, Customer, Order, OrderItem, OrderType, PaymentMethod, Product, ProductDetails } from '@/core/types'
 import { dateKey } from '@/core/specials'
 import type { DB } from './db'
 import { defaultRoles, newBusiness, rng } from './seed'
@@ -12,18 +12,24 @@ interface ItemDef {
   barcode?: boolean; low?: number; pop?: number; qty?: number[]
   // food shops
   variants?: [string, number][]; addOns?: [string, number][]; nonVeg?: boolean; kitchen?: boolean; noStock?: boolean
+  // textile shops
+  mrp?: number; details?: ProductDetails
 }
 interface ShopSpec {
   id: string; name: string; subType: string; category?: 'retail' | 'food'; orderTypes?: OrderType[]
   specials?: [string, number | null, string][] // product name, offer price, tag (today)
   emoji: string; address: string; phone: string; email: string; gstin: string
   invoicePrefix: string; defaultTax: 'tax_0' | 'tax_5' | 'tax_18'; footer: string; seed: number; ean: string
-  categories: [string, string, string][] // id, name, emoji
+  categories: [string, string, string, string?][] // id, name, emoji, HSN (optional)
   items: ItemDef[]
   users: { id: string; name: string; phone: string; role: 'Owner' | 'Manager' | 'Cashier' | 'Kitchen Staff' }[]
   customers: { name: string; notes?: string; credit?: boolean }[]
   perDay: [number, number]; linesPerBill: [number, number]; deliveryShare: number; creditShare: number
   expenses: { notes: string; category: 'purchase' | 'transport' | 'electricity' | 'other'; min: number; max: number; every: number }[]
+  /** Counter salespeople without an app login (textile): picked on bills, paid salary + commission. */
+  sellers?: { id: string; name: string; phone: string; salary: number; commissionPct: number }[]
+  /** In-store codes (20…) on every item, for QR price stickers. */
+  inStoreCodes?: boolean
 }
 
 /** EAN-13 with a valid check digit, e.g. 890 + 4-digit company + 5-digit item. */
@@ -159,7 +165,8 @@ function buildShop(d: DB, spec: ShopSpec) {
   const biz: Business = newBusiness({ id: spec.id, name: spec.name, category, subType: spec.subType, phone: spec.phone, createdAt: start.toISOString() })
   Object.assign(biz, { logoEmoji: spec.emoji, address: spec.address, email: spec.email, gstin: spec.gstin })
   biz.modules = { ...biz.modules, orders: true, inventory: true, customers: true, employees: true, ...(food ? { kitchen: true, mobileOrders: true, specials: true, qrOrdering: true, tables: false } : {}) }
-  if (spec.id === 'biz_freshmart') biz.billing.taxMode = 'inclusive' // shelf / MRP prices already include GST
+  if (spec.id === 'biz_freshmart' || spec.inStoreCodes) biz.billing.taxMode = 'inclusive' // shelf / MRP prices already include GST
+  if (spec.inStoreCodes) biz.modules.customerOrders = false
   if (spec.id === 'biz_murugan_hw') biz.modules.mobileOrders = true // salesmen take orders on the shop floor
   Object.assign(biz.billing, { invoicePrefix: spec.invoicePrefix, defaultTaxRateId: spec.defaultTax, receiptFooter: spec.footer, orderTypes: spec.orderTypes ?? ['counter', 'delivery'], paymentMethods: ['cash', 'upi', 'card', 'credit'] })
   d.businesses.push(biz)
@@ -173,15 +180,20 @@ function buildShop(d: DB, spec: ShopSpec) {
     d.users.push({ id: u.id, businessId: spec.id, branchId, name: u.name, phone: u.phone, email: '', password: 'demo123', roleId: roleId(u.role), active: true, ...at(start) })
   }
   const cashiers = spec.users.filter((u) => u.role !== 'Kitchen Staff').map((u) => u.id)
+  for (const x of spec.sellers ?? []) {
+    d.users.push({ id: x.id, businessId: spec.id, branchId, name: x.name, phone: x.phone, email: '', password: '', roleId: '', active: true, canLogin: false, pay: { type: 'monthly', amount: x.salary, commissionPct: x.commissionPct }, ...at(start) })
+  }
+  const sellers = (spec.sellers ?? []).map((x) => x.id)
 
-  spec.categories.forEach(([id, name, emoji], i) => d.categories.push({ id: `cat_${spec.id}_${id}`, businessId: spec.id, name, emoji, sort: i }))
+  spec.categories.forEach(([id, name, emoji, hsn], i) => d.categories.push({ id: `cat_${spec.id}_${id}`, businessId: spec.id, name, emoji, sort: i, ...(hsn ? { hsn } : {}) }))
 
   const products: Product[] = spec.items.map((it, i) => ({
     id: `prd_${spec.id.slice(4)}_${String(i + 1).padStart(3, '0')}`, businessId: spec.id, name: it.name, categoryId: `cat_${spec.id}_${it.cat}`,
     kind: 'goods', emoji: it.emoji, imageUrl: null, sku: `${spec.invoicePrefix.replace('-', '')}${String(i + 1).padStart(3, '0')}`,
-    barcode: it.barcode ? ean13(`${spec.ean}${String(10000 + i * 37).slice(-5)}`) : '',
+    barcode: spec.inStoreCodes ? ean13(`20${String(i + 1).padStart(10, '0')}`) : it.barcode ? ean13(`${spec.ean}${String(10000 + i * 37).slice(-5)}`) : '',
     unit: it.unit, price: it.variants?.[0]?.[1] ?? it.price, costPrice: it.cost,
-    mrp: spec.id === 'biz_freshmart' && it.barcode ? (i % 3 === 0 ? it.price : Math.ceil((it.price * 1.08) / 5) * 5) : null,
+    mrp: it.mrp ?? (spec.id === 'biz_freshmart' && it.barcode ? (i % 3 === 0 ? it.price : Math.ceil((it.price * 1.08) / 5) * 5) : null),
+    ...(it.details ? { details: it.details } : {}),
     variants: (it.variants ?? []).map(([n, pr], j) => ({ id: `v_${spec.id.slice(4)}_${i}_${j}`, name: n, price: pr })),
     addOns: (it.addOns ?? []).map(([n, pr], j) => ({ id: `ao_${spec.id.slice(4)}_${i}_${j}`, name: n, price: pr })),
     taxRateId: `tax_${it.tax}`,
@@ -230,6 +242,7 @@ function buildShop(d: DB, spec: ShopSpec) {
         status: 'completed', items, notes: '', ...totals, paid: 0, balance: totals.total, paymentStatus: 'unpaid',
         invoiceNumber: `${biz.billing.invoicePrefix}${biz.billing.nextInvoiceNumber++}`, billedAt: billedAt.toISOString(),
         cancelledAt: null, cancelReason: null, source: 'pos', ...at(t, by),
+        ...(sellers.length && rand() < 0.85 ? { salespersonId: pick(sellers) } : {}),
       }
       if (!credit) {
         const x = rand()
@@ -338,6 +351,60 @@ const BAKERY: ShopSpec = {
     { notes: 'Gas cylinder', category: 'other', min: 1450, max: 1450, every: 4 },
   ],
   specials: [['Black Forest Cake', null, 'Today’s pick'], ['Chicken Puff', 35, 'Offer'], ['Cold Coffee', 75, 'Happy hour'], ['Mysore Pak', null, 'Fresh batch']],
+}
+
+// ---------- Silk & saree shop ----------
+
+type Design = [name: string, cat: string, design: string, fabric: string, mrp: number, pct: number, cost: number, colours: string[], sizes: string[], pop: number]
+const DESIGNS: Design[] = [
+  ['Kanchipuram Silk Saree', 'silk', 'KS-101', 'Pure silk', 12000, 10, 8400, ['Maroon', 'Bottle Green', 'Mustard'], [], 2],
+  ['Arani Silk Saree', 'silk', 'AR-118', 'Silk', 6200, 10, 4300, ['Wine', 'Navy Blue'], [], 2],
+  ['Soft Silk Saree', 'silk', 'SS-305', 'Soft silk', 4800, 15, 3100, ['Peacock Blue', 'Rani Pink', 'Lavender'], [], 3],
+  ['Kanchipuram Bridal Silk Saree', 'bridal', 'KB-220', 'Pure silk, gold zari', 28500, 5, 21000, ['Red', 'Magenta'], [], 1],
+  ['Chettinad Cotton Saree', 'cotton', 'CT-410', 'Cotton', 1450, 10, 900, ['Mustard', 'Grey', 'Rust'], [], 5],
+  ['Kovai Cotton Saree', 'cotton', 'KC-512', 'Cotton', 980, 0, 620, ['Off-white', 'Sky Blue'], [], 5],
+  ['Fancy Georgette Saree', 'fancy', 'FG-620', 'Georgette', 1850, 20, 1050, ['Black', 'Peach'], [], 4],
+  ['Readymade Blouse', 'blouse', 'RB-710', 'Cotton silk', 650, 0, 380, ['Gold'], ['36', '38', '40', '42'], 3],
+  ['Silk Cotton Dhoti', 'dhoti', 'SD-801', 'Silk cotton', 1250, 10, 780, ['Cream'], [], 3],
+  ['Pattu Pavadai (Kids)', 'kids', 'PP-905', 'Silk', 2400, 10, 1500, ['Red', 'Green'], ['2-3Y', '4-5Y', '6-7Y'], 2],
+]
+const TEXTILE: ShopSpec = {
+  id: 'biz_kanchi_silks', name: 'Kanchi Pattu Maaligai', subType: 'Silk & Sarees', emoji: '🥻', inStoreCodes: true, orderTypes: ['counter'],
+  address: '22, Gandhi Road, Kanchipuram 631501', phone: '+91 98765 44440', email: 'sales@kanchipattu.in', gstin: '33KNCPT2468D1Z6',
+  invoicePrefix: 'KP-', defaultTax: 'tax_5', footer: 'Exchange within 7 days with bill and tag. No exchange on discounted items.', seed: 4242, ean: '2000000',
+  categories: [['silk', 'Silk Sarees', '🥻', '5007'], ['cotton', 'Cotton Sarees', '🌸', '5208'], ['fancy', 'Fancy Sarees', '✨', '5407'], ['bridal', 'Bridal Collection', '💒', '5007'],
+    ['blouse', 'Blouse & Materials', '👗', '6206'], ['dhoti', 'Dhoti & Veshti', '🧣', '5208'], ['kids', 'Kids Wear', '🧒', '6209']],
+  items: DESIGNS.flatMap(([name, cat, design, fabric, mrp, pct, cost, colours, sizes, pop]) =>
+    colours.flatMap((colour) => (sizes.length ? sizes : ['']).map((size): ItemDef => ({
+      name: [name, [colour, size].filter(Boolean).join(' / ')].join(' · '), cat, price: pct ? Math.round((mrp * (1 - pct / 100)) / 10) * 10 : mrp, mrp, cost,
+      unit: 'pc', tax: 5, emoji: '🥻', low: 1, pop, details: { design, fabric, colour, ...(size ? { size } : {}) },
+    })))),
+  users: [
+    { id: 'usr_kp_owner', name: 'Senthil Kumar', phone: '9876544441', role: 'Owner' },
+    { id: 'usr_kp_cash', name: 'Lavanya', phone: '9876544442', role: 'Cashier' },
+  ],
+  sellers: [
+    { id: 'usr_kp_s1', name: 'Meena', phone: '9876544451', salary: 12000, commissionPct: 1 },
+    { id: 'usr_kp_s2', name: 'Saravanan', phone: '9876544452', salary: 13000, commissionPct: 1 },
+    { id: 'usr_kp_s3', name: 'Divya', phone: '9876544453', salary: 11000, commissionPct: 1.5 },
+  ],
+  customers: [{ name: 'Kalaiselvi', notes: 'Wedding purchase — Feb' }, { name: 'Rajeswari' }, { name: 'Anusha' }, { name: 'Murali (Wedding)', credit: true, notes: 'Balance on delivery' }, { name: 'Shanthi' }, { name: 'Vidhya' }],
+  perDay: [6, 12], linesPerBill: [1, 3], deliveryShare: 0, creditShare: 0.03,
+  expenses: [
+    { notes: 'Weaver payment — silk sarees', category: 'purchase', min: 40000, max: 90000, every: 6 },
+    { notes: 'Courier / parcel', category: 'transport', min: 200, max: 600, every: 2 },
+    { notes: 'Showroom electricity', category: 'electricity', min: 4200, max: 5200, every: 30 },
+  ],
+}
+
+/** Silk & saree demo shop (QR price stickers, MRP + discount, salespeople). */
+export function addTextileDemo(d: DB) {
+  buildShop(d, TEXTILE)
+}
+export const TEXTILE_DEMO_ID = TEXTILE.id
+/** v26: HSN codes on the saree shop's categories (GST report demo). */
+export function addTextileHsn(d: DB) {
+  for (const [id, , , hsn] of TEXTILE.categories) { const c = d.categories.find((x) => x.id === `cat_${TEXTILE.id}_${id}`); if (c && hsn && !c.hsn) c.hsn = hsn }
 }
 
 /** Adds the supermarket and hardware demo shops if they aren't there yet. */

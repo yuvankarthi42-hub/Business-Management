@@ -12,7 +12,8 @@
     "build:catalyst": "tsc -b && vite build --mode catalyst --outDir dist-catalyst && cp dist-catalyst/index.html dist-catalyst/404.html",
     "backend:build": "npm --prefix backend run build",
     "backend:test": "npm --prefix backend test",
-    "build:catalyst-webclient": "tsc -b && vite build --mode catalyst --base=/app/ --outDir dist-catalyst && node scripts/catalyst-client.mjs"
+    "build:catalyst-webclient": "tsc -b && vite build --mode catalyst --base=/app/ --outDir dist-catalyst && node scripts/catalyst-client.mjs",
+    "build:prod": "tsc -b && vite build --mode prod --outDir dist-prod && cp dist-prod/index.html dist-prod/404.html"
   },
   "devDependencies": {
     "@types/papaparse": "^5.5.2",

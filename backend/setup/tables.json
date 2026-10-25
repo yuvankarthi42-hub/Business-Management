@@ -1316,6 +1316,15 @@
         "pii": false
       },
       {
+        "name": "can_login",
+        "type": "boolean",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "true"
+      },
+      {
         "name": "must_change_password",
         "type": "boolean",
         "mandatory": true,
@@ -1585,6 +1594,15 @@
         "onDelete": "null"
       },
       {
+        "name": "hsn_code",
+        "type": "varchar",
+        "maxLength": 10,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
         "name": "sort_order",
         "type": "int",
         "mandatory": true,
@@ -1806,6 +1824,14 @@
         "name": "emoji",
         "type": "varchar",
         "maxLength": 8,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "details_json",
+        "type": "text",
         "mandatory": false,
         "unique": false,
         "search": false,
@@ -2278,6 +2304,52 @@
         "search": false,
         "pii": false,
         "default": "true"
+      },
+      {
+        "name": "state_code",
+        "type": "varchar",
+        "maxLength": 2,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "opening_balance_minor",
+        "type": "bigint",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "0",
+        "unit": "minor"
+      },
+      {
+        "name": "notes",
+        "type": "varchar",
+        "maxLength": 255,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "name_key",
+        "type": "varchar",
+        "maxLength": 200,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "row_version",
+        "type": "int",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "1"
       }
     ]
   },
@@ -2407,6 +2479,60 @@
         "pii": false,
         "references": "users",
         "onDelete": "null"
+      },
+      {
+        "name": "client_uuid",
+        "type": "varchar",
+        "maxLength": 40,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "is_igst",
+        "type": "boolean",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "false"
+      },
+      {
+        "name": "round_off_minor",
+        "type": "bigint",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "0",
+        "unit": "minor"
+      },
+      {
+        "name": "void_reason",
+        "type": "varchar",
+        "maxLength": 255,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "voided_at",
+        "type": "datetime",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "row_version",
+        "type": "int",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "1"
       }
     ]
   },
@@ -2495,6 +2621,175 @@
         "unique": false,
         "search": false,
         "pii": false
+      },
+      {
+        "name": "unit",
+        "type": "varchar",
+        "maxLength": 10,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "hsn_code",
+        "type": "varchar",
+        "maxLength": 10,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "taxable_minor",
+        "type": "bigint",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "unit": "minor"
+      },
+      {
+        "name": "tax_minor",
+        "type": "bigint",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "unit": "minor"
+      },
+      {
+        "name": "sort_order",
+        "type": "int",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "0"
+      }
+    ]
+  },
+  "supplier_payments": {
+    "columns": [
+      {
+        "name": "business_id",
+        "type": "fk",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "businesses",
+        "onDelete": "cascade"
+      },
+      {
+        "name": "branch_id",
+        "type": "fk",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "branches",
+        "onDelete": "cascade"
+      },
+      {
+        "name": "supplier_id",
+        "type": "fk",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "suppliers",
+        "onDelete": "cascade"
+      },
+      {
+        "name": "purchase_id",
+        "type": "fk",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "purchases",
+        "onDelete": "null"
+      },
+      {
+        "name": "client_uuid",
+        "type": "varchar",
+        "maxLength": 40,
+        "mandatory": true,
+        "unique": true,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "method",
+        "type": "int",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "enum": "PayMethod"
+      },
+      {
+        "name": "amount_minor",
+        "type": "bigint",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "unit": "minor"
+      },
+      {
+        "name": "paid_on",
+        "type": "date",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "reference",
+        "type": "varchar",
+        "maxLength": 80,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "note",
+        "type": "varchar",
+        "maxLength": 255,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "is_voided",
+        "type": "boolean",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "false"
+      },
+      {
+        "name": "voided_at",
+        "type": "datetime",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "created_by",
+        "type": "fk",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "users",
+        "onDelete": "null"
       }
     ]
   },
@@ -2822,6 +3117,139 @@
         "search": false,
         "pii": false,
         "default": "1"
+      },
+      {
+        "name": "state_code",
+        "type": "varchar",
+        "maxLength": 2,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "points_balance",
+        "type": "int",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "0"
+      }
+    ]
+  },
+  "customer_points": {
+    "columns": [
+      {
+        "name": "business_id",
+        "type": "fk",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "businesses",
+        "onDelete": "cascade"
+      },
+      {
+        "name": "branch_id",
+        "type": "fk",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "branches",
+        "onDelete": "null"
+      },
+      {
+        "name": "customer_id",
+        "type": "fk",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "customers",
+        "onDelete": "cascade"
+      },
+      {
+        "name": "order_id",
+        "type": "fk",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "orders",
+        "onDelete": "null"
+      },
+      {
+        "name": "return_id",
+        "type": "fk",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "sale_returns",
+        "onDelete": "null"
+      },
+      {
+        "name": "kind",
+        "type": "int",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "enum": "PointsKind"
+      },
+      {
+        "name": "points",
+        "type": "int",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "balance_after",
+        "type": "int",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "remaining",
+        "type": "int",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "0"
+      },
+      {
+        "name": "expires_on",
+        "type": "date",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "note",
+        "type": "varchar",
+        "maxLength": 150,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "created_by",
+        "type": "fk",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "users",
+        "onDelete": "null"
       }
     ]
   },
@@ -3244,6 +3672,79 @@
         "onDelete": "null"
       },
       {
+        "name": "salesperson_id",
+        "type": "fk",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "users",
+        "onDelete": "null"
+      },
+      {
+        "name": "customer_gstin",
+        "type": "varchar",
+        "maxLength": 15,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "place_of_supply",
+        "type": "varchar",
+        "maxLength": 2,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "is_igst",
+        "type": "boolean",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "false"
+      },
+      {
+        "name": "points_redeemed",
+        "type": "int",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "0"
+      },
+      {
+        "name": "points_value_minor",
+        "type": "bigint",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "0",
+        "unit": "minor"
+      },
+      {
+        "name": "points_earned",
+        "type": "int",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "0"
+      },
+      {
+        "name": "points_balance_after",
+        "type": "int",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
         "name": "updated_by",
         "type": "fk",
         "mandatory": false,
@@ -3346,6 +3847,42 @@
         "name": "unit_price_minor",
         "type": "bigint",
         "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "unit": "minor"
+      },
+      {
+        "name": "hsn_code",
+        "type": "varchar",
+        "maxLength": 10,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "list_price_minor",
+        "type": "bigint",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "unit": "minor"
+      },
+      {
+        "name": "taxable_minor",
+        "type": "bigint",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "unit": "minor"
+      },
+      {
+        "name": "mrp_minor",
+        "type": "bigint",
+        "mandatory": false,
         "unique": false,
         "search": false,
         "pii": false,
@@ -4216,6 +4753,83 @@
         "type": "varchar",
         "maxLength": 150,
         "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      }
+    ]
+  },
+  "push_subscriptions": {
+    "columns": [
+      {
+        "name": "business_id",
+        "type": "fk",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "businesses",
+        "onDelete": "cascade"
+      },
+      {
+        "name": "order_id",
+        "type": "fk",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "orders",
+        "onDelete": "cascade"
+      },
+      {
+        "name": "endpoint",
+        "type": "varchar",
+        "maxLength": 500,
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "p256dh",
+        "type": "varchar",
+        "maxLength": 120,
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "auth_secret",
+        "type": "varchar",
+        "maxLength": 40,
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "uniq_key",
+        "type": "varchar",
+        "maxLength": 80,
+        "mandatory": true,
+        "unique": true,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "last_stamp",
+        "type": "varchar",
+        "maxLength": 40,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "expires_at",
+        "type": "datetime",
+        "mandatory": true,
         "unique": false,
         "search": false,
         "pii": false
@@ -5701,6 +6315,14 @@
         "name": "db_url",
         "type": "varchar",
         "maxLength": 255,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "db_token",
+        "type": "encrypted",
         "mandatory": false,
         "unique": false,
         "search": false,

@@ -3,11 +3,12 @@
 import type {
   AuditLog, Branch, Business, Category, Customer, DiningTable, Expense, KitchenTicket, Order, Payment, Product,
   Campaign, Role, Special, StockBatch, StockMovement, User, WaMessage, SaleReturn, Attendance, StaffAdvance, SalaryPayment, ReminderLog, Ticket, PlatformAdmin, SubscriptionPeriod, AdminAuditLog, PlatformSettings,
+  PointsEntry, Purchase, Supplier, SupplierPayment,
 } from '@/core/types'
 import { seedAdminTeam, seedPlatform } from './seedPlatform'
 import { dropHealthEvents, dropSmsReminders, fixFutureDemoTimes, markContractors, seedStaffAndWholesale, seedSupport } from './seedOps'
 import { buildSeed, demoSpecials } from './seed'
-import { addFoodDemo, addRetailDemos, seedDemoBatches } from './seedRetail'
+import { addFoodDemo, addRetailDemos, addTextileDemo, addTextileHsn, seedDemoBatches } from './seedRetail'
 import { normalizePhone } from '@/core/phone'
 
 export interface DB {
@@ -45,10 +46,16 @@ export interface DB {
   tickets: Ticket[]
   /** Server-side secrets (e.g. WhatsApp access tokens). Never returned by the API. */
   secrets: { businessId: string; kind: 'whatsapp_token'; value: string }[]
+  // Purchases & suppliers
+  suppliers: Supplier[]
+  purchases: Purchase[]
+  supplierPayments: (SupplierPayment & { businessId: string; branchId: string })[]
+  /** Loyalty points history; `remaining` = earned points not yet used / expired (used oldest first). */
+  points: (PointsEntry & { businessId: string; remaining: number; returnId?: string | null })[]
 }
 
 const KEY = 'billpoodum.db' // legacy localStorage key (moved to IndexedDB on first load)
-const VERSION = 23
+const VERSION = 26
 const IDB_NAME = 'billpoodum'
 const IDB_STORE = 'kv'
 
@@ -85,6 +92,10 @@ function migrate(parsed: DB): DB | null {
   parsed.salaries ??= []
   parsed.reminderLog ??= []
   parsed.tickets ??= []
+  parsed.suppliers ??= []
+  parsed.purchases ??= []
+  parsed.supplierPayments ??= []
+  parsed.points ??= []
   if (parsed.version === 5) migrate5to6(parsed)
   if (parsed.version === 6) migrate6to7(parsed)
   if (parsed.version === 7) { addRetailDemos(parsed); parsed.version = 8 }
@@ -116,6 +127,9 @@ function migrate(parsed: DB): DB | null {
   if (parsed.version === 20) { fixFutureDemoTimes(parsed); parsed.version = 21 }
   if (parsed.version === 21) { dropSmsReminders(parsed); parsed.version = 22 }
   if (parsed.version === 22) { dropHealthEvents(parsed); parsed.version = 23 }
+  if (parsed.version === 23) { addTextileDemo(parsed); normalizeAllPhones(parsed); seedPlatform(parsed); parsed.version = 24 } // silk & saree demo shop
+  if (parsed.version === 24) { const k = parsed.businesses.find((b) => b.id === 'biz_kanchi_silks'); if (k) k.billing.orderTypes = ['counter']; parsed.version = 25 } // saree shop: counter only
+  if (parsed.version === 25) { addTextileHsn(parsed); parsed.version = 26 } // HSN on the saree shop's categories
   return parsed.version === VERSION ? parsed : null
 }
 
@@ -153,6 +167,7 @@ function freshSeed(save = true): DB {
   const fresh = buildSeed(VERSION)
   addRetailDemos(fresh)
   addFoodDemo(fresh)
+  addTextileDemo(fresh)
   normalizeAllPhones(fresh)
   seedDemoBatches(fresh)
   seedPlatform(fresh)

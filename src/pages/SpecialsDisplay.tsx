@@ -8,6 +8,8 @@ import { QrImage } from '@/components/Qr'
 import { api } from '@/data'
 import { money, setCurrencySymbol } from '@/lib/format'
 import { priceLabel } from '@/features/Catalog'
+import { ShopLogo } from '@/components/ShopLogo'
+import { usePublicLive } from '@/features/tracking/publicLive'
 
 const PAGE = 6
 
@@ -15,7 +17,10 @@ const PAGE = 6
 export default function SpecialsDisplay() {
   const { businessId = '' } = useParams()
   const now = useNow(1000)
-  const { data, error } = useData(() => api.public.specials(businessId), [businessId])
+  // The board updates when the shop changes its specials (live event) — not on a timer.
+  const [fresh, setFresh] = useState(0)
+  usePublicLive(businessId, null, { menu: () => setFresh(Date.now()) })
+  const { data, error } = useData(() => (fresh ? api.public.specials(businessId, fresh) : api.public.specials(businessId)), [businessId, fresh])
   const [page, setPage] = useState(0)
   const pages = Math.max(1, Math.ceil((data?.items.length ?? 0) / PAGE))
   useEffect(() => { const id = setInterval(() => setPage((p) => (p + 1) % pages), 8000); return () => clearInterval(id) }, [pages])
@@ -29,7 +34,7 @@ export default function SpecialsDisplay() {
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-gradient-to-br from-navy-900 via-navy-800 to-[#2a1a0e] text-white">
       <header className="flex items-center gap-4 px-8 py-6">
-        <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10 text-3xl">{data.business.logoEmoji}</span>
+        <ShopLogo business={data.business} className="h-14 w-14 !rounded-2xl" />
         <div className="flex-1">
           <h1 className="text-2xl font-bold tracking-tight lg:text-3xl">{data.business.name}</h1>
           <p className="text-sm text-slate-300">{data.business.subType}</p>

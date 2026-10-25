@@ -23,7 +23,7 @@ export default function AdminTeam() {
       <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Admin team</h1>
-          <p className="text-sm text-slate-500">People who manage BillPoodum customers. Each role decides what they can do.</p>
+          <p className="text-sm text-slate-500">People who manage Kadai Kalanjiyam customers. Each role decides what they can do.</p>
         </div>
         <Button icon={Plus} onClick={() => setEdit({ role: 'support' })}>Add admin</Button>
       </div>
@@ -89,10 +89,10 @@ function AdminModal({ initial, self, onClose }: { initial: Partial<Member>; self
         if (ok) { if (resetPw) setDone(f.password); else onClose() }
       }}>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Name"><Input autoFocus required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="e.g. Arun" /></Field>
-          <Field label="Username"><Input required value={f.username} onChange={(e) => setF({ ...f, username: e.target.value.toLowerCase().replace(/\s/g, '') })} className="font-mono" autoCapitalize="none" spellCheck={false} /></Field>
+          <Field required label="Name"><Input autoFocus required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="e.g. Arun" /></Field>
+          <Field required label="Username"><Input required value={f.username} onChange={(e) => setF({ ...f, username: e.target.value.toLowerCase().replace(/\s/g, '') })} className="font-mono" autoCapitalize="none" spellCheck={false} /></Field>
         </div>
-        <Field label="Role">
+        <Field required label="Role">
           <div className="space-y-2">
             {(Object.keys(ADMIN_ROLES) as AdminRole[]).map((r) => (
               <label key={r} className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 ${f.role === r ? 'border-brand-500 bg-brand-50/40' : 'border-slate-200'} ${self ? 'cursor-not-allowed opacity-60' : ''}`}>
@@ -105,7 +105,7 @@ function AdminModal({ initial, self, onClose }: { initial: Partial<Member>; self
         </Field>
         {!isNew && !resetPw && <Button type="button" variant="secondary" size="sm" icon={KeyRound} write={false} onClick={() => { setResetPw(true); setF({ ...f, password: randomPassword() }) }}>Reset password</Button>}
         {resetPw && (
-          <Field label={isNew ? 'Password' : 'New password'} hint="At least 6 characters">
+          <Field required={isNew} label={isNew ? 'Password' : 'New password'} hint="At least 6 characters">
             <div className="flex gap-1.5">
               <Input required minLength={6} value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} className="font-mono" autoComplete="new-password" />
               <Button type="button" variant="secondary" icon={Wand2} onClick={() => setF({ ...f, password: randomPassword() })} aria-label="New password" title="Generate" />

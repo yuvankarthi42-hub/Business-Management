@@ -55,10 +55,17 @@ define('auth', {
     if (!hit && /^[^\s@'"\\]+@[^\s@'"\\]+\.[^\s@'"\\]+$/.test(id)) { hit = await findLogin(c, 'email', id); match = { col: 'email', value: id } }
     let row = null
     if (hit) {
-      try { await c.useShop(hit.businessId) } catch { hit = null }
+      const found = hit
+      // Server log only (never shown to the user): why a known sign-in name still didn't sign in.
+      const why = (reason: string, e?: unknown) => console.warn(`[auth.login] ${match?.col} found for shop ${found.businessId} user ${found.userId}, but ${reason}`, e ?? '')
+      try { await c.useShop(found.businessId) } catch (e) { why('the shop database could not be opened', e); hit = null }
       // The user row must still carry that name (a name being changed on another device is not used).
-      const u = hit ? await c.db.get('users', hit.userId) : null
-      if (u && match && str(u[match.col]).toLowerCase() === match.value.toLowerCase() && str(u.business_id) === hit!.businessId) row = u
+      const u = hit ? await c.db.get('users', found.userId).catch((e) => { why('reading the user failed', e); return null }) : null
+      if (hit && !u) why('there is no such user in the shop database')
+      else if (u && match && str(u[match.col]).toLowerCase() !== match.value.toLowerCase()) why(`the user's ${match.col} is different now`)
+      else if (u && str(u.business_id) !== found.businessId) why(`the user belongs to shop ${str(u.business_id)}`)
+      else if (u && u.can_login === false) why('this staff member has no app access')
+      else if (u) row = u
     }
     if (!row) { await checkPassword(password, await dummyHash()); throw new ApiError('Wrong mobile number or password', 401, 'BAD_LOGIN') }
     if (row.locked_until && new Date(str(row.locked_until)).getTime() > Date.now()) throw new ApiError(`Too many wrong tries. Try again after ${LOCK_MINUTES} minutes.`, 429, 'LOCKED')

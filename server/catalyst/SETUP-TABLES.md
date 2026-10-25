@@ -7,7 +7,7 @@ exactly as listed. ROWID, CREATORID, CREATEDTIME and MODIFIEDTIME are created by
 When done, open `https://<your-function-url>/server/api/schema-check` with the header `x-setup-key: <SETUP_KEY>`
 (or Admin → Schema check) — it lists anything missing or different.
 
-**59 tables · 594 columns.**
+**62 tables · 661 columns.**
 
 | Setting | Meaning |
 |---|---|
@@ -190,6 +190,11 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `gstin` | Var Char | 15 |  |  |  |  |  |  |
 | `address` | Var Char | 255 |  |  |  |  |  |  |
 | `is_active` | Boolean |  | ✔ |  | true |  |  |  |
+| `state_code` | Var Char | 2 |  |  |  |  |  |  |
+| `opening_balance_minor` | BigInt |  | ✔ |  | 0 |  |  |  |
+| `notes` | Var Char | 255 |  |  |  |  |  |  |
+| `name_key` | Var Char | 200 |  |  |  |  |  |  |
+| `row_version` | Int |  | ✔ |  | 1 |  |  |  |
 
 ## 14. `expense_categories`
 
@@ -245,6 +250,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `business_id` | Foreign Key |  | ✔ | ✔ |  | → `businesses` (Cascade) |  |  |
 | `db_name` | Var Char | 64 | ✔ | ✔ |  |  |  |  |
 | `db_url` | Var Char | 255 |  |  |  |  |  |  |
+| `db_token` | Encrypted text |  |  |  |  |  |  |  |
 | `schema_version` | Var Char | 40 |  |  |  |  |  |  |
 | `status` | Int |  | ✔ |  | 1 |  |  |  |
 
@@ -297,6 +303,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `username` | Var Char | 40 |  | ✔ |  |  |  |  |
 | `catalyst_user_id` | BigInt |  |  | ✔ |  |  |  |  |
 | `password_hash` | Var Char | 100 |  |  |  |  |  |  |
+| `can_login` | Boolean |  | ✔ |  | true |  |  |  |
 | `must_change_password` | Boolean |  | ✔ |  | true |  |  |  |
 | `password_changed_at` | DateTime |  |  |  |  |  |  |  |
 | `failed_logins` | Int |  | ✔ |  | 0 |  |  |  |
@@ -329,6 +336,8 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `notes` | Var Char | 255 |  |  |  |  |  |  |
 | `is_active` | Boolean |  | ✔ |  | true |  |  |  |
 | `row_version` | Int |  | ✔ |  | 1 |  |  |  |
+| `state_code` | Var Char | 2 |  |  |  |  |  |  |
+| `points_balance` | Int |  | ✔ |  | 0 |  |  |  |
 
 ## 24. `dining_tables`
 
@@ -413,6 +422,12 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `status` | Int |  | ✔ |  | 2 |  |  |  |
 | `note` | Var Char | 255 |  |  |  |  |  |  |
 | `created_by` | Foreign Key |  |  |  |  | → `users` (Null) |  |  |
+| `client_uuid` | Var Char | 40 |  |  |  |  |  |  |
+| `is_igst` | Boolean |  | ✔ |  | false |  |  |  |
+| `round_off_minor` | BigInt |  | ✔ |  | 0 |  |  |  |
+| `void_reason` | Var Char | 255 |  |  |  |  |  |  |
+| `voided_at` | DateTime |  |  |  |  |  |  |  |
+| `row_version` | Int |  | ✔ |  | 1 |  |  |  |
 
 ## 30. `orders`
 
@@ -453,6 +468,14 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `cancelled_at` | DateTime |  |  |  |  |  |  |  |
 | `cancel_reason` | Var Char | 255 |  |  |  |  |  |  |
 | `created_by` | Foreign Key |  |  |  |  | → `users` (Null) |  |  |
+| `salesperson_id` | Foreign Key |  |  |  |  | → `users` (Null) |  |  |
+| `customer_gstin` | Var Char | 15 |  |  |  |  |  |  |
+| `place_of_supply` | Var Char | 2 |  |  |  |  |  |  |
+| `is_igst` | Boolean |  | ✔ |  | false |  |  |  |
+| `points_redeemed` | Int |  | ✔ |  | 0 |  |  |  |
+| `points_value_minor` | BigInt |  | ✔ |  | 0 |  |  |  |
+| `points_earned` | Int |  | ✔ |  | 0 |  |  |  |
+| `points_balance_after` | Int |  |  |  |  |  |  |  |
 | `updated_by` | Foreign Key |  |  |  |  | → `users` (Null) |  |  |
 | `row_version` | Int |  | ✔ |  | 1 |  |  |  |
 
@@ -533,11 +556,30 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `name` | Var Char | 80 | ✔ |  |  |  | ✔ |  |
 | `emoji` | Var Char | 8 |  |  |  |  |  |  |
 | `image_media_id` | Foreign Key |  |  |  |  | → `media_files` (Null) |  |  |
+| `hsn_code` | Var Char | 10 |  |  |  |  |  |  |
 | `sort_order` | Int |  | ✔ |  | 0 |  |  |  |
 | `is_active` | Boolean |  | ✔ |  | true |  |  |  |
 | `uniq_key` | Var Char | 120 | ✔ | ✔ |  |  |  |  |
 
-## 36. `sale_returns`
+## 36. `supplier_payments`
+
+| Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
+|---|---|---|---|---|---|---|---|---|
+| `business_id` | Foreign Key |  | ✔ |  |  | → `businesses` (Cascade) |  |  |
+| `branch_id` | Foreign Key |  | ✔ |  |  | → `branches` (Cascade) |  |  |
+| `supplier_id` | Foreign Key |  | ✔ |  |  | → `suppliers` (Cascade) |  |  |
+| `purchase_id` | Foreign Key |  |  |  |  | → `purchases` (Null) |  |  |
+| `client_uuid` | Var Char | 40 | ✔ | ✔ |  |  |  |  |
+| `method` | Int |  | ✔ |  |  |  |  |  |
+| `amount_minor` | BigInt |  | ✔ |  |  |  |  |  |
+| `paid_on` | Date |  | ✔ |  |  |  |  |  |
+| `reference` | Var Char | 80 |  |  |  |  |  |  |
+| `note` | Var Char | 255 |  |  |  |  |  |  |
+| `is_voided` | Boolean |  | ✔ |  | false |  |  |  |
+| `voided_at` | DateTime |  |  |  |  |  |  |  |
+| `created_by` | Foreign Key |  |  |  |  | → `users` (Null) |  |  |
+
+## 37. `sale_returns`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -563,7 +605,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `created_by` | Foreign Key |  |  |  |  | → `users` (Null) |  |  |
 | `row_version` | Int |  | ✔ |  | 1 |  |  |  |
 
-## 37. `kitchen_tickets`
+## 38. `kitchen_tickets`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -583,7 +625,20 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `created_by` | Foreign Key |  |  |  |  | → `users` (Null) |  |  |
 | `row_version` | Int |  | ✔ |  | 1 |  |  |  |
 
-## 38. `salary_payments`
+## 39. `push_subscriptions`
+
+| Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
+|---|---|---|---|---|---|---|---|---|
+| `business_id` | Foreign Key |  | ✔ |  |  | → `businesses` (Cascade) |  |  |
+| `order_id` | Foreign Key |  | ✔ |  |  | → `orders` (Cascade) |  |  |
+| `endpoint` | Var Char | 500 | ✔ |  |  |  |  |  |
+| `p256dh` | Var Char | 120 | ✔ |  |  |  |  |  |
+| `auth_secret` | Var Char | 40 | ✔ |  |  |  |  |  |
+| `uniq_key` | Var Char | 80 | ✔ | ✔ |  |  |  |  |
+| `last_stamp` | Var Char | 40 |  |  |  |  |  |  |
+| `expires_at` | DateTime |  | ✔ |  |  |  |  |  |
+
+## 40. `salary_payments`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -611,7 +666,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `paid_by` | Foreign Key |  |  |  |  | → `users` (Null) |  |  |
 | `uniq_key` | Var Char | 40 | ✔ | ✔ |  |  |  |  |
 
-## 39. `campaigns`
+## 41. `campaigns`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -624,7 +679,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `sent_count` | Int |  | ✔ |  | 0 |  |  |  |
 | `created_by` | Foreign Key |  |  |  |  | → `users` (Null) |  |  |
 
-## 40. `ticket_messages`
+## 42. `ticket_messages`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -635,7 +690,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `author_name` | Var Char | 120 | ✔ |  |  |  |  |  |
 | `body` | Text |  |  |  |  |  |  |  |
 
-## 41. `products`
+## 43. `products`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -660,11 +715,29 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `low_stock_milli` | BigInt |  | ✔ |  | 0 |  |  |  |
 | `image_media_id` | Foreign Key |  |  |  |  | → `media_files` (Null) |  |  |
 | `emoji` | Var Char | 8 |  |  |  |  |  |  |
+| `details_json` | Text |  |  |  |  |  |  |  |
 | `sort_order` | Int |  | ✔ |  | 0 |  |  |  |
 | `is_active` | Boolean |  | ✔ |  | true |  |  |  |
 | `row_version` | Int |  | ✔ |  | 1 |  |  |  |
 
-## 42. `payments`
+## 44. `customer_points`
+
+| Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
+|---|---|---|---|---|---|---|---|---|
+| `business_id` | Foreign Key |  | ✔ |  |  | → `businesses` (Cascade) |  |  |
+| `branch_id` | Foreign Key |  |  |  |  | → `branches` (Null) |  |  |
+| `customer_id` | Foreign Key |  | ✔ |  |  | → `customers` (Cascade) |  |  |
+| `order_id` | Foreign Key |  |  |  |  | → `orders` (Null) |  |  |
+| `return_id` | Foreign Key |  |  |  |  | → `sale_returns` (Null) |  |  |
+| `kind` | Int |  | ✔ |  |  |  |  |  |
+| `points` | Int |  | ✔ |  |  |  |  |  |
+| `balance_after` | Int |  | ✔ |  |  |  |  |  |
+| `remaining` | Int |  | ✔ |  | 0 |  |  |  |
+| `expires_on` | Date |  |  |  |  |  |  |  |
+| `note` | Var Char | 150 |  |  |  |  |  |  |
+| `created_by` | Foreign Key |  |  |  |  | → `users` (Null) |  |  |
+
+## 45. `payments`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -683,7 +756,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `void_reason` | Var Char | 255 |  |  |  |  |  |  |
 | `created_by` | Foreign Key |  |  |  |  | → `users` (Null) |  |  |
 
-## 43. `staff_advances`
+## 46. `staff_advances`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -697,7 +770,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `salary_payment_id` | Foreign Key |  |  |  |  | → `salary_payments` (Null) |  |  |
 | `given_by` | Foreign Key |  |  |  |  | → `users` (Null) |  |  |
 
-## 44. `whatsapp_messages`
+## 47. `whatsapp_messages`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -717,7 +790,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `status_at` | DateTime |  |  |  |  |  |  |  |
 | `created_by` | Foreign Key |  |  |  |  | → `users` (Null) |  |  |
 
-## 45. `ticket_attachments`
+## 48. `ticket_attachments`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -725,7 +798,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `media_id` | Foreign Key |  | ✔ |  |  | → `media_files` (Cascade) |  |  |
 | `sort_order` | Int |  | ✔ |  | 0 |  |  |  |
 
-## 46. `product_variants`
+## 49. `product_variants`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -738,7 +811,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `sort_order` | Int |  | ✔ |  | 0 |  |  |  |
 | `is_active` | Boolean |  | ✔ |  | true |  |  |  |
 
-## 47. `product_addons`
+## 50. `product_addons`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -749,7 +822,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `sort_order` | Int |  | ✔ |  | 0 |  |  |  |
 | `is_active` | Boolean |  | ✔ |  | true |  |  |  |
 
-## 48. `daily_specials`
+## 51. `daily_specials`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -761,7 +834,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `tag` | Var Char | 40 |  |  |  |  |  |  |
 | `sort_order` | Int |  | ✔ |  | 0 |  |  |  |
 
-## 49. `branch_stock`
+## 52. `branch_stock`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -772,7 +845,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `uniq_key` | Var Char | 60 | ✔ | ✔ |  |  |  |  |
 | `row_version` | Int |  | ✔ |  | 1 |  |  |  |
 
-## 50. `purchase_items`
+## 53. `purchase_items`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -785,8 +858,13 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `tax_bp` | Int |  | ✔ |  | 0 |  |  |  |
 | `batch_no` | Var Char | 40 |  |  |  |  |  |  |
 | `expiry_date` | Date |  |  |  |  |  |  |  |
+| `unit` | Var Char | 10 |  |  |  |  |  |  |
+| `hsn_code` | Var Char | 10 |  |  |  |  |  |  |
+| `taxable_minor` | BigInt |  |  |  |  |  |  |  |
+| `tax_minor` | BigInt |  |  |  |  |  |  |  |
+| `sort_order` | Int |  | ✔ |  | 0 |  |  |  |
 
-## 51. `payment_allocations`
+## 54. `payment_allocations`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -795,7 +873,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `order_id` | Foreign Key |  |  |  |  | → `orders` (Null) |  |  |
 | `amount_minor` | BigInt |  | ✔ |  |  |  |  |  |
 
-## 52. `product_prices`
+## 55. `product_prices`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -806,7 +884,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `price_minor` | BigInt |  | ✔ |  |  |  |  |  |
 | `uniq_key` | Var Char | 80 | ✔ | ✔ |  |  |  |  |
 
-## 53. `stock_batches`
+## 56. `stock_batches`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -821,7 +899,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `cost_minor` | BigInt |  |  |  |  |  |  |  |
 | `row_version` | Int |  | ✔ |  | 1 |  |  |  |
 
-## 54. `order_items`
+## 57. `order_items`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -834,6 +912,10 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `unit` | Var Char | 10 | ✔ |  |  |  |  |  |
 | `qty_milli` | BigInt |  | ✔ |  |  |  |  |  |
 | `unit_price_minor` | BigInt |  | ✔ |  |  |  |  |  |
+| `hsn_code` | Var Char | 10 |  |  |  |  |  |  |
+| `list_price_minor` | BigInt |  |  |  |  |  |  |  |
+| `taxable_minor` | BigInt |  |  |  |  |  |  |  |
+| `mrp_minor` | BigInt |  |  |  |  |  |  |  |
 | `price_list_id` | Foreign Key |  |  |  |  | → `price_lists` (Null) |  |  |
 | `discount_minor` | BigInt |  | ✔ |  | 0 |  |  |  |
 | `tax_bp` | Int |  | ✔ |  | 0 |  |  |  |
@@ -844,7 +926,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `kot_qty_milli` | BigInt |  | ✔ |  | 0 |  |  |  |
 | `sort_order` | Int |  | ✔ |  | 0 |  |  |  |
 
-## 55. `stock_movements`
+## 58. `stock_movements`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -860,7 +942,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `note` | Var Char | 255 |  |  |  |  |  |  |
 | `created_by` | Foreign Key |  |  |  |  | → `users` (Null) |  |  |
 
-## 56. `order_item_addons`
+## 59. `order_item_addons`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -870,7 +952,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `name` | Var Char | 60 | ✔ |  |  |  |  |  |
 | `price_minor` | BigInt |  | ✔ |  |  |  |  |  |
 
-## 57. `order_item_batches`
+## 60. `order_item_batches`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -879,7 +961,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `batch_id` | Foreign Key |  |  |  |  | → `stock_batches` (Null) |  |  |
 | `qty_milli` | BigInt |  | ✔ |  |  |  |  |  |
 
-## 58. `sale_return_items`
+## 61. `sale_return_items`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|
@@ -894,7 +976,7 @@ When done, open `https://<your-function-url>/server/api/schema-check` with the h
 | `amount_minor` | BigInt |  | ✔ |  |  |  |  |  |
 | `restock` | Boolean |  | ✔ |  | true |  |  |  |
 
-## 59. `kitchen_ticket_items`
+## 62. `kitchen_ticket_items`
 
 | Column | Data type | Max length | Mandatory | Unique | Default | Foreign key | Search | PII |
 |---|---|---|---|---|---|---|---|---|

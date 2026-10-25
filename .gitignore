@@ -17,3 +17,6 @@ catalyst/functions/daily/index.js
 *.tsbuildinfo
 .claude/settings.local.json
 *.zip
+.env.prod
+dist-prod
+catalyst/appsail/events/index.js

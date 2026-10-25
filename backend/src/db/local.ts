@@ -24,7 +24,7 @@ export class LocalProvisioner implements Provisioner {
     return drv
   }
   platform() { return this.driver('platform') }
-  async create(name: string) { await this.driver(name); return `local:${name}` }
+  async create(name: string) { await this.driver(name); return { url: `local:${name}`, token: null } }
   async connect(url: string) {
     const m = /^local:([a-z0-9-]+)$/.exec(url)
     if (!m) throw new Error(`Not a local database: ${url}`)

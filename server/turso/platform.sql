@@ -257,6 +257,7 @@ CREATE TABLE IF NOT EXISTS "shop_databases" (
   "business_id"              INTEGER  NOT NULL UNIQUE REFERENCES "businesses"("id") ON DELETE CASCADE,
   "db_name"                  TEXT     NOT NULL UNIQUE,  -- max 64
   "db_url"                   TEXT,  -- max 255
+  "db_token"                 TEXT,  -- AES-256-GCM ciphertext (encrypted in the API) · this database's own access token (Turso), encrypted
   "schema_version"           TEXT,  -- max 40 · newest migration applied
   "status"                   INTEGER  NOT NULL DEFAULT 1 CHECK ("status" >= 1),  -- ShopDbStatus: 1 creating, 2 ready, 3 failed, 4 deleting
   "created_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),  -- CREATEDTIME

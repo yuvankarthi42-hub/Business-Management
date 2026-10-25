@@ -1,26 +1,34 @@
 import clsx from 'clsx'
-import { Building2, Check, Plug, Printer, Store, Database, Languages, LayoutGrid, Plus, Receipt, RotateCcw, ShieldCheck, Trash2, UserPlus, UtensilsCrossed } from 'lucide-react'
+import { Building2, Check, Plug, Printer, Star, Store, Database, Languages, LayoutGrid, Plus, Receipt, RotateCcw, ShieldCheck, Tag, Trash2, UserPlus, UtensilsCrossed } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useApp, useData } from '@/app/AppContext'
-import { Badge, Button, Card, Checkbox, Field, Input, Modal, PageHeader, Select, Table, Td, Th, Toggle, useAction, useReadOnly } from '@/components/ui'
-import { DEFAULT_TERMS, isHardware, modulesShownFor, ORDER_TYPE_LABEL, PAYMENT_LABEL, PERMISSIONS, TEMPLATES, TERM_LABELS, templateFor } from '@/core/config'
+import { Badge, Button, Card, Checkbox, Field, FieldLabel, Input, Modal, PageHeader, Select, Table, Td, Th, Toggle, useAction, useReadOnly } from '@/components/ui'
+import { DEFAULT_TERMS, isHardware, modulesShownFor, productFormFor, usesRetailPos, ORDER_TYPE_LABEL, PAYMENT_LABEL, PERMISSIONS, TEMPLATES, TERM_LABELS, templateFor } from '@/core/config'
 import type { BillingSettings, Branch, Business, OrderType, PaymentMethod, Permission, Role, TermKey, User } from '@/core/types'
 import { api, BACKEND } from '@/data'
 import { fmtDateTime, uid } from '@/lib/format'
 import { PhoneInput } from '@/components/PhoneInput'
 import { PrinterSettingsPanel } from '@/features/printing/PrinterSettings'
+import { StickerSettingsPanel } from '@/features/Labels'
+import { LoyaltySettingsPanel } from '@/features/loyalty/Points'
+import { BRAND } from '@/core/brand'
+import { GstinInput, StateSelect } from '@/features/gst/GstFields'
+import { gstinState } from '@/core/gst'
 import { IntegrationsSettings } from '@/features/whatsapp/Integrations'
 import { ExportButtons } from '@/features/ExportData'
+import { ShopLogoUpload } from '@/features/ShopLogoUpload'
 import { COUNTRIES, formatPhone } from '@/core/phone'
 
-type Section = 'profile' | 'billing' | 'printer' | 'integrations' | 'terms' | 'modules' | 'branches' | 'staff' | 'tables' | 'data'
+type Section = 'profile' | 'billing' | 'loyalty' | 'stickers' | 'printer' | 'integrations' | 'terms' | 'modules' | 'branches' | 'staff' | 'tables' | 'data'
 
 export default function Settings() {
   const { can, mod, me } = useApp()
   const sections: { key: Section; label: string; icon: typeof Building2; show: boolean }[] = [
     { key: 'profile', label: 'Business Profile', icon: Building2, show: can('settings.manage') },
     { key: 'billing', label: 'Billing & Tax', icon: Receipt, show: can('settings.manage') },
+    { key: 'loyalty', label: 'Loyalty points', icon: Star, show: can('settings.manage') && mod('customers') },
+    { key: 'stickers', label: 'Price stickers', icon: Tag, show: can('settings.manage') && !!me && (usesRetailPos(me.business) || /bakery|sweet/i.test(me.business.subType)) },
     { key: 'printer', label: 'Printer', icon: Printer, show: can('billing.create') || can('settings.manage') },
     { key: 'integrations', label: 'Integrations', icon: Plug, show: can('settings.manage') && !!me?.features.whatsapp },
     { key: 'terms', label: 'Terminology', icon: Languages, show: can('settings.manage') },
@@ -51,6 +59,8 @@ export default function Settings() {
         <div className="min-w-0 flex-1">
           {sec === 'profile' && <ProfileSettings />}
           {sec === 'billing' && <BillingSettingsForm />}
+          {sec === 'stickers' && <StickerSettingsPanel Section={Section} />}
+          {sec === 'loyalty' && <LoyaltySettingsPanel Section={Section} />}
           {sec === 'printer' && <PrinterSettingsPanel />}
           {sec === 'integrations' && <IntegrationsSettings />}
           {sec === 'terms' && <TermsSettings />}
@@ -88,21 +98,21 @@ function useBusinessForm<T>(pick: (b: Business) => T) {
 }
 
 function ProfileSettings() {
-  const f = useBusinessForm((b) => ({ name: b.name, logoEmoji: b.logoEmoji, address: b.address, phone: b.phone, defaultCountry: b.defaultCountry ?? 'IN', email: b.email, gstin: b.gstin, currencySymbol: b.currencySymbol, timezone: b.timezone, category: b.category, subType: b.subType }))
+  const f = useBusinessForm((b) => ({ name: b.name, address: b.address, phone: b.phone, defaultCountry: b.defaultCountry ?? 'IN', email: b.email, gstin: b.gstin, stateCode: b.stateCode ?? '', currencySymbol: b.currencySymbol, timezone: b.timezone, category: b.category, subType: b.subType }))
   const set = (k: keyof typeof f.v, val: string) => f.setV({ ...f.v, [k]: val })
   return (
     <Section title="Business Profile" subtitle="Shown on bills and receipts" onSave={() => f.save((v) => v)} dirty={f.dirty}>
-      <div className="grid gap-4 sm:grid-cols-[80px_1fr_1fr]">
-        <Field label="Logo"><Input value={f.v.logoEmoji} onChange={(e) => set('logoEmoji', e.target.value)} className="text-center text-xl" maxLength={4} /></Field>
-        <Field label="Business name"><Input value={f.v.name} onChange={(e) => set('name', e.target.value)} /></Field>
-        <Field label="Business type">
+      <div className="mb-4"><ShopLogoUpload /></div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field required label="Business name"><Input value={f.v.name} onChange={(e) => set('name', e.target.value)} /></Field>
+        <Field required label="Business type">
           <Select value={`${f.v.category}|${f.v.subType}`} onChange={(e) => { const [c, s] = e.target.value.split('|'); f.setV({ ...f.v, category: c as Business['category'], subType: s }) }}>
             {!TEMPLATES.some((tp) => tp.subTypes.includes(f.v.subType)) && <option value={`${f.v.category}|${f.v.subType}`}>{f.v.subType}</option>}
-            {TEMPLATES.map((tp) => <optgroup key={tp.category} label={tp.name}>{tp.subTypes.map((s) => <option key={s} value={`${tp.category}|${s}`}>{s}</option>)}</optgroup>)}
+            {TEMPLATES.map((tp) => <optgroup key={tp.key} label={tp.name}>{tp.subTypes.map((s) => <option key={s} value={`${tp.category}|${s}`}>{s}</option>)}</optgroup>)}
           </Select>
         </Field>
-        <Field label="Address" className="sm:col-span-3"><Input value={f.v.address} onChange={(e) => set('address', e.target.value)} /></Field>
-        <div className="grid gap-4 sm:col-span-3 sm:grid-cols-3">
+        <Field label="Address" className="sm:col-span-2"><Input value={f.v.address} onChange={(e) => set('address', e.target.value)} /></Field>
+        <div className="grid gap-4 sm:col-span-2 sm:grid-cols-3">
           <Field label="Country" hint="Default code for mobile numbers">
             <Select value={f.v.defaultCountry} onChange={(e) => set('defaultCountry', e.target.value)}>
               {COUNTRIES.map((c) => <option key={c.iso} value={c.iso}>{c.flag} {c.name} (+{c.dial})</option>)}
@@ -110,7 +120,8 @@ function ProfileSettings() {
           </Field>
           <div><span className="mb-1.5 block text-xs font-medium text-slate-600">Phone</span><PhoneInput value={f.v.phone} onChange={(v) => set('phone', v)} defaultCountry={f.v.defaultCountry} /></div>
           <Field label="Email"><Input value={f.v.email} onChange={(e) => set('email', e.target.value)} /></Field>
-          <Field label="GSTIN / Tax ID"><Input value={f.v.gstin} onChange={(e) => set('gstin', e.target.value)} /></Field>
+          <GstinInput label="GSTIN / Tax ID" value={f.v.gstin} onChange={(v) => set('gstin', v)} hint="Printed on bills. Its first two digits are your GST state." />
+          {!gstinState(f.v.gstin) && <StateSelect label="GST state" value={f.v.stateCode} onChange={(v) => set('stateCode', v ?? '')} emptyLabel="Not set" hint="Used for IGST when you sell to another state" />}
           <Field label="Currency symbol"><Input value={f.v.currencySymbol} onChange={(e) => set('currencySymbol', e.target.value)} maxLength={3} /></Field>
           <Field label="Timezone"><Select value={f.v.timezone} onChange={(e) => set('timezone', e.target.value)}>{['Asia/Kolkata', 'Asia/Dubai', 'Asia/Riyadh', 'Asia/Singapore', 'Asia/Kuala_Lumpur', 'Asia/Colombo', 'Europe/London', 'America/New_York', 'Australia/Sydney'].map((z) => <option key={z}>{z}</option>)}</Select></Field>
         </div>
@@ -160,10 +171,17 @@ function BillingSettingsForm() {
             </div>
           </>}
           <Row label="Allow discounts"><Toggle checked={b.discountEnabled} onChange={(v) => set('discountEnabled', v)} /></Row>
+          {!!me && productFormFor(me.business).showMrp && (
+            <Row label="Customer discount below MRP" hint={b.mrpDiscounts !== false
+              ? 'On: items sell at their selling price; stickers and bills show the MRP, the discount and “You saved”'
+              : 'Off: every item sells at its MRP and stickers show MRP only. Selling prices are kept for when you turn this on again'}>
+              <Toggle checked={b.mrpDiscounts !== false} onChange={(v) => set('mrpDiscounts', v)} label="Customer discount below MRP" />
+            </Row>
+          )}
           <Row label="Round off total" hint="Round to nearest rupee"><Toggle checked={b.roundOff} onChange={(v) => set('roundOff', v)} /></Row>
           {me?.business.category === 'retail' && <>
             <Row label="Second price list" hint="A lower rate for contractors, electricians or wholesale buyers"><Toggle checked={!!b.wholesale?.enabled} onChange={(v) => set('wholesale', { label: b.wholesale?.label || (isHardware(me.business) ? 'Contractor rate' : 'Wholesale rate'), enabled: v })} /></Row>
-            {b.wholesale?.enabled && <Field label="Name of the price list" hint="Shown on billing and in the product form"><Input value={b.wholesale.label} onChange={(e) => set('wholesale', { ...b.wholesale!, label: e.target.value })} placeholder="Contractor rate" className="max-w-xs" /></Field>}
+            {b.wholesale?.enabled && <Field required label="Name of the price list" hint="Shown on billing and in the product form"><Input value={b.wholesale.label} onChange={(e) => set('wholesale', { ...b.wholesale!, label: e.target.value })} placeholder="Contractor rate" className="max-w-xs" /></Field>}
           </>}
         </div>
 
@@ -258,9 +276,9 @@ function StaffSettings() {
               <tr key={u.id}>
                 <Td className="font-medium">{u.name}{u.id === me?.user.id && <span className="ml-1 text-xs text-slate-400">(you)</span>}</Td>
                 <Td className="whitespace-nowrap text-slate-500 tabular">{formatPhone(u.phone)}</Td>
-                <Td><Badge tone="blue">{roleName(u.roleId)}</Badge></Td>
+                <Td>{u.canLogin === false ? <Badge>No app login</Badge> : <Badge tone="blue">{roleName(u.roleId)}</Badge>}</Td>
                 <Td>
-                  {isFull(u.roleId) ? <Badge tone="violet">All branches</Badge> : (
+                  {u.canLogin !== false && isFull(u.roleId) ? <Badge tone="violet">All branches</Badge> : (
                     <div className="flex flex-wrap gap-1">{(u.branchIds?.length ? u.branchIds : [u.branchId]).map((id) => <Badge key={id}>{branches.find((b) => b.id === id)?.name ?? '—'}</Badge>)}</div>
                   )}
                 </Td>
@@ -295,9 +313,12 @@ function UserForm({ initial, roles, branches, onClose }: { initial: Partial<User
   const run = useAction()
   const { me } = useApp()
   const startBranches = initial.branchIds?.length ? initial.branchIds : initial.branchId ? [initial.branchId] : [me?.isAll ? branches.find((b) => b.isDefault)?.id ?? branches[0]?.id : me?.branch.id].filter(Boolean) as string[]
-  const [u, setU] = useState({ name: '', phone: '', email: '', roleId: roles[0]?.id ?? '', active: true, password: '', ...initial, ...(initial.id ? { password: '' } : {}), branchIds: startBranches })
+  const [u, setU] = useState({ name: '', phone: '', email: '', roleId: roles[0]?.id ?? '', active: true, password: '', canLogin: true, ...initial, ...(initial.id ? { password: '' } : {}), branchIds: startBranches })
   const self = u.id === me?.user.id
-  const fullAccess = (roles.find((r) => r.id === u.roleId)?.permissions as string[] | undefined)?.includes('*')
+  const app = u.canLogin !== false
+  // Turning app access on for someone who had none needs a password.
+  const needsPassword = app && (!initial.id || initial.canLogin === false)
+  const fullAccess = app && (roles.find((r) => r.id === u.roleId)?.permissions as string[] | undefined)?.includes('*')
   const toggle = (id: string) => setU({ ...u, branchIds: u.branchIds.includes(id) ? u.branchIds.filter((x) => x !== id) : [...u.branchIds, id] })
   const noBranch = !fullAccess && !u.branchIds.length
   return (
@@ -305,11 +326,17 @@ function UserForm({ initial, roles, branches, onClose }: { initial: Partial<User
       footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button disabled={noBranch} onClick={async () => { if (await run(() => api.users.save(u), 'Saved')) onClose() }}>Save</Button></>}>
       <div className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Name"><Input autoFocus value={u.name} onChange={(e) => setU({ ...u, name: e.target.value })} /></Field>
-          <div><span className="mb-1.5 block text-xs font-medium text-slate-600">Mobile (login ID)</span><PhoneInput value={u.phone} onChange={(v) => setU({ ...u, phone: v })} defaultCountry={me?.business.defaultCountry} required /></div>
-          <Field label="Role"><Select value={u.roleId} disabled={self} onChange={(e) => setU({ ...u, roleId: e.target.value })}>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</Select></Field>
-          <Field label={initial.id ? 'New password (leave blank to keep)' : 'Password'}><Input type="password" value={u.password} onChange={(e) => setU({ ...u, password: e.target.value })} /></Field>
+          <Field required label="Name"><Input autoFocus value={u.name} onChange={(e) => setU({ ...u, name: e.target.value })} /></Field>
+          <div><FieldLabel required>{app ? 'Mobile (login ID)' : 'Mobile'}</FieldLabel><PhoneInput value={u.phone} onChange={(v) => setU({ ...u, phone: v })} defaultCountry={me?.business.defaultCountry} required /></div>
+          {app && <Field required label="Role"><Select value={u.roleId} disabled={self} onChange={(e) => setU({ ...u, roleId: e.target.value })}>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</Select></Field>}
+          {app && <Field required={needsPassword} label={needsPassword ? 'Password' : 'New password (leave blank to keep)'}><Input type="password" value={u.password} onChange={(e) => setU({ ...u, password: e.target.value })} /></Field>}
         </div>
+        {!self && !initial.username && (
+          <div className="rounded-xl border border-slate-200 p-3">
+            <Checkbox label="Uses the app (can sign in)" checked={app} onChange={(v) => setU({ ...u, canLogin: v, ...(v && !u.roleId ? { roleId: roles.find((r) => r.name === 'Cashier')?.id ?? roles[0]?.id ?? '' } : {}) })} />
+            <p className="mt-1 pl-7 text-xs text-slate-500">{app ? 'Signs in with this mobile number and password, and sees what the role allows.' : 'Never signs in — for cleaners, helpers or drivers. Attendance and salary still work.'}</p>
+          </div>
+        )}
         <div>
           <p className="mb-1.5 text-xs font-medium text-slate-600">Works at</p>
           {fullAccess ? (
@@ -337,7 +364,7 @@ function UserForm({ initial, roles, branches, onClose }: { initial: Partial<User
             </>
           )}
         </div>
-        {initial.id && !self && <Checkbox label="Active (can sign in)" checked={u.active} onChange={(v) => setU({ ...u, active: v })} />}
+        {initial.id && !self && <Checkbox label={app ? 'Active (can sign in)' : 'Active (still works here)'} checked={u.active} onChange={(v) => setU({ ...u, active: v })} />}
       </div>
     </Modal>
   )
@@ -357,7 +384,7 @@ function RoleForm({ initial, onClose }: { initial: Partial<Role>; onClose: () =>
         <Button disabled={all} onClick={async () => { if (await run(() => api.roles.save({ id: initial.id, name, system: !!initial.system, permissions: perms }), 'Role saved')) onClose() }}>Save</Button>
       </>}>
       {all && <p className="mb-4 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">The Owner role always has full access.</p>}
-      <Field label="Role name" className="mb-5"><Input value={name} disabled={initial.system} onChange={(e) => setName(e.target.value)} placeholder="e.g. Delivery Staff" /></Field>
+      <Field required label="Role name" className="mb-5"><Input value={name} disabled={initial.system} onChange={(e) => setName(e.target.value)} placeholder="e.g. Delivery Staff" /></Field>
       <div className="grid gap-5 sm:grid-cols-2">
         {groups.map((g) => (
           <div key={g}>
@@ -450,7 +477,7 @@ function BranchSettings() {
           <p className="text-sm text-slate-600">Your plan: <b>{branches.length} of {max}</b> branch{max === 1 ? '' : 'es'} used</p>
           <Button size="sm" icon={Plus} disabled={full || me?.subscription.readOnly} onClick={() => setEdit({ name: '' })}>Add branch</Button>
         </div>
-        {full && <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">You’ve used all {max} branch{max === 1 ? '' : 'es'} in your plan. Contact the BillPoodum team (product admin) to add more branches.</p>}
+        {full && <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">You’ve used all {max} branch{max === 1 ? '' : 'es'} in your plan. Call or WhatsApp {BRAND.supportPhoneDisplay} to add more branches.</p>}
         <Table>
           <thead><tr><Th>Branch</Th><Th className="hidden md:table-cell">Address</Th><Th className="hidden sm:table-cell">Phone</Th><Th className="text-right">Staff</Th><Th className="text-right">Tables</Th><Th>Bill series</Th><Th>Status</Th><Th /></tr></thead>
           <tbody>
@@ -497,7 +524,7 @@ function BranchForm({ initial, onClose }: { initial: Partial<Branch>; onClose: (
     <Modal open onClose={onClose} title={isNew ? 'Add branch' : `Edit ${initial.name}`}
       footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button onClick={async () => { if (await run(() => api.branches.save(b), isNew ? 'Branch added' : 'Saved')) onClose() }}>Save</Button></>}>
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Branch name" className="sm:col-span-2"><Input autoFocus value={b.name} onChange={(e) => setB({ ...b, name: e.target.value })} placeholder="Anna Nagar" /></Field>
+        <Field required label="Branch name" className="sm:col-span-2"><Input autoFocus value={b.name} onChange={(e) => setB({ ...b, name: e.target.value })} placeholder="Anna Nagar" /></Field>
         <Field label="Address" className="sm:col-span-2"><Input value={b.address} onChange={(e) => setB({ ...b, address: e.target.value })} placeholder="Printed on this branch’s bills" /></Field>
         <div><span className="mb-1.5 block text-xs font-medium text-slate-600">Phone</span><PhoneInput value={b.phone ?? ''} onChange={(v) => setB({ ...b, phone: v })} defaultCountry={me?.business.defaultCountry} /></div>
         <Field label="Bill prefix" hint={b.isDefault && !b.invoicePrefix ? 'Empty = business series (Settings → Billing)' : isNew ? 'Leave empty to auto-create, e.g. AN-' : undefined}>

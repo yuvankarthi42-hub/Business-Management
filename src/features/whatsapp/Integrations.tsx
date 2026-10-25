@@ -1,14 +1,16 @@
 import clsx from 'clsx'
+import { receiptsMoving, shownStatus } from '@/core/waReceipts'
+import { recheckWhatsApp } from './useWhatsApp'
 import {
   AlertTriangle, BookOpen, Check, CheckCircle2, ChevronRight, Circle, Eye, EyeOff, FileText, FlaskConical, Image as ImageIcon, Info,
   Lock, MessageCircle, Pencil, Plug, Plus, Send, Unplug, XCircle,
 } from 'lucide-react'
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useApp, useData } from '@/app/AppContext'
 import { Badge, Button, Card, Field, Input, Modal, Segmented, Select, Toggle, useAction, useToast } from '@/components/ui'
 import { PhoneInput } from '@/components/PhoneInput'
 import { formatPhone } from '@/core/phone'
-import type { WaTemplate } from '@/core/types'
+import type { WaMessage, WaTemplate } from '@/core/types'
 import {
   BILL_STARTER, checkTemplate, OFFER_SAMPLE, renderTemplate, sampleValues, waCopyFor, WA_FIELDS, WA_KIND, type WaField, type WaLang, type WaTemplateKind,
 } from '@/core/whatsapp'
@@ -28,7 +30,7 @@ export function IntegrationsSettings() {
     <div className="space-y-4">
       <Card className="p-5 sm:p-6">
         <h2 className="text-base font-semibold">Integrations</h2>
-        <p className="mb-5 text-sm text-slate-500">Connect other services to BillPoodum.</p>
+        <p className="mb-5 text-sm text-slate-500">Connect other services to Kadai Kalanjiyam.</p>
         <div className="rounded-xl border border-slate-200 p-4">
           <div className="flex flex-wrap items-center gap-3">
             <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600"><MessageCircle className="h-6 w-6" /></span>
@@ -111,7 +113,7 @@ function StepEnable({ onNext, onClose }: { onNext: () => void; onClose: () => vo
         <ul className="space-y-1.5 text-slate-600">
           <li className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />A Meta Business account (business.facebook.com), ideally verified</li>
           <li className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />Your mobile number added to the WhatsApp Business Platform (API)</li>
-          <li className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />A payment method in Meta — Meta charges you per message. BillPoodum doesn’t charge for WhatsApp.</li>
+          <li className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />A payment method in Meta — Meta charges you per message. Kadai Kalanjiyam doesn’t charge for WhatsApp.</li>
         </ul>
         <p className="mt-3 flex gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />A number moved to the API usually can’t be used in the normal WhatsApp app at the same time. Meta’s newer “coexistence” option may allow both — check in your Meta account when you add the number.</p>
       </div>
@@ -144,9 +146,9 @@ function StepConnect({ wa, onBack, onNext }: { wa: WaStatus; onBack: () => void;
             <option disabled>Interakt, WATI, Gupshup — coming soon</option>
           </Select>
         </Field>
-        <Field label="WhatsApp Business number"><PhoneInput value={f.businessNumber} onChange={(v) => setF({ ...f, businessNumber: v })} defaultCountry={me?.business.defaultCountry} /></Field>
-        <Field label="WhatsApp Business Account ID"><Input value={f.wabaId} onChange={(e) => setF({ ...f, wabaId: e.target.value.replace(/\D/g, '') })} inputMode="numeric" className="font-mono" placeholder="104857362910473" /></Field>
-        <Field label="Phone number ID"><Input value={f.phoneNumberId} onChange={(e) => setF({ ...f, phoneNumberId: e.target.value.replace(/\D/g, '') })} inputMode="numeric" className="font-mono" placeholder="110293847561029" /></Field>
+        <Field required label="WhatsApp Business number"><PhoneInput value={f.businessNumber} onChange={(v) => setF({ ...f, businessNumber: v })} defaultCountry={me?.business.defaultCountry} /></Field>
+        <Field required label="WhatsApp Business Account ID"><Input value={f.wabaId} onChange={(e) => setF({ ...f, wabaId: e.target.value.replace(/\D/g, '') })} inputMode="numeric" className="font-mono" placeholder="104857362910473" /></Field>
+        <Field required label="Phone number ID"><Input value={f.phoneNumberId} onChange={(e) => setF({ ...f, phoneNumberId: e.target.value.replace(/\D/g, '') })} inputMode="numeric" className="font-mono" placeholder="110293847561029" /></Field>
       </div>
       <Field label="Permanent access token" hint={c?.tokenLast4 ? `A token ending in ${c.tokenLast4} is saved. Leave empty to keep it.` : 'Stored encrypted on the server. It’s never shown again after saving.'}>
         <div className="relative">
@@ -259,7 +261,7 @@ function TemplateCard({ kind, template }: { kind: WaTemplateKind; template?: WaT
         {!editing && status && <Button size="sm" variant="secondary" icon={Pencil} onClick={() => setEditing(true)}>Edit</Button>}
       </div>
       {status === 'rejected' && template?.reason && <p className="mx-4 mt-3 flex gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700"><XCircle className="mt-0.5 h-4 w-4 shrink-0" />Meta: {template.reason}</p>}
-      {status === 'pending' && !editing && <p className="mx-4 mt-3 flex gap-1.5 text-xs text-amber-700"><Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />Meta usually reviews in a few minutes, sometimes up to 48 hours. This page updates by itself.</p>}
+      {status === 'pending' && !editing && <p className="mx-4 mt-3 flex gap-1.5 text-xs text-amber-700"><Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />Meta usually reviews in a few minutes, sometimes up to 48 hours.<button type="button" onClick={recheckWhatsApp} className="ml-1 font-semibold underline">Check now</button></p>}
 
       <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_260px]">
         <div className="min-w-0 space-y-3">
@@ -383,7 +385,7 @@ function Connected({ wa, onClose }: { wa: WaStatus; onClose: () => void }) {
                   <p className="truncate text-xs text-slate-500">{m.attachment && <span className="mr-1">📎 {m.attachment} ·</span>}{m.body}</p>
                 </div>
                 <span className="shrink-0 text-right text-xs">
-                  <MsgStatus s={m.status} />
+                  <MsgStatusOf m={m} />
                   <span className="block text-slate-400">{fmtTime(m.createdAt)}</span>
                 </span>
               </li>
@@ -399,6 +401,17 @@ function Connected({ wa, onClose }: { wa: WaStatus; onClose: () => void }) {
       </Modal>
     </div>
   )
+}
+
+/** A message's tick, moved on the screen while its simulated receipt changes (no server calls). */
+export function MsgStatusOf({ m }: { m: WaMessage }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!receiptsMoving([m], now)) return
+    const id = setTimeout(() => setNow(Date.now()), 1000)
+    return () => clearTimeout(id)
+  }, [m, now])
+  return <MsgStatus s={shownStatus(m, now)} />
 }
 
 export function MsgStatus({ s }: { s: 'sent' | 'delivered' | 'read' | 'failed' }) {

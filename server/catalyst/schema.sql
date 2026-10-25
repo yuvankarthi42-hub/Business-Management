@@ -255,6 +255,7 @@ CREATE TABLE users (
   username         VARCHAR(40)  UNIQUE,                 -- owner login created by the product admin
   catalyst_user_id BIGINT       UNIQUE,                 -- only if Catalyst Authentication is used later
   password_hash    VARCHAR(100),                        -- bcrypt of the password the admin gives; never plain text
+  can_login        BOOLEAN      NOT NULL DEFAULT true,  -- false = staff who don't use the app (cleaners, helpers): attendance & salary only
   must_change_password BOOLEAN  NOT NULL DEFAULT true,  -- ask for a new password on first sign-in
   password_changed_at DATETIME,
   failed_logins    INT          NOT NULL DEFAULT 0,     -- lock for 15 min after 5 wrong tries
@@ -299,6 +300,7 @@ CREATE TABLE categories (
   name             VARCHAR(80)  NOT NULL SEARCH,
   emoji            VARCHAR(8),
   image_media_id   BIGINT       FK → media_files NULL,
+  hsn_code         VARCHAR(10),                         -- default HSN / SAC for items in this category (item's own wins)
   sort_order       INT          NOT NULL DEFAULT 0,
   is_active        BOOLEAN      NOT NULL DEFAULT true,
   uniq_key         VARCHAR(120) NOT NULL UNIQUE         -- '<business_id>:<lower(name)>'
@@ -326,6 +328,7 @@ CREATE TABLE products (
   low_stock_milli  BIGINT       NOT NULL DEFAULT 0,
   image_media_id   BIGINT       FK → media_files NULL,
   emoji            VARCHAR(8),
+  details_json     TEXT,                                -- textile shops: {"design","fabric","colour","size"} (printed on price stickers)
   sort_order       INT          NOT NULL DEFAULT 0,
   is_active        BOOLEAN      NOT NULL DEFAULT true,
   row_version      INT          NOT NULL DEFAULT 1
@@ -402,7 +405,12 @@ CREATE TABLE suppliers (
   phone            VARCHAR(16)  SEARCH PII,
   gstin            VARCHAR(15),
   address          VARCHAR(255),
-  is_active        BOOLEAN      NOT NULL DEFAULT true
+  is_active        BOOLEAN      NOT NULL DEFAULT true,
+  state_code       VARCHAR(2),                          -- GST state (01–38); from the GSTIN when given — decides IGST vs CGST + SGST
+  opening_balance_minor BIGINT  NOT NULL DEFAULT 0,     -- owed to the supplier before using the app (+) or advance paid (−)
+  notes            VARCHAR(255),
+  name_key         VARCHAR(200),                        -- '<business_id>:<lower(name)>' — duplicate check (enforced by the API)
+  row_version      INT          NOT NULL DEFAULT 1
 );
 
 -- Purchase / stock-in bills.
@@ -419,7 +427,13 @@ CREATE TABLE purchases (
   paid_minor       BIGINT       NOT NULL DEFAULT 0,
   status           INT          NOT NULL DEFAULT 2,     -- PurchaseStatus: 1 draft, 2 final, 3 void
   note             VARCHAR(255),
-  created_by       BIGINT       REQ FK → users NULL
+  created_by       BIGINT       REQ FK → users NULL,
+  client_uuid      VARCHAR(40),                         -- retry safety (checked by the API before insert)
+  is_igst          BOOLEAN      NOT NULL DEFAULT false, -- supplier in another state: tax is IGST (input credit)
+  round_off_minor  BIGINT       NOT NULL DEFAULT 0,
+  void_reason      VARCHAR(255),
+  voided_at        DATETIME,
+  row_version      INT          NOT NULL DEFAULT 1
 );
 
 CREATE TABLE purchase_items (
@@ -431,7 +445,29 @@ CREATE TABLE purchase_items (
   cost_minor       BIGINT       NOT NULL,               -- per unit
   tax_bp           INT          NOT NULL DEFAULT 0,
   batch_no         VARCHAR(40),
-  expiry_date      DATE
+  expiry_date      DATE,
+  unit             VARCHAR(10),
+  hsn_code         VARCHAR(10),
+  taxable_minor    BIGINT,                              -- qty × cost (before GST)
+  tax_minor        BIGINT,
+  sort_order       INT          NOT NULL DEFAULT 0
+);
+
+-- Money paid to a supplier (at purchase, or later against the balance). Voided, never edited.
+CREATE TABLE supplier_payments (
+  business_id      BIGINT       NOT NULL FK → businesses CASCADE,
+  branch_id        BIGINT       NOT NULL FK → branches CASCADE,
+  supplier_id      BIGINT       NOT NULL FK → suppliers CASCADE,
+  purchase_id      BIGINT       FK → purchases NULL,    -- paid with this purchase bill; NULL = against the balance
+  client_uuid      VARCHAR(40)  NOT NULL UNIQUE,
+  method           INT          NOT NULL,               -- PayMethod: 1 cash, 2 upi, 3 card, 4 bank
+  amount_minor     BIGINT       NOT NULL,
+  paid_on          DATE         NOT NULL,
+  reference        VARCHAR(80),
+  note             VARCHAR(255),
+  is_voided        BOOLEAN      NOT NULL DEFAULT false,
+  voided_at        DATETIME,
+  created_by       BIGINT       REQ FK → users NULL
 );
 
 -- Batches with expiry (milk, bread, medicines). Sold first-expiry-first-out.
@@ -481,7 +517,25 @@ CREATE TABLE customers (
   marketing_opt_in BOOLEAN      NOT NULL DEFAULT true,
   notes            VARCHAR(255),
   is_active        BOOLEAN      NOT NULL DEFAULT true,
-  row_version      INT          NOT NULL DEFAULT 1
+  row_version      INT          NOT NULL DEFAULT 1,
+  state_code       VARCHAR(2),                          -- GST place of supply (from the GSTIN when given)
+  points_balance   INT          NOT NULL DEFAULT 0      -- loyalty points (sum of customer_points; kept for quick reads)
+);
+
+-- Loyalty points: every earn / use / reversal / expiry / manual change, with the balance after it.
+CREATE TABLE customer_points (
+  business_id      BIGINT       NOT NULL FK → businesses CASCADE,
+  branch_id        BIGINT       FK → branches NULL,
+  customer_id      BIGINT       NOT NULL FK → customers CASCADE,
+  order_id         BIGINT       FK → orders NULL,
+  return_id        BIGINT       FK → sale_returns NULL,
+  kind             INT          NOT NULL,               -- PointsKind: 1 earn, 2 redeem, 3 return, 4 cancel, 5 expire, 6 adjust
+  points           INT          NOT NULL,               -- + added, − taken
+  balance_after    INT          NOT NULL,
+  remaining        INT          NOT NULL DEFAULT 0,     -- earned points not yet used or expired (used oldest first)
+  expires_on       DATE,                                -- earned points only; NULL = never
+  note             VARCHAR(150),
+  created_by       BIGINT       FK → users NULL
 );
 
 
@@ -538,6 +592,14 @@ CREATE TABLE orders (
   cancelled_at     DATETIME,
   cancel_reason    VARCHAR(255),
   created_by       BIGINT       REQ FK → users NULL, -- staff on the bill (commission)
+  salesperson_id   BIGINT       FK → users NULL,        -- who sold it (textile counters); NULL = the person who made the bill
+  customer_gstin   VARCHAR(15),                         -- snapshot at billing: B2B tax invoice
+  place_of_supply  VARCHAR(2),                          -- GST state code of the customer (snapshot); NULL = shop's state
+  is_igst          BOOLEAN      NOT NULL DEFAULT false, -- other-state customer: IGST instead of CGST + SGST
+  points_redeemed  INT          NOT NULL DEFAULT 0,     -- loyalty points used on this bill
+  points_value_minor BIGINT     NOT NULL DEFAULT 0,     -- their value (part of discount_minor, given before GST)
+  points_earned    INT          NOT NULL DEFAULT 0,
+  points_balance_after INT,                             -- customer's points after this bill (printed)
   updated_by       BIGINT       FK → users NULL,
   row_version      INT          NOT NULL DEFAULT 1
 );
@@ -552,6 +614,10 @@ CREATE TABLE order_items (
   unit             VARCHAR(10)  NOT NULL,
   qty_milli        BIGINT       NOT NULL,
   unit_price_minor BIGINT       NOT NULL,               -- base / size price + add-ons
+  hsn_code         VARCHAR(10),                         -- snapshot at billing (item's, else its category's)
+  list_price_minor BIGINT,                              -- catalogue price when the price was changed at the counter (NULL = not changed)
+  taxable_minor    BIGINT,                              -- value before GST after the bill discount (set at billing)
+  mrp_minor        BIGINT,                              -- printed MRP per unit when it is above the price ("You saved" on the bill)
   price_list_id    BIGINT       FK → price_lists NULL,  -- which list priced it
   discount_minor   BIGINT       NOT NULL DEFAULT 0,
   tax_bp           INT          NOT NULL DEFAULT 0,
@@ -671,6 +737,18 @@ CREATE TABLE kitchen_ticket_items (
   note             VARCHAR(150)
 );
 
+-- Browser push for the QR / order tracking page ("Notify me when ready"). Removed when the order is done or after a day.
+CREATE TABLE push_subscriptions (
+  business_id      BIGINT       NOT NULL FK → businesses CASCADE,
+  order_id         BIGINT       NOT NULL FK → orders CASCADE,
+  endpoint         VARCHAR(500) NOT NULL,               -- push service URL (Google / Apple / Mozilla)
+  p256dh           VARCHAR(120) NOT NULL,               -- the browser's public key (base64url)
+  auth_secret      VARCHAR(40)  NOT NULL,               -- the browser's auth secret (base64url)
+  uniq_key         VARCHAR(80)  NOT NULL UNIQUE,        -- '<order_id>:<hash of endpoint>'
+  last_stamp       VARCHAR(40),                         -- status last sent, so each change is sent once
+  expires_at       DATETIME     NOT NULL
+);
+
 
 -- =====================================================================================================
 --  8. EXPENSES & STAFF
@@ -692,7 +770,7 @@ CREATE TABLE expenses (
   amount_minor     BIGINT       NOT NULL,
   method           INT          NOT NULL,               -- PayMethod: 1 cash, 2 upi, 3 card, 4 bank, 5 credit_note
   notes            VARCHAR(255),
-  ref_type         INT,                                -- ExpenseRef: 1 salary, 2 advance, 3 purchase
+  ref_type         INT,                                -- ExpenseRef: 1 salary, 2 advance, 3 purchase, 4 supplier_payment
   ref_id           BIGINT,
   is_voided        BOOLEAN      NOT NULL DEFAULT false,
   created_by       BIGINT       REQ FK → users NULL
@@ -897,6 +975,7 @@ CREATE TABLE shop_databases (
   business_id      BIGINT       NOT NULL UNIQUE FK → businesses CASCADE,
   db_name          VARCHAR(64)  NOT NULL UNIQUE,
   db_url           VARCHAR(255),
+  db_token         ENCRYPTED,                           -- this database's own access token (Turso), encrypted
   schema_version   VARCHAR(40),                         -- newest migration applied
   status           INT          NOT NULL DEFAULT 1      -- ShopDbStatus: 1 creating, 2 ready, 3 failed, 4 deleting
 );

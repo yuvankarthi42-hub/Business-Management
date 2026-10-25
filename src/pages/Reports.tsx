@@ -2,6 +2,7 @@ import { Download, Printer } from 'lucide-react'
 import clsx from 'clsx'
 import { Thumb } from '@/components/Thumb'
 import { useState } from 'react'
+import { GstReportView } from '@/features/gst/GstReport'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { useApp, useData } from '@/app/AppContext'
 import { Badge, Button, Card, CardHeader, Input, PageHeader, Segmented, Skeleton, Table, Td, Th } from '@/components/ui'
@@ -12,7 +13,7 @@ import { addDays, fmtDate, money, num, rangeFor, toDateInput, type RangeKey } fr
 import { AXIS, METHOD_COLOR, SERIES } from '@/lib/chart'
 import { formatPhone } from '@/core/phone'
 
-type Tab = 'income' | 'sales' | 'products' | 'customers' | 'inventory'
+type Tab = 'income' | 'sales' | 'products' | 'customers' | 'inventory' | 'gst'
 
 function downloadCsv(name: string, rows: (string | number)[][]) {
   const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
@@ -23,7 +24,7 @@ function downloadCsv(name: string, rows: (string | number)[][]) {
 }
 
 export default function Reports() {
-  const { t, mod, can } = useApp()
+  const { t, mod, can, me } = useApp()
   const [range, setRange] = useState<RangeKey>('today')
   const [custom, setCustom] = useState({ from: toDateInput(addDays(new Date(), -6)), to: toDateInput(new Date()) })
   const [tab, setTab] = useState<Tab>('income')
@@ -35,6 +36,7 @@ export default function Reports() {
     { value: 'products', label: t('product', true) },
     ...(mod('customers') ? [{ value: 'customers' as Tab, label: t('customer', true) }] : []),
     ...(mod('inventory') ? [{ value: 'inventory' as Tab, label: 'Inventory' }] : []),
+    ...(me?.business.billing.taxEnabled ? [{ value: 'gst' as Tab, label: 'GST returns' }] : []),
   ]
   const period = range === 'custom' ? `${fmtDate(r.from)} – ${fmtDate(r.to)}` : range === 'today' || range === 'yesterday' ? fmtDate(r.from) : `${fmtDate(r.from)} – ${fmtDate(r.to)}`
 
@@ -43,7 +45,7 @@ export default function Reports() {
       <PageHeader title="Reports" subtitle={period} actions={<Button variant="secondary" icon={Printer} onClick={() => window.print()} className="hidden sm:inline-flex">Print</Button>} />
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <Segmented value={tab} onChange={setTab} options={tabs} />
-        <div className="flex flex-wrap items-center gap-2">
+        <div className={clsx('flex flex-wrap items-center gap-2', tab === 'gst' && 'hidden')}>
           <Segmented size="sm" value={range} onChange={setRange} options={[{ value: 'today', label: 'Today' }, { value: 'yesterday', label: 'Yesterday' }, { value: 'week', label: 'This Week' }, { value: 'month', label: 'This Month' }, { value: 'custom', label: 'Custom' }]} />
           {range === 'custom' && (
             <div className="flex items-center gap-1.5">
@@ -54,7 +56,7 @@ export default function Reports() {
           )}
         </div>
       </div>
-      {!s ? <Skeleton className="h-96" /> : (
+      {tab === 'gst' ? <GstReportView /> : !s ? <Skeleton className="h-96" /> : (
         <>
           {tab === 'income' && <Income s={s} showNet={can('reports.profit')} showExp={mod('expenses')} />}
           {tab === 'sales' && <Sales s={s} />}

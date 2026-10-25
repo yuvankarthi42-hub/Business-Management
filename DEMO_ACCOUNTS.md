@@ -28,6 +28,7 @@ approved); turn the feature on for FreshMart to see the Send buttons straight aw
 | FreshMart Supermarket | `freshmart` | Active · 6 months · 1 of 2 branches |
 | Sri Murugan Hardware | `murugan` | Expires in a few days (warning banner) |
 | Sweet Spot Bakery | `sweetspot` | **Expired → read-only** (renew it from the admin dashboard) |
+| Kanchi Pattu Maaligai | `kanchisilks` | Active · 1 year |
 
 ## 🍔 Food Corner — Restaurant & Fast Food (3 branches)
 
@@ -77,6 +78,19 @@ counter + delivery bills, customer credit, 14 days of sales, low-stock items.
 34 products — switches, MCBs, wires (per metre / coil), PVC pipes (per foot / piece), lights, fans,
 tools, paints, plumbing, screws — 18 % GST, contractor customers on credit, 14 days of sales.
 
+## 🥻 Kanchi Pattu Maaligai — Textile · Silk & Sarees
+
+| Name | Mobile (login) | Role |
+|---|---|---|
+| Senthil Kumar | 9876544441 | Owner |
+| Lavanya | 9876544442 | Cashier |
+| Meena, Saravanan, Divya | — | Salespeople (no app login; 1–1.5 % commission) |
+
+10 designs in their colours / sizes (one item each, ~25 items): Kanchipuram, Arani and soft silk sarees,
+bridal silk, cotton and georgette sarees, blouses (sizes 36–42), dhotis and kids' pattu pavadai.
+MRP with 0–20 % discount, in-store codes for QR price stickers (`2000000000015` = first item),
+GST 5 % included in MRP, salesperson on most bills, 14 days of sales.
+
 ## Try barcode billing
 
 Open **Billing**, keep the cursor in the search box, and scan (or type) a barcode then press Enter.
@@ -85,4 +99,4 @@ Scanning the same item again adds +1. Barcodes are shown under **Products → Ed
 
 ## Reset
 
-**Settings → Audit & Data → Reset demo data** recreates all four businesses with fresh data.
+**Settings → Audit & Data → Reset demo data** recreates all five businesses with fresh data.

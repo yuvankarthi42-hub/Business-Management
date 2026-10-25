@@ -19,6 +19,7 @@ import { CustomerPicker } from '@/features/CustomerPicker'
 import { DesktopSidebar, UserMenu, useQrAlerts } from '@/app/Layout'
 import { BranchSwitcher } from '@/features/Branches'
 import { SubscriptionBanner } from '@/features/SubscriptionBanner'
+import { ShopLogo } from '@/components/ShopLogo'
 
 const TABLE_STYLE: Record<TableState, string> = {
   available: 'border-emerald-200 bg-white',
@@ -114,7 +115,7 @@ export default function MobileOrder() {
       {/* Web: same white header as the other pages */}
       <header className="hidden h-16 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-6 xl:flex">
         <Link to="/settings" className="flex min-w-0 items-center gap-2.5">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-orange-50 text-lg">{me?.business.logoEmoji}</span>
+          <ShopLogo business={me?.business} />
           <div className="min-w-0 leading-tight">
             <p className="truncate text-sm font-semibold text-slate-900">{me?.business.name}</p>
             <p className="truncate text-[11px] text-slate-500">{me?.business.subType}</p>

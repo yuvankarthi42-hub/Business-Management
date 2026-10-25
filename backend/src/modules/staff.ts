@@ -5,7 +5,7 @@ import type { Attendance, AttendanceStatus, PaymentMethod, SalaryPayment, StaffP
 import type { Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
 import { define, userRead, userWrite } from '../core/registry'
-import { DuplicateError, type Row } from '../db/types'
+import { DuplicateError, type AggFn, type Row } from '../db/types'
 import { selectIn } from '../domain/orders'
 import { allowedBranches, loadRoles, loadUsers, payColumns } from '../domain/people'
 import { bumpEpoch } from '../domain/session'
@@ -83,13 +83,14 @@ async function payroll(c: Ctx, month: string) {
   const ids = staff.map((s) => s.user.id)
   if (!ids.length) return []
   const monthEnd = `${month}-${String(dim).padStart(2, '0')}` // a real date — 'YYYY-02-31' isn't a valid DATE value
-  const [att, sales, advances, paidRows] = await Promise.all([
+  const billed = { business_id: c.businessId, status: E.OrderStatus.completed, billed_at: { gte: monthStart(c, month), lt: monthStart(c, nextMonth(month)) } }
+  const fns: Record<string, [AggFn, string]> = { total: ['SUM', 'total_minor'], returned: ['SUM', 'returned_minor'], n: ['COUNT', 'ROWID'] }
+  const [att, bySeller, byMaker, advances, paidRows] = await Promise.all([
     selectIn(c, 'attendance', 'user_id', ids, { business_id: c.businessId, work_date: { gte: `${month}-01`, lte: monthEnd } }),
-    // Bills each person made this month; returned_minor already holds every return against the bill.
-    c.db.aggregate('orders', {
-      where: { business_id: c.businessId, status: E.OrderStatus.completed, created_by: { in: ids }, billed_at: { gte: monthStart(c, month), lt: monthStart(c, nextMonth(month)) } },
-      groupBy: ['created_by'], fns: { total: ['SUM', 'total_minor'], returned: ['SUM', 'returned_minor'], n: ['COUNT', 'ROWID'] },
-    }),
+    // Bills each person sold this month: the salesperson on the bill, else whoever made it.
+    // returned_minor already holds every return against the bill.
+    c.db.aggregate('orders', { where: { ...billed, salesperson_id: { in: ids } }, groupBy: ['salesperson_id'], fns }),
+    c.db.aggregate('orders', { where: { ...billed, salesperson_id: null, created_by: { in: ids } }, groupBy: ['created_by'], fns }),
     selectIn(c, 'staff_advances', 'user_id', ids, { business_id: c.businessId, salary_payment_id: null, given_on: { lte: monthEnd } }),
     c.db.select('salary_payments', { where: { business_id: c.businessId, month } }),
   ])
@@ -105,14 +106,15 @@ async function payroll(c: Ctx, month: string) {
     const pay = u.pay ?? null
     // Monthly: full salary less absent days (half day = ½). Unmarked days and leave are paid. Daily: days worked only.
     const basePay = !pay ? 0 : pay.type === 'monthly' ? Math.round(pay.amount - (pay.amount / dim) * (absent + half * 0.5)) : Math.round(pay.amount * (present + half * 0.5))
-    const s = sales.find((x) => x.created_by === u.id)
-    const net = r2(fromMinor(s?.total) - fromMinor(s?.returned))
+    const sold = [bySeller.find((x) => x.salesperson_id === u.id), byMaker.find((x) => x.created_by === u.id)]
+    const sum = (k: 'total' | 'returned' | 'n') => sold.reduce((a, x) => a + Number(x?.[k] ?? 0), 0)
+    const net = r2(fromMinor(sum('total')) - fromMinor(sum('returned')))
     const commission = pay?.commissionPct ? Math.round((net * pay.commissionPct) / 100) : 0 // whole rupees
     const adv = fromMinor(advances.filter((a) => a.user_id === u.id).reduce((a, x) => a + Number(x.amount_minor), 0))
     const paidRow = paidRows.find((x) => x.user_id === u.id)
     return {
       userId: u.id, name: u.name, role, pay, daysInMonth: dim, daysSoFar: lastDay,
-      present, half, leave, absent, unmarked, days: Object.fromEntries(byDay), basePay, bills: Number(s?.n ?? 0), sales: net, commission, advances: adv,
+      present, half, leave, absent, unmarked, days: Object.fromEntries(byDay), basePay, bills: sum('n'), sales: net, commission, advances: adv,
       net: r2(basePay + commission - adv), paid: paidRow ? salaryFrom(paidRow, u.branchId) : null,
       advanceIds: advances.filter((a) => a.user_id === u.id).map((a) => a.ROWID),
     }
@@ -132,7 +134,7 @@ const method = (m: PaymentMethod) => code(E.PayMethod, m) // 'credit' isn't a wa
 
 define('staff', {
   /** People who work in the current branch. */
-  list: userRead(async (c) => (await staffInScope(c)).map(({ user: u, role }) => ({ id: u.id, name: u.name, phone: u.phone, role, pay: u.pay ?? null })), perm),
+  list: userRead(async (c) => (await staffInScope(c)).map(({ user: u, role }) => ({ id: u.id, name: u.name, phone: u.phone, role, pay: u.pay ?? null, canLogin: u.canLogin !== false })), perm),
 
   day: userRead(async (c, date: string) => {
     if (!DATE_RE.test(String(date ?? ''))) throw new ApiError('Choose a date')

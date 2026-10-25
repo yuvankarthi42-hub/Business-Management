@@ -1,4 +1,4 @@
-// Renewal reminder message: sent from BillPoodum's WhatsApp number as a Meta-approved template.
+// Renewal reminder message: sent from Kadai Kalanjiyam's WhatsApp number as a Meta-approved template.
 
 /** The reminder text, checked against Meta's template rules. */
 export const REMINDER_FIELDS = ['owner', 'business', 'date', 'days', 'amount', 'support'] as const
@@ -19,8 +19,8 @@ export const REMINDER_FIELD_LABEL: Record<(typeof REMINDER_FIELDS)[number], stri
 }
 
 export const REMINDER_SAMPLE = {
-  en: 'Hi {owner}, your BillPoodum plan for {business} ends on {date} — {days} left. Renew now ({amount} / month) to keep billing without a break. Call or WhatsApp us on {support}. — Team BillPoodum',
-  ta: 'வணக்கம் {owner}, {business}-க்கான உங்கள் BillPoodum திட்டம் {date} அன்று முடிகிறது — இன்னும் {days} மட்டுமே. தடையின்றி பில் போட இப்போதே புதுப்பிக்கவும் (மாதம் {amount}). அழைக்க / WhatsApp: {support}. — BillPoodum குழு',
+  en: 'Hi {owner}, your Kadai Kalanjiyam plan for {business} ends on {date} — {days} left. Renew now ({amount} / month) to keep billing without a break. Call or WhatsApp us on {support}. — Team Kadai Kalanjiyam',
+  ta: 'வணக்கம் {owner}, {business}-க்கான உங்கள் Kadai Kalanjiyam திட்டம் {date} அன்று முடிகிறது — இன்னும் {days} மட்டுமே. தடையின்றி பில் போட இப்போதே புதுப்பிக்கவும் (மாதம் {amount}). அழைக்க / WhatsApp: {support}. — Kadai Kalanjiyam குழு',
 } as const
 
 /** "3 days" — or "3 நாள்" when the template is written in Tamil. */

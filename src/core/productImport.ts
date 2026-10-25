@@ -1,10 +1,11 @@
 // CSV import of products / menu items: fields, column auto-matching, value parsing and row checks.
 // Pure functions — the server re-runs the same checks before saving.
 import { productFormFor, templateFor } from './config'
+import { cleanHsn, hsnError } from './gst'
 import type { Business, Product } from './types'
 
 export type ImportFieldKey =
-  | 'name' | 'price' | 'category' | 'mrp' | 'wholesalePrice' | 'costPrice' | 'barcode' | 'sku' | 'unit' | 'tax' | 'isVeg' | 'variants' | 'addOns'
+  | 'name' | 'price' | 'category' | 'mrp' | 'wholesalePrice' | 'costPrice' | 'barcode' | 'sku' | 'hsn' | 'unit' | 'tax' | 'isVeg' | 'variants' | 'addOns'
   | 'trackStock' | 'stock' | 'lowStockAt' | 'trackExpiry' | 'expiry' | 'batchNo' | 'sendToKitchen' | 'isService' | 'imageUrl' | 'active'
 
 export interface ImportField {
@@ -30,7 +31,8 @@ export function importFieldsFor(b: Pick<Business, 'category' | 'subType'>): Impo
     retail && F('wholesalePrice', 'Wholesale / contractor price', '130', ['wholesale', 'wholesaleprice', 'contractor', 'contractorprice', 'contractorrate', 'dealerprice', 'wholesalerate', 'trade', 'tradeprice']),
     F('costPrice', 'Cost price', '118', ['cost', 'costprice', 'purchaseprice', 'buyprice', 'cp', 'purchaserate']),
     F('barcode', 'Barcode', '8901234567890', ['barcode', 'ean', 'ean13', 'upc', 'gtin', 'barcodeno']),
-    F('sku', 'SKU / item code', 'FM014', ['sku', 'code', 'itemcode', 'productcode', 'hsn']),
+    F('sku', 'SKU / item code', 'FM014', ['sku', 'code', 'itemcode', 'productcode']),
+    F('hsn', 'HSN / SAC code', '1006', ['hsn', 'hsncode', 'hsnsac', 'sac', 'saccode']),
     F('unit', 'Sold per (unit)', templateFor(b.category).units.slice(0, 4).join(' / '), ['unit', 'uom', 'soldper', 'per', 'units']),
     F('tax', 'GST / tax', '5 or 5% or GST 5%', ['gst', 'tax', 'taxrate', 'gstrate', 'vat', 'gstpercent']),
     form.showFoodType && F('isVeg', 'Veg / Non-veg', 'veg / non-veg', ['veg', 'vegnonveg', 'foodtype', 'isveg', 'type']),
@@ -131,6 +133,7 @@ export interface ImportItem {
   costPrice?: number
   barcode?: string
   sku?: string
+  hsn?: string
   unit?: string
   taxRateId?: string | null
   isVeg?: boolean
@@ -230,6 +233,11 @@ export function checkRows(rows: Partial<Record<ImportFieldKey, string>>[], ctx: 
       }
     }
     if (has('sku')) item.sku = v('sku')
+    if (has('hsn')) {
+      const h = cleanHsn(v('hsn'))
+      if (hsnError(h)) warnings.push(`HSN “${v('hsn')}” isn’t 4, 6 or 8 digits — left empty`)
+      else if (h) item.hsn = h
+    }
     if (has('unit')) {
       const t = norm(v('unit'))
       const u = units.includes(t) ? t : UNIT_ALIASES[t]

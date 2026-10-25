@@ -46,7 +46,7 @@ export default function Dashboard() {
   const { data: running = [] } = useData(() => api.orders.running())
   const { data: kots = [] } = useData(() => (mod('kitchen') ? api.kitchen.list() : Promise.resolve([])))
   const { data: products = [] } = useData(() => api.products.list())
-  const { data: recent = [] } = useData(() => api.orders.list({ status: 'completed' }).then((o) => o.slice(0, 6)))
+  const { data: recent = [] } = useData(() => api.orders.list({ status: 'completed', limit: 6 }))
   const vsLabel = range === 'today' ? 'vs yesterday' : range === 'yesterday' ? 'vs day before' : 'vs last period'
   const low = mod('inventory') ? products.filter((x) => x.active && x.trackStock && x.stock <= x.lowStockAt) : []
   const { data: batches = [] } = useData(() => (mod('inventory') ? api.inventory.batches() : Promise.resolve([])))

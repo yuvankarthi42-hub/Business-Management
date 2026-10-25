@@ -23,8 +23,8 @@ export default function AdminLogin() {
           e.preventDefault(); setBusy(true); setError('')
           try { await api.admin.login(u, pw); nav('/admin', { replace: true }) } catch (err) { setError((err as Error).message) } finally { setBusy(false) }
         }}>
-          <Field label="Admin username"><Input value={u} onChange={(e) => setU(e.target.value)} required autoFocus autoComplete="username" autoCapitalize="none" spellCheck={false} /></Field>
-          <Field label="Password">
+          <Field required label="Admin username"><Input value={u} onChange={(e) => setU(e.target.value)} required autoFocus autoComplete="username" autoCapitalize="none" spellCheck={false} /></Field>
+          <Field required label="Password">
             <div className="relative">
               <Input type={show ? 'text' : 'password'} value={pw} onChange={(e) => setPw(e.target.value)} required autoComplete="current-password" className="pr-10" />
               <button type="button" onClick={() => setShow(!show)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" aria-label="Toggle password">{show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>

@@ -2,21 +2,35 @@
 // future REST API backed by MySQL. To migrate: implement the same `api` shape with fetch() calls
 // (see server/README.md) and switch the export in src/data/index.ts. UI code never touches the DB directly.
 import { computeTotals, r2 } from '@/core/pricing'
-import { isHardware, isSupermarket, modulesFor, qrSettings, templateFor } from '@/core/config'
+import { isHardware, isSupermarket, isTextile, modulesFor, qrSettings, templateFor } from '@/core/config'
 import { applySpecials, dateKey } from '@/core/specials'
 import { COUNTRIES, normalizePhone } from '@/core/phone'
-import { makeItem } from '@/core/orderItem'
+import { makeItem, priceOverrideError } from '@/core/orderItem'
+import { cleanDetails, cleanStickers, stickerSettings } from '@/core/stickers'
+import { planDesign, planDiscount, type DesignInput, type DiscountInput } from '@/core/textile'
+import { buildGstReport, cleanGstin, cleanHsn, cleanPartyGst, customerStateOf, GST_STATES, gstinError, hsnError, hsnOf, isInterState, monthRange, returnLines, shopStateOf, splitLineTax, type GstBill, type GstCreditNote, type GstPurchase } from '@/core/gst'
+import { cleanLoyalty, loyaltyOf, pointsExpiry, pointsForReturn, pointsToEarn, pointsValue, redeemError } from '@/core/loyalty'
+import { planPurchase, SUPPLIER_PAY_METHODS, supplierLedger, type PurchaseInput, type SupplierPayMethod } from '@/core/purchases'
 import type {
   Branch, Business, Category, Customer, DiningTable, Expense, KitchenTicket, KotStatus, Order, OrderItem, OrderType, Payment,
   Campaign, ID, PaymentMethod, Permission, Product, Role, Special, StockMovement, StockMovementType, User,
   AdminAuditLog, AdminRole, PlatformAdmin, SubscriptionPeriod, WaMessage, WaTemplate, WhatsAppConfig, ReturnReason, SaleReturn, SaleReturnLine, AttendanceStatus, SalaryPayment, StaffPay, ReminderSettings, BranchPrinter, Ticket, TicketCategory, TicketPriority, TicketStatus,
+  LoyaltySettings, PointsEntry, PointsKind, Purchase, Supplier,
 } from '@/core/types'
 import { uid } from '@/lib/format'
 import { nextInStoreBarcode } from '@/lib/barcode'
 import { getDB, notify, resetDB, tx as dbTx, type DB } from './db'
 import { addMonths, branchLimitMessage, dateInputToEnd, DEACTIVATED_MESSAGE, endOfDay, periodAmount, READ_ONLY_MESSAGE, subscriptionState } from '@/core/subscription'
 import { ownerOf } from './seedPlatform'
-import { compressImage, ensureStoredImage } from './media'
+import { compressImage, ensureStoredImage, LOGO_IMAGE } from './media'
+import { orderNumberCandidates, TRACK_WINDOW_MS, type TrackStage, type TrackView } from '@/core/tracking'
+import type { WaMessageQuery } from '@/core/waReceipts'
+
+/** What a customer's phone may see of a product: no cost or wholesale prices. */
+const forCustomers = (p: Product): Product => ({ ...p, costPrice: 0, wholesalePrice: null })
+
+/** Demo rate limit for "Track my order" (one browser). */
+const trackTries = { minute: 0, n: 0 }
 import { ADMIN_ROLES, adminCan, type AdminPermission } from '@/core/adminRoles'
 import { FEATURES, featureOn, featuresFor, type FeatureFlag, type FeatureKey } from '@/core/features'
 import { renderTemplate, templateErrors, WA_KIND, type WaLang, type WaTemplateKind } from '@/core/whatsapp'
@@ -33,7 +47,7 @@ export interface Session {
   support?: { adminId: string; adminName: string; reason: string; startedAt: string }
 }
 export const ALL_BRANCHES = 'all'
-const DEMO_BUSINESSES = ['biz_foodcorner', 'biz_sweetspot', 'biz_freshmart', 'biz_murugan_hw']
+const DEMO_BUSINESSES = ['biz_foodcorner', 'biz_sweetspot', 'biz_freshmart', 'biz_murugan_hw', 'biz_kanchi_silks']
 const SESSION_KEY = 'billpoodum.session'
 
 export const session = {
@@ -104,6 +118,26 @@ function requirePerm(d: DB, p: Permission) {
   const perms = permissionsOf(d, user)
   if (perms !== 'all' && !perms.has(p)) throw new ApiError('You do not have permission to do this')
   return s
+}
+
+const hasPerm = (d: DB, p: Permission) => { const u = d.users.find((x) => x.id === ctx().userId); const perms = u ? permissionsOf(d, u) : new Set<Permission>(); return perms === 'all' || perms.has(p) }
+
+/**
+ * Same checks as the server: a bill discount needs "Give discounts", a counter price needs "Change item price"
+ * (unless the running order already had exactly that discount / price), and a price is never above MRP.
+ */
+function checkCounterRights(d: DB, draft: OrderDraft) {
+  const prev = draft.id ? mine(d.orders).find((o) => o.id === draft.id) : null
+  const prevManual = prev ? r2(prev.discount - (prev.pointsValue ?? 0)) : 0
+  if ((draft.discount ?? 0) > 0 && Math.abs(prevManual - draft.discount) > 0.001 && !hasPerm(d, 'billing.discount')) throw new ApiError('You don’t have permission to give a discount')
+  for (const i of draft.items) {
+    if (i.priceOverride === undefined) continue
+    const p = d.products.find((x) => x.id === i.productId)
+    const err = priceOverrideError(i.priceOverride, i.variantId ? null : p?.mrp)
+    if (err) throw new ApiError(`${p?.name ?? i.name}: ${err}`)
+    const was = prev?.items.find((x) => x.id === i.id)
+    if (!(was && was.priceOverride === i.priceOverride) && !hasPerm(d, 'billing.price')) throw new ApiError('You don’t have permission to change prices at billing')
+  }
 }
 
 function audit(d: DB, entity: string, entityId: string, action: string, detail = '') {
@@ -181,6 +215,10 @@ export interface OrderDraft {
   source: Order['source']
   /** Set when this is a customer order to pack and deliver (supermarket orders board). */
   fulfilment?: Order['fulfilment']
+  /** Who sold it (textile counters). undefined = keep as is, null = nobody. */
+  salespersonId?: string | null
+  /** Loyalty points to use on this bill (checkout only). */
+  pointsToRedeem?: number
 }
 
 export interface PaymentInput { method: PaymentMethod; amount: number; reference?: string }
@@ -189,11 +227,13 @@ function writeOrder(d: DB, draft: OrderDraft): Order {
   const s = ctx()
   const b = biz(d)
   const totals = computeTotals(draft.items, draft.discount, b.billing)
+  if (draft.salespersonId && !mine(d.users).some((u) => u.id === draft.salespersonId && u.active)) throw new ApiError('Choose a salesperson from your staff')
+  const seller = draft.salespersonId !== undefined ? { salespersonId: draft.salespersonId || null } : {}
   if (draft.id) {
     const o = d.orders.find((x) => x.id === draft.id && x.businessId === s.businessId)
     if (!o) throw new ApiError('Order not found')
     if (o.status !== 'open') throw new ApiError('Only running orders can be edited')
-    Object.assign(o, { type: draft.type, tableId: draft.tableId, customerId: draft.customerId, items: draft.items, notes: draft.notes, ...totals })
+    Object.assign(o, { type: draft.type, tableId: draft.tableId, customerId: draft.customerId, items: draft.items, notes: draft.notes, ...totals, ...seller })
     if (draft.fulfilment) o.fulfilment = draft.fulfilment
     o.balance = r2(o.total - o.paid)
     touch(o, s.userId)
@@ -204,7 +244,7 @@ function writeOrder(d: DB, draft: OrderDraft): Order {
     businessId: s.businessId, branchId: writeBranch(d), type: draft.type, tableId: draft.tableId, customerId: draft.customerId,
     status: 'open', items: draft.items, notes: draft.notes, ...totals, paid: 0, balance: totals.total, paymentStatus: 'unpaid',
     invoiceNumber: null, billedAt: null, cancelledAt: null, cancelReason: null, source: draft.source, ...stamp(s.userId),
-    ...(draft.fulfilment ? { fulfilment: draft.fulfilment } : {}),
+    ...(draft.fulfilment ? { fulfilment: draft.fulfilment } : {}), ...seller,
   }
   d.orders.push(o)
   audit(d, 'order', o.id, 'create', o.number)
@@ -282,6 +322,68 @@ function redeemCreditNote(d: DB, number: string, amount: number) {
   cn.creditRemaining = r2(cn.creditRemaining - amount)
 }
 
+// ---------- Suppliers ----------
+
+function withSupplierStats(d: DB, sp: Supplier): Supplier {
+  const bills = d.purchases.filter((p) => p.businessId === sp.businessId && p.supplierId === sp.id && p.status === 'final')
+  const paid = d.supplierPayments.filter((p) => p.businessId === sp.businessId && p.supplierId === sp.id && !p.voided).reduce((a, p) => a + p.amount, 0)
+  return { ...sp, balance: r2(sp.openingBalance + bills.reduce((a, p) => a + p.total, 0) - paid), purchases: bills.length, lastPurchaseOn: bills.map((p) => p.date).sort().pop() ?? null }
+}
+function paySupplier(d: DB, supplierId: string, input: { amount: number; method: SupplierPayMethod; date?: string; reference?: string; note?: string }, purchaseId: string | null) {
+  const s = ctx()
+  const amount = r2(Number(input.amount))
+  if (!(amount > 0)) throw new ApiError('Enter the amount paid')
+  if (!SUPPLIER_PAY_METHODS.includes(input.method)) throw new ApiError('Choose how it was paid')
+  const day = input.date || dateKey()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || day > dateKey()) throw new ApiError('Enter a valid payment date')
+  const p = { id: uid('spy_'), businessId: s.businessId, branchId: writeBranch(d, { fallback: true }), supplierId, purchaseId, date: day, method: input.method, amount, reference: String(input.reference ?? '').trim(), note: String(input.note ?? '').trim(), voided: false, createdAt: nowIso() }
+  d.supplierPayments.push(p)
+  // Money paid out is also a "Purchase" expense (the bill itself isn't — on credit nothing is paid yet).
+  const name = d.suppliers.find((x) => x.id === supplierId)?.name ?? ''
+  d.expenses.push({ id: uid('exp_'), businessId: s.businessId, branchId: p.branchId, date: day === dateKey() ? nowIso() : `${day}T06:30:00.000Z`, category: 'purchase', amount, method: input.method, notes: `Paid ${name}${p.reference ? ` · ${p.reference}` : ''}`, voided: false, supplierPaymentId: p.id, ...stamp(s.userId) })
+  return p
+}
+
+// ---------- Loyalty points (same rules as backend/src/domain/points.ts) ----------
+
+const ADDS_POINTS: PointsKind[] = ['earn', 'cancel', 'adjust']
+/** Adds (points > 0) or takes (points < 0) points. `cap` takes at most the balance (returns). */
+function movePoints(d: DB, customerId: string, kind: PointsKind, points: number, opts: { orderId?: string | null; returnId?: string | null; ref?: string; note?: string; settings?: LoyaltySettings; cap?: boolean } = {}) {
+  const cu = mine(d.customers).find((c) => c.id === customerId)
+  if (!cu) throw new ApiError('Customer not found')
+  if (!Number.isInteger(points) || points === 0) return { moved: 0, balance: cu.pointsBalance ?? 0 }
+  const bal = cu.pointsBalance ?? 0
+  let move = points
+  if (move < 0 && bal + move < 0) { if (!opts.cap) throw new ApiError(`The customer has only ${bal} points`); move = -bal }
+  if (move === 0) return { moved: 0, balance: bal }
+  if (move < 0) {
+    let left = -move
+    const rows = d.points.filter((r) => r.businessId === cu.businessId && r.customerId === customerId && r.remaining > 0)
+      .sort((a, b) => (a.expiresOn || '9999').localeCompare(b.expiresOn || '9999') || a.createdAt.localeCompare(b.createdAt))
+    for (const r of rows) { if (left <= 0) break; const take = Math.min(left, r.remaining); r.remaining -= take; left -= take }
+  }
+  cu.pointsBalance = bal + move
+  const adds = move > 0 && ADDS_POINTS.includes(kind)
+  d.points.push({
+    id: uid('pts_'), businessId: cu.businessId, customerId, orderId: opts.orderId ?? null, returnId: opts.returnId ?? null, ref: opts.ref ?? '', kind, points: move, balanceAfter: cu.pointsBalance,
+    remaining: adds ? move : 0, expiresOn: adds && kind === 'earn' && opts.settings ? pointsExpiry(opts.settings, dateKey()) : null, note: (opts.note ?? '').slice(0, 150), createdAt: nowIso(),
+  })
+  return { moved: move, balance: cu.pointsBalance }
+}
+function expirePointsMock(d: DB, today: string) {
+  let total = 0
+  for (const r of d.points.filter((x) => x.remaining > 0 && x.expiresOn && x.expiresOn < today)) {
+    const cu = d.customers.find((c) => c.id === r.customerId)
+    const take = Math.min(r.remaining, cu?.pointsBalance ?? 0)
+    r.remaining = 0
+    if (!cu || take <= 0) continue
+    cu.pointsBalance = (cu.pointsBalance ?? 0) - take
+    d.points.push({ id: uid('pts_'), businessId: cu.businessId, customerId: cu.id, orderId: null, ref: '', kind: 'expire', points: -take, balanceAfter: cu.pointsBalance, remaining: 0, expiresOn: null, note: 'Expired', createdAt: nowIso() })
+    total += take
+  }
+  return total
+}
+
 function settle(d: DB, o: Order, pays: PaymentInput[]) {
   const s = ctx()
   const b = biz(d)
@@ -290,6 +392,7 @@ function settle(d: DB, o: Order, pays: PaymentInput[]) {
   if (paidNow > r2(o.total - o.paid) + 0.001) throw new ApiError('Payment exceeds bill amount')
   const balance = r2(o.total - o.paid - paidNow)
   if (balance > 0 && !o.customerId) throw new ApiError('Select a customer to keep the balance as credit')
+  if (o.pointsRedeemed && o.customerId) movePoints(d, o.customerId, 'redeem', -o.pointsRedeemed, { orderId: o.id, note: 'Used on bill' })
   for (const p of real) {
     if (p.method === 'credit_note') redeemCreditNote(d, p.reference ?? '', r2(p.amount))
     d.payments.push({
@@ -311,6 +414,22 @@ function settle(d: DB, o: Order, pays: PaymentInput[]) {
   }
   o.billedAt = nowIso()
   touch(o, s.userId)
+  // GST: HSN on each line (item's, else its category's), B2B snapshot, IGST for another state.
+  const cats = mine(d.categories)
+  o.items = o.items.map((i) => { const p = d.products.find((x) => x.id === i.productId); const h = p ? hsnOf(p, cats) : ''; return h ? { ...i, hsn: h } : i })
+  const cu = o.customerId ? mine(d.customers).find((c) => c.id === o.customerId) : null
+  const pos = customerStateOf(cu)
+  o.customerGstin = cu?.gstin || null
+  o.placeOfSupply = pos
+  o.igst = b.billing.taxEnabled && o.tax > 0 && isInterState(shopStateOf(b), pos) ? true : undefined
+  // Loyalty points for this bill.
+  const loyalty = loyaltyOf(b)
+  if (cu && loyalty.enabled) {
+    const r = movePoints(d, cu.id, 'earn', pointsToEarn(loyalty, o.total, o.items), { orderId: o.id, ref: o.invoiceNumber, note: `Bill ${o.invoiceNumber}`, settings: loyalty })
+    o.pointsEarned = r.moved
+  }
+  if (cu && (loyalty.enabled || o.pointsRedeemed)) o.pointsBalance = cu.pointsBalance ?? 0
+  d.points.filter((r) => r.orderId === o.id && !r.ref).forEach((r) => { r.ref = o.invoiceNumber ?? '' })
   for (const i of o.items) moveStock(d, i.productId, 'sale', -i.qty, `Sold — ${o.invoiceNumber}`, o.id, o.branchId)
   // Free merged tables
   if (o.tableId) d.tables.forEach((t) => { if (t.mergedInto === o.tableId) t.mergedInto = null })
@@ -507,7 +626,8 @@ function payroll(d: DB, month: string) {
     const pay = u.pay ?? null
     // Monthly: full salary less absent days (half day = ½). Unmarked days and leave are paid. Daily: days worked only.
     const basePay = !pay ? 0 : pay.type === 'monthly' ? Math.round(pay.amount - (pay.amount / dim) * (absent + half * 0.5)) : Math.round(pay.amount * (present + half * 0.5))
-    const orders = mine(d.orders).filter((o) => o.status === 'completed' && o.createdBy === u.id && (o.billedAt ?? '').slice(0, 7) === month)
+    // Bills this person sold: the salesperson on the bill, else whoever made it.
+    const orders = mine(d.orders).filter((o) => o.status === 'completed' && (o.salespersonId || o.createdBy) === u.id && (o.billedAt ?? '').slice(0, 7) === month)
     const ids = new Set(orders.map((o) => o.id))
     const returned = mine(d.returns).filter((r) => ids.has(r.orderId)).reduce((a, r) => a + r.total, 0)
     const sales = r2(orders.reduce((a, o) => a + o.total, 0) - returned)
@@ -525,7 +645,7 @@ function payroll(d: DB, month: string) {
 // ---------- Renewal reminders ----------
 
 const DEFAULT_REMINDERS: ReminderSettings = {
-  enabled: true, daysBefore: 7, supportContact: '+91 90000 12345',
+  enabled: true, daysBefore: 7, supportContact: '+91 70139 05970',
   template: REMINDER_SAMPLE.en,
 }
 const reminderSettings = (d: DB): ReminderSettings => ({ ...DEFAULT_REMINDERS, ...d.platform.reminders })
@@ -625,7 +745,7 @@ function exportTables(d: DB, businessId: string, forAdmin: boolean) {
   ]
   if (forAdmin) tables.push({ name: 'Subscription', rows: d.subscriptionPeriods.filter((p) => p.businessId === businessId).map((p) => ({ Kind: p.kind, From: dt(p.startAt), To: dt(p.endAt), Months: p.months ?? 'custom', Branches: p.branches, Amount: p.amount, Note: p.note })) })
   const images = of(d.products).filter((p) => p.imageUrl?.startsWith('data:')).map((p) => ({ path: `images/${p.id}.${p.imageUrl!.startsWith('data:image/webp') ? 'webp' : 'jpg'}`, dataUrl: p.imageUrl! }))
-  return { businessName: b.name, exportedAt: nowIso(), tables, images }
+  return { businessName: b.name, exportedAt: nowIso(), tables, images, truncated: [] as string[] }
 }
 export type ExportBundle = ReturnType<typeof exportTables>
 
@@ -675,7 +795,8 @@ function logWa(d: DB, b: Business, userId: string, m: Omit<WaMessage, 'id' | 'bu
 function liveMessage(m: WaMessage): WaMessage {
   if (m.status !== 'sent') return m
   const age = Date.now() - new Date(m.createdAt).getTime()
-  return { ...m, status: age > 30_000 ? 'read' : age > 4_000 ? 'delivered' : 'sent' }
+  // Demo receipts are simulated: the screen keeps moving the ticks itself (core/waReceipts.ts).
+  return { ...m, simulated: true, status: age > 30_000 ? 'read' : age > 4_000 ? 'delivered' : 'sent' }
 }
 
 // ---------- Product admin ----------
@@ -763,7 +884,7 @@ export const api = {
         try { mobile = normalizePhone(id, 'IN') } catch (e) { throw new ApiError((e as Error).message) }
       }
       const u = d.users.find((x) => x.username === id) ?? d.users.find((x) => (mobile && x.phone === mobile) || (!!x.email && x.email.toLowerCase() === id))
-      if (!u || u.password !== password) throw new ApiError('Wrong mobile number or password')
+      if (!u || u.canLogin === false || !u.password || u.password !== password) throw new ApiError('Wrong mobile number or password')
       if (!u.active) throw new ApiError('Your login has been turned off. Ask your shop owner.')
       const b = d.businesses.find((x) => x.id === u.businessId)
       if (!b || subscriptionState(b).blocked) throw new ApiError(DEACTIVATED_MESSAGE)
@@ -833,7 +954,7 @@ export const api = {
       const d = getDB()
       return DEMO_BUSINESSES.map((id) => d.businesses.find((b) => b.id === id)).filter(Boolean).map((b) => ({
         business: { id: b!.id, name: b!.name, subType: b!.subType, emoji: b!.logoEmoji },
-        users: d.users.filter((u) => u.businessId === b!.id && u.active).map((u) => ({ ...u, role: d.roles.find((r) => r.id === u.roleId)?.name ?? '', branch: d.branches.find((x) => x.id === u.branchId)?.name ?? '' })),
+        users: d.users.filter((u) => u.businessId === b!.id && u.active && u.canLogin !== false).map((u) => ({ ...u, role: d.roles.find((r) => r.id === u.roleId)?.name ?? '', branch: d.branches.find((x) => x.id === u.branchId)?.name ?? '' })),
       }))
     },
   },
@@ -845,8 +966,26 @@ export const api = {
         const b = biz(d)
         if (patch.defaultCountry && !COUNTRIES.some((c) => c.iso === patch.defaultCountry)) throw new ApiError('Unknown country')
         if (patch.phone !== undefined) patch = { ...patch, phone: cleanPhone(patch.phone, patch.defaultCountry ?? b.defaultCountry) }
+        if (patch.stickers) { try { patch = { ...patch, stickers: cleanStickers(patch.stickers, stickerSettings(b)) } } catch (e) { throw new ApiError((e as Error).message) } }
+        if (patch.gstin !== undefined && cleanGstin(patch.gstin) !== cleanGstin(b.gstin)) { const err = gstinError(patch.gstin); if (err) throw new ApiError(err); patch = { ...patch, gstin: cleanGstin(patch.gstin) } }
+        if (patch.stateCode && !GST_STATES[patch.stateCode]) throw new ApiError('Choose a state')
+        if (patch.loyalty) { try { patch = { ...patch, loyalty: cleanLoyalty(patch.loyalty, loyaltyOf(b)) } } catch (e) { throw new ApiError((e as Error).message) } }
+        if ('logoUrl' in patch) { const { logoUrl: _l, ...rest } = patch; void _l; patch = rest } // changed only through setLogo
         Object.assign(b, patch)
         audit(d, 'business', b.id, 'update', Object.keys(patch).join(', '))
+        return clone(b)
+      })
+    },
+    /** Shop logo: compressed (≤ 80 KB, 512 px) and kept with the business. null removes it (the Kadai Kalanjiyam logo shows again). */
+    async setLogo(file: Blob | null) {
+      assertCanWrite(getDB(), 'settings.manage')
+      let url: string | null = null
+      if (file) { try { url = (await compressImage(file, LOGO_IMAGE)).url } catch (e) { throw new ApiError((e as Error).message) } }
+      return tx((d) => {
+        requirePerm(d, 'settings.manage')
+        const b = biz(d)
+        b.logoUrl = url
+        audit(d, 'business', b.id, 'update', url ? 'logo uploaded' : 'logo removed')
         return clone(b)
       })
     },
@@ -868,8 +1007,9 @@ export const api = {
         Object.assign(b, { name: input.name.trim(), category: input.category, subType: input.subType, modules: input.modules, terminology: input.terminology })
         b.billing.orderTypes = input.orderTypes
         b.billing.defaultTaxRateId = input.category === 'retail' ? 'tax_0' : 'tax_5'
-        b.billing.taxMode = isSupermarket(b) ? 'inclusive' : 'exclusive' // MRP / shelf prices include GST
+        b.billing.taxMode = isSupermarket(b) || isTextile(b) ? 'inclusive' : 'exclusive' // MRP / shelf prices include GST
         if (isHardware(b)) { b.modules.mobileOrders = true; b.modules.customerOrders = true; b.billing.defaultTaxRateId = 'tax_18' }
+        if (isTextile(b)) b.billing.defaultTaxRateId = 'tax_5'
         b.logoEmoji = { food: '🍔', restaurant: '🍽️', retail: '🛒', service: '✂️' }[input.category]
 
         // Categories: update kept ones, add new ones, remove the ones taken out of the list.
@@ -1027,20 +1167,28 @@ export const api = {
     async save(u: Partial<User> & { name: string; phone: string; roleId: string }) {
       return tx((d) => {
         const s = requirePerm(d, 'users.manage')
-        const phone = cleanPhone(u.phone, biz(d).defaultCountry, { required: 'Enter the mobile number (used to sign in)' })
-        if (d.users.some((x) => x.phone === phone && x.id !== u.id)) throw new ApiError('Mobile number already used by another user')
+        if (!String(u.name ?? '').trim()) throw new ApiError('Enter the name')
         const existing = u.id ? d.users.find((x) => x.id === u.id && x.businessId === s.businessId) : null
+        // Staff who don't use the app (cleaners, helpers): no role, no password, never sign in.
+        const canLogin = u.canLogin === undefined ? (existing ? existing.canLogin !== false : true) : u.canLogin !== false
+        if (!canLogin && existing?.id === s.userId) throw new ApiError('You can’t turn off app access for yourself')
+        if (!canLogin && existing?.username) throw new ApiError('The owner’s login can’t be turned into a staff member without app access')
+        const phone = cleanPhone(u.phone, biz(d).defaultCountry, { required: canLogin ? 'Enter the mobile number (used to sign in)' : 'Enter the mobile number' })
+        if (d.users.some((x) => x.phone === phone && x.id !== u.id)) throw new ApiError('Mobile number already used by another user')
+        if (canLogin && !d.roles.some((r) => r.id === u.roleId && r.businessId === s.businessId)) throw new ApiError('Choose a role')
+        if (canLogin && (!existing || existing.canLogin === false) && !u.password) throw new ApiError('Enter a password (at least 6 characters)')
         if (existing) {
-          Object.assign(existing, { name: u.name, phone, email: u.email ?? '', roleId: u.roleId, active: u.active ?? existing.active })
+          Object.assign(existing, { name: u.name, phone, email: u.email ?? '', roleId: canLogin ? u.roleId : (u.roleId ?? ''), active: u.active ?? existing.active, canLogin })
+          if (!canLogin) existing.password = ''
           if (u.branchIds) Object.assign(existing, branchAccess(d, s.businessId, u.branchIds))
-          if (u.password) existing.password = u.password
+          if (canLogin && u.password) existing.password = u.password
           touch(existing, s.userId)
           audit(d, 'user', existing.id, 'update', u.name)
           return clone(existing)
         }
         const nu: User = {
           id: uid('usr_'), businessId: s.businessId, name: u.name, phone, email: u.email ?? '',
-          password: u.password || 'demo123', roleId: u.roleId, active: true, ...stamp(s.userId),
+          password: canLogin ? u.password || 'demo123' : '', roleId: canLogin ? u.roleId : (u.roleId ?? ''), active: true, canLogin, ...(u.pay ? { pay: u.pay } : {}), ...stamp(s.userId),
           ...branchAccess(d, s.businessId, u.branchIds?.length ? u.branchIds : [writeBranch(d, { fallback: true })]),
         }
         d.users.push(nu)
@@ -1058,9 +1206,11 @@ export const api = {
       const img = await storeImage(c.imageUrl, c.thumbUrl)
       return tx((d) => {
         const s = requirePerm(d, 'products.manage')
+        const hsn = c.hsn !== undefined ? cleanHsn(c.hsn) : undefined
+        if (hsn && hsnError(hsn)) throw new ApiError(hsnError(hsn))
         const ex = c.id ? d.categories.find((x) => x.id === c.id) : null
-        if (ex) { Object.assign(ex, { name: c.name, emoji: c.emoji ?? ex.emoji, ...(img ?? {}) }); return clone(ex) }
-        const nc: Category = { id: uid('cat_'), businessId: s.businessId, name: c.name, emoji: c.emoji ?? '', imageUrl: img?.imageUrl ?? null, thumbUrl: img?.thumbUrl ?? null, sort: mine(d.categories).length }
+        if (ex) { Object.assign(ex, { name: c.name, emoji: c.emoji ?? ex.emoji, ...(img ?? {}), ...(hsn !== undefined ? { hsn: hsn || null } : {}) }); return clone(ex) }
+        const nc: Category = { id: uid('cat_'), businessId: s.businessId, name: c.name, emoji: c.emoji ?? '', imageUrl: img?.imageUrl ?? null, thumbUrl: img?.thumbUrl ?? null, sort: mine(d.categories).length, hsn: hsn || null }
         d.categories.push(nc)
         return clone(nc)
       })
@@ -1093,13 +1243,15 @@ export const api = {
       return tx((d) => {
         const s = requirePerm(d, 'products.manage')
         if (!p.name.trim()) throw new ApiError('Name is required')
+        if (p.hsn !== undefined && hsnError(cleanHsn(p.hsn))) throw new ApiError(hsnError(cleanHsn(p.hsn)))
+        if (p.hsn !== undefined) p.hsn = cleanHsn(p.hsn) || null
         const code = (p.barcode ?? '').trim()
         const dup = code && mine(d.products).find((x) => x.id !== p.id && x.barcode === code)
         if (dup) throw new ApiError(`Barcode ${code} is already used by ${dup.name}`)
         const ex = p.id ? d.products.find((x) => x.id === p.id && x.businessId === s.businessId) : null
         if (ex) {
           const { stock: _ignored, stockByBranch: _ignored2, nextExpiry: _ignored3, ...rest } = p as Product & { openingBatch?: BatchInput } // stock changes only through movements
-          Object.assign(ex, rest)
+          Object.assign(ex, rest, rest.details !== undefined ? { details: cleanDetails(rest.details) } : {})
           touch(ex, s.userId)
           audit(d, 'product', ex.id, 'update', ex.name)
           return clone(ex)
@@ -1109,7 +1261,7 @@ export const api = {
           emoji: p.emoji ?? '', imageUrl: p.imageUrl ?? null, thumbUrl: p.thumbUrl ?? null, mrp: p.mrp ?? null, sku: p.sku ?? '', barcode: p.barcode ?? '', unit: p.unit || 'pc', price: p.price ?? 0,
           costPrice: p.costPrice ?? 0, wholesalePrice: p.wholesalePrice ?? null, variants: p.variants ?? [], addOns: p.addOns ?? [], taxRateId: p.taxRateId ?? null,
           trackStock: p.trackStock ?? false, trackExpiry: p.trackExpiry ?? false, stock: 0, stockByBranch: {}, lowStockAt: p.lowStockAt ?? 0, isVeg: p.isVeg ?? true,
-          sendToKitchen: p.sendToKitchen ?? true, active: p.active ?? true, ...stamp(s.userId),
+          sendToKitchen: p.sendToKitchen ?? true, active: p.active ?? true, details: cleanDetails(p.details), hsn: p.hsn ?? null, ...stamp(s.userId),
         }
         d.products.push(np)
         if (np.trackStock && (p.stock ?? 0) > 0) moveStock(d, np.id, 'opening', p.stock!, 'Opening stock', null, writeBranch(d, { fallback: true }), (p as { openingBatch?: BatchInput }).openingBatch)
@@ -1172,7 +1324,7 @@ export const api = {
             if (opts.onExisting === 'skip') { skippedRows.push(it.row); continue }
             const patch: Partial<Product> = { name, price: it.price }
             const set = <K extends keyof Product>(k: K, v: Product[K] | undefined) => { if (v !== undefined) patch[k] = v }
-            set('categoryId', categoryFor(it.categoryName)); set('mrp', it.mrp); set('wholesalePrice', it.wholesalePrice); set('costPrice', it.costPrice); set('barcode', it.barcode); set('sku', it.sku)
+            set('categoryId', categoryFor(it.categoryName)); set('mrp', it.mrp); set('wholesalePrice', it.wholesalePrice); set('costPrice', it.costPrice); set('barcode', it.barcode); set('sku', it.sku); set('hsn', it.hsn)
             set('unit', it.unit); set('taxRateId', it.taxRateId); set('isVeg', it.isVeg); set('variants', opt(it.variants)); set('addOns', opt(it.addOns))
             set('trackStock', it.trackStock); set('lowStockAt', it.lowStockAt); set('trackExpiry', it.trackExpiry); set('sendToKitchen', it.sendToKitchen)
             set('kind', it.kind); set('imageUrl', it.imageUrl); set('thumbUrl', it.thumbUrl); set('active', it.active)
@@ -1184,7 +1336,7 @@ export const api = {
           const service = it.kind === 'service'
           const p: Product = {
             id: uid('prd_'), businessId: s.businessId, name, categoryId: categoryFor(it.categoryName) ?? null, kind: it.kind ?? (b.category === 'service' ? 'service' : 'goods'),
-            emoji: '', imageUrl: it.imageUrl ?? null, thumbUrl: it.thumbUrl ?? null, mrp: it.mrp ?? null, sku: it.sku ?? '', barcode: it.barcode ?? '', unit: it.unit || (service ? 'service' : templateFor(b.category).units[0] ?? 'pc'),
+            emoji: '', imageUrl: it.imageUrl ?? null, thumbUrl: it.thumbUrl ?? null, mrp: it.mrp ?? null, sku: it.sku ?? '', hsn: it.hsn ?? null, barcode: it.barcode ?? '', unit: it.unit || (service ? 'service' : templateFor(b.category).units[0] ?? 'pc'),
             price: it.price, wholesalePrice: it.wholesalePrice ?? null, costPrice: it.costPrice ?? 0, variants: opt(it.variants) ?? [], addOns: opt(it.addOns) ?? [], taxRateId: it.taxRateId ?? null,
             trackStock: !service && (it.trackStock ?? b.category === 'retail'), trackExpiry: it.trackExpiry ?? false, stock: 0, stockByBranch: {}, lowStockAt: it.lowStockAt ?? (b.category === 'retail' ? 5 : 0),
             isVeg: it.isVeg ?? true, sendToKitchen: it.sendToKitchen ?? (b.category === 'food' || b.category === 'restaurant'), active: it.active ?? true, ...stamp(s.userId),
@@ -1196,6 +1348,43 @@ export const api = {
         }
         audit(d, 'product', 'import', 'import', `${created} added, ${updated} updated, ${skippedRows.length} skipped from ${opts.fileName}`)
         return { created, updated, skippedRows, newCategories: newCats, photosCompressed, photosLinked }
+      })
+    },
+    /** Textile: one design in many colours / sizes → one item each, with its own code (for the QR sticker) and stock. */
+    async saveDesign(input: DesignInput) {
+      assertCanWrite(getDB(), 'products.manage')
+      const img = await storeImage(input.imageUrl, input.thumbUrl)
+      return tx((d) => {
+        const s = requirePerm(d, 'products.manage')
+        let plan
+        try { plan = planDesign({ ...input, ...(img ?? {}) }, mine(d.products)) } catch (e) { throw new ApiError((e as Error).message) }
+        const branch = writeBranch(d, { fallback: true })
+        const made = plan.map((p) => {
+          const np: Product = {
+            id: uid('prd_'), businessId: s.businessId, name: p.name, categoryId: p.categoryId ?? null, kind: 'goods', emoji: '', imageUrl: p.imageUrl ?? null, thumbUrl: p.thumbUrl ?? null,
+            mrp: p.mrp ?? null, sku: p.sku ?? '', barcode: nextInStoreBarcode(mine(d.products).map((x) => x.barcode)), unit: p.unit || 'pc', price: p.price ?? 0, costPrice: p.costPrice ?? 0,
+            wholesalePrice: null, variants: [], addOns: [], taxRateId: p.taxRateId ?? null, trackStock: true, trackExpiry: false, stock: 0, stockByBranch: {}, lowStockAt: p.lowStockAt ?? 1,
+            isVeg: true, sendToKitchen: false, active: true, details: p.details ?? null, hsn: p.hsn ?? null, ...stamp(s.userId),
+          }
+          d.products.push(np)
+          if (p.stock > 0) moveStock(d, np.id, 'opening', p.stock, 'Opening stock', null, branch)
+          return np
+        })
+        audit(d, 'product', made[0].id, 'create', `Design ${input.design || input.name}: ${made.length} item${made.length === 1 ? '' : 's'}`)
+        const sc = scope(d)
+        return clone(made.map((p) => ({ ...p, stock: stockIn(p, sc) })))
+      })
+    },
+    /** New selling prices = MRP less a % for a category (or chosen items). 0% = back to MRP. */
+    async setDiscount(input: DiscountInput) {
+      return tx((d) => {
+        const s = requirePerm(d, 'products.manage')
+        let plan
+        try { plan = planDiscount(input, mine(d.products)) } catch (e) { throw new ApiError((e as Error).message) }
+        for (const x of plan.changes) { const p = d.products.find((y) => y.id === x.id)!; p.price = x.price; touch(p, s.userId) }
+        const cat = input.productIds?.length ? `${input.productIds.length} items` : input.categoryId ? mine(d.categories).find((c) => c.id === input.categoryId)?.name ?? '' : 'all items'
+        audit(d, 'product', 'discount', 'update', `Discount ${input.pct}% on ${cat}: ${plan.changes.length} prices changed`)
+        return { updated: plan.changes.length, ids: plan.ids, noMrp: plan.noMrp, withSizes: plan.withSizes }
       })
     },
     /** Give every listed product without a barcode its own in-store EAN-13 (prefix 20), for printing labels. */
@@ -1219,7 +1408,12 @@ export const api = {
     async list() {
       const d = getDB()
       return clone(mine(d.customers).map((c) => ({ ...c, stats: customerStats(d, c.id) })))
+    },    async one(id: string) {
+      const d = getDB()
+      const c = mine(d.customers).find((x) => x.id === id)
+      return c ? clone({ ...c, stats: customerStats(d, c.id) }) : null
     },
+
     async history(customerId: string) {
       const d = getDB()
       return clone({
@@ -1232,12 +1426,33 @@ export const api = {
         const s = ctx()
         const phone = cleanPhone(c.phone, biz(d).defaultCountry)
         if (phone && d.customers.some((x) => x.businessId === s.businessId && x.phone === phone && x.id !== c.id)) throw new ApiError('A customer with this phone already exists')
+        let gst: { gstin?: string | null; stateCode?: string | null } = {}
+        if (c.gstin !== undefined || c.stateCode !== undefined) { try { gst = cleanPartyGst(c) } catch (e) { throw new ApiError((e as Error).message) } }
         const ex = c.id ? d.customers.find((x) => x.id === c.id && x.businessId === s.businessId) : null
-        if (ex) { Object.assign(ex, { ...c, phone }); touch(ex, s.userId); return clone(ex) }
-        const nc: Customer = { id: uid('cus_'), businessId: s.businessId, name: c.name.trim(), phone, email: c.email ?? '', address: c.address ?? '', notes: c.notes ?? '', marketingOptIn: c.marketingOptIn ?? true, priceTier: c.priceTier === 'wholesale' ? 'wholesale' : 'retail', ...stamp(s.userId) }
+        const { pointsBalance: _pts, ...input } = c // points change only through bills / adjustments
+        if (ex) { Object.assign(ex, { ...input, phone, ...gst }); touch(ex, s.userId); return clone(ex) }
+        const nc: Customer = { id: uid('cus_'), businessId: s.businessId, name: c.name.trim(), phone, email: c.email ?? '', address: c.address ?? '', notes: c.notes ?? '', marketingOptIn: c.marketingOptIn ?? true, priceTier: c.priceTier === 'wholesale' ? 'wholesale' : 'retail', ...gst, pointsBalance: 0, ...stamp(s.userId) }
         d.customers.push(nc)
         audit(d, 'customer', nc.id, 'create', nc.name)
         return clone(nc)
+      })
+    },
+    /** Loyalty points history (newest first). */
+    async points(customerId: string): Promise<PointsEntry[]> {
+      const d = getDB()
+      // Newest first; entries made in the same moment keep their real order (latest last added).
+      return clone(mine(d.points).filter((r) => r.customerId === customerId).reverse().map(({ businessId: _b, remaining: _r, returnId: _x, ...e }) => e))
+    },
+    /** Owner adds or removes points by hand, with a reason. */
+    async adjustPoints(customerId: string, points: number, reason: string) {
+      return tx((d) => {
+        requirePerm(d, 'settings.manage')
+        const n = Math.trunc(Number(points))
+        if (!n || Math.abs(n) > 1_000_000) throw new ApiError('Enter the points to add or remove')
+        if (!String(reason ?? '').trim()) throw new ApiError('Enter a reason')
+        const r = movePoints(d, customerId, 'adjust', n, { note: reason.trim() })
+        audit(d, 'customer', customerId, 'points', `${n > 0 ? '+' : ''}${n}: ${reason.trim()}`)
+        return { balance: r.balance }
       })
     },
     /** Collect outstanding dues — allocated to the oldest unpaid bills first (FIFO). */
@@ -1265,13 +1480,14 @@ export const api = {
   },
 
   orders: {
-    async list(filter: { from?: Date; to?: Date; status?: Order['status'] | 'all' } = {}) {
+    async list(filter: { from?: Date; to?: Date; status?: Order['status'] | 'all'; limit?: number } = {}) {
       const d = getDB()
-      return clone(here(d, d.orders).filter((o) => {
+      const list = here(d, d.orders).filter((o) => {
         if (filter.status && filter.status !== 'all' && o.status !== filter.status) return false
         if (filter.from && filter.to && !inRange(o.createdAt, filter.from, filter.to) && !inRange(o.billedAt, filter.from, filter.to)) return false
         return true
-      }).sort((a, b) => b.createdAt.localeCompare(a.createdAt)))
+      }).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      return clone(filter.limit ? list.slice(0, Math.max(1, Math.floor(filter.limit))) : list)
     },
     async running() {
       return clone(here(getDB(), getDB().orders).filter((o) => o.status === 'open').sort((a, b) => a.createdAt.localeCompare(b.createdAt)))
@@ -1290,6 +1506,7 @@ export const api = {
           const busy = here(d, d.orders).find((o) => o.status === 'open' && o.tableId === draft.tableId)
           if (busy) throw new ApiError('This table already has a running order')
         }
+        checkCounterRights(d, draft)
         const o = writeOrder(d, draft)
         const kot = opts.sendToKitchen && biz(d).modules.kitchen ? kitchenDelta(d, o) : null
         return clone({ order: o, kot })
@@ -1324,7 +1541,20 @@ export const api = {
       return tx((d) => {
         requirePerm(d, 'billing.create')
         if (!draft.items.length) throw new ApiError('Add at least one item')
-        const o = writeOrder(d, draft)
+        checkCounterRights(d, draft)
+        // Loyalty points: their value is a discount before GST (checked against the rules and the balance).
+        let redeem = { points: 0, value: 0 }
+        if (draft.pointsToRedeem) {
+          const pts = Math.floor(Number(draft.pointsToRedeem))
+          const cu = draft.customerId ? mine(d.customers).find((c) => c.id === draft.customerId) : null
+          if (!cu) throw new ApiError('Select the customer to use their points')
+          const ls = loyaltyOf(biz(d))
+          const err = redeemError(ls, pts, cu.pointsBalance ?? 0, computeTotals(draft.items, draft.discount, biz(d).billing).total)
+          if (err) throw new ApiError(err)
+          redeem = { points: pts, value: pointsValue(ls, pts) }
+        }
+        const o = writeOrder(d, { ...draft, discount: r2(draft.discount + redeem.value) })
+        if (redeem.points) { o.pointsRedeemed = redeem.points; o.pointsValue = redeem.value }
         if (biz(d).modules.kitchen && draft.type !== 'counter') kitchenDelta(d, o)
         settle(d, o, pays)
         return clone(o)
@@ -1356,8 +1586,19 @@ export const api = {
         o.status = 'cancelled'; o.cancelledAt = nowIso(); o.cancelReason = reason
         touch(o, s.userId)
         // Reverse money and stock instead of deleting.
-        d.payments.filter((p) => p.orderId === o.id && !p.voided).forEach((p) => { p.voided = true; touch(p, s.userId) })
+        d.payments.filter((p) => p.orderId === o.id && !p.voided).forEach((p) => {
+          p.voided = true; touch(p, s.userId)
+          // Paid with a credit note: the customer gets that credit back.
+          if (p.method === 'credit_note') {
+            const cn = mine(d.returns).find((r) => r.number.toUpperCase() === String(p.reference ?? '').trim().toUpperCase())
+            if (cn) cn.creditRemaining = r2(Math.min(cn.creditIssued, cn.creditRemaining + p.amount))
+          }
+        })
         if (wasBilled) o.items.forEach((i) => moveStock(d, i.productId, 'return', i.qty, `Cancelled — ${o.invoiceNumber}`, o.id, o.branchId))
+        if (wasBilled && o.customerId) {
+          if (o.pointsEarned) movePoints(d, o.customerId, 'cancel', -o.pointsEarned, { orderId: o.id, ref: o.invoiceNumber ?? '', note: `Bill ${o.invoiceNumber} cancelled`, cap: true })
+          if (o.pointsRedeemed) movePoints(d, o.customerId, 'cancel', o.pointsRedeemed, { orderId: o.id, ref: o.invoiceNumber ?? '', note: `Bill ${o.invoiceNumber} cancelled — points back` })
+        }
         d.kots.filter((k) => k.orderId === o.id && k.status !== 'completed').forEach((k) => { k.status = 'cancelled'; k.statusAt = nowIso() })
         if (o.tableId) d.tables.forEach((t) => { if (t.mergedInto === o.tableId) t.mergedInto = null })
         audit(d, 'order', o.id, 'cancel', reason)
@@ -1471,7 +1712,133 @@ export const api = {
       return tx((d) => {
         const s = requirePerm(d, 'expenses.manage')
         const e = d.expenses.find((x) => x.id === id && x.businessId === s.businessId)
+        if (e?.supplierPaymentId) throw new ApiError('This is a supplier payment — void it from the supplier’s statement (Inventory → Suppliers)')
         if (e) { e.voided = true; touch(e, s.userId); audit(d, 'expense', id, 'void') }
+      })
+    },
+  },
+
+  /** Suppliers and their statement (Inventory → Suppliers). */
+  suppliers: {
+    async list(): Promise<Supplier[]> {
+      const d = getDB()
+      requirePerm(d, 'inventory.manage')
+      return clone(mine(d.suppliers).sort((a, b) => a.name.localeCompare(b.name)).map((x) => withSupplierStats(d, x)))
+    },
+    async save(input: Partial<Supplier> & { name: string }) {
+      return tx((d) => {
+        const s = requirePerm(d, 'inventory.manage')
+        const name = String(input.name ?? '').replace(/\s+/g, ' ').trim()
+        if (!name) throw new ApiError('Enter the supplier’s name')
+        let gst
+        try { gst = cleanPartyGst(input) } catch (e) { throw new ApiError((e as Error).message) }
+        const opening = Number(input.openingBalance ?? 0)
+        if (!Number.isFinite(opening) || Math.abs(opening) > 1e9) throw new ApiError('Enter a valid opening balance')
+        if (mine(d.suppliers).some((x) => x.id !== input.id && x.name.trim().toLowerCase() === name.toLowerCase())) throw new ApiError(`A supplier called ${name} already exists`)
+        const data = { name, phone: cleanPhone(input.phone ?? '', biz(d).defaultCountry), gstin: gst.gstin ?? '', stateCode: gst.stateCode, address: String(input.address ?? '').trim(), notes: String(input.notes ?? '').trim(), openingBalance: r2(opening), active: input.active !== false }
+        const ex = input.id ? mine(d.suppliers).find((x) => x.id === input.id) : null
+        if (input.id && !ex) throw new ApiError('Supplier not found')
+        const row: Supplier = ex ? Object.assign(ex, data) : { id: uid('sup_'), businessId: s.businessId, ...data }
+        if (!ex) d.suppliers.push(row)
+        audit(d, 'supplier', row.id, ex ? 'update' : 'create', name)
+        return clone(withSupplierStats(d, row))
+      })
+    },
+    async ledger(supplierId: string) {
+      const d = getDB()
+      requirePerm(d, 'inventory.manage')
+      const sp = mine(d.suppliers).find((x) => x.id === supplierId)
+      if (!sp) throw new ApiError('Supplier not found')
+      const purchases = mine(d.purchases).filter((p) => p.supplierId === sp.id).sort((a, b) => a.date.localeCompare(b.date))
+      const payments = mine(d.supplierPayments).filter((p) => p.supplierId === sp.id).map(({ businessId: _b, branchId: _r, ...p }) => p)
+      const { rows, balance } = supplierLedger(sp.openingBalance, purchases, payments)
+      return clone({ supplier: withSupplierStats(d, sp), rows, balance, purchases, payments })
+    },
+    async pay(supplierId: string, input: { amount: number; method: SupplierPayMethod; date?: string; reference?: string; note?: string }) {
+      return tx((d) => {
+        requirePerm(d, 'inventory.manage')
+        const sp = mine(d.suppliers).find((x) => x.id === supplierId)
+        if (!sp) throw new ApiError('Supplier not found')
+        const p = paySupplier(d, sp.id, input, null)
+        audit(d, 'supplier', sp.id, 'update', `paid ${input.amount} via ${input.method}`)
+        return clone(p)
+      })
+    },
+    async voidPayment(paymentId: string, reason: string) {
+      return tx((d) => {
+        requirePerm(d, 'inventory.manage')
+        const p = mine(d.supplierPayments).find((x) => x.id === paymentId)
+        if (!p) throw new ApiError('Payment not found')
+        if (p.voided) throw new ApiError('This payment is already voided')
+        if (!String(reason ?? '').trim()) throw new ApiError('Enter a reason')
+        p.voided = true
+        p.note = `${p.note} [void: ${reason.trim()}]`.trim()
+        d.expenses.filter((e) => e.supplierPaymentId === p.id).forEach((e) => { e.voided = true })
+        audit(d, 'supplier', p.supplierId, 'void', `payment ${p.amount}: ${reason}`)
+      })
+    },
+  },
+
+  /** Purchase bills from suppliers: stock in, cost price, input GST, part payment. */
+  purchases: {
+    async list(from?: string, to?: string): Promise<Purchase[]> {
+      const d = getDB()
+      requirePerm(d, 'inventory.manage')
+      const sc = scope(d)
+      return clone(mine(d.purchases).filter((p) => sc.has(p.branchId) && (!from || p.date >= from) && (!to || p.date <= to)).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)))
+    },
+    async get(id: string): Promise<Purchase> {
+      const d = getDB()
+      const p = mine(d.purchases).find((x) => x.id === id)
+      if (!p) throw new ApiError('Purchase not found')
+      return clone(p)
+    },
+    async create(input: PurchaseInput): Promise<Purchase> {
+      return tx((d) => {
+        const s = requirePerm(d, 'inventory.manage')
+        const b = biz(d)
+        const sp = mine(d.suppliers).find((x) => x.id === input?.supplierId)
+        if (!sp) throw new ApiError('Choose the supplier')
+        const products = new Map(mine(d.products).map((p) => [p.id, { name: p.name, unit: p.unit, trackExpiry: !!p.trackExpiry, hsn: p.hsn ?? '' }]))
+        let plan
+        try { plan = planPurchase(input, products, dateKey()) } catch (e) { throw new ApiError((e as Error).message) }
+        const seq = (b as Business & { nextPurchaseNumber?: number })
+        seq.nextPurchaseNumber ??= 1
+        const branchId = writeBranch(d)
+        const pur: Purchase = {
+          id: uid('pur_'), number: `PUR-${seq.nextPurchaseNumber++}`, businessId: s.businessId, branchId, supplierId: sp.id, supplierName: sp.name, supplierBillNo: plan.supplierBillNo,
+          date: plan.date, lines: plan.lines.map((l) => ({ ...l, id: uid('pli_') })), taxable: plan.taxable, tax: plan.tax, igst: isInterState(shopStateOf(b), sp.stateCode), roundOff: plan.roundOff,
+          total: plan.total, paid: plan.paid, balance: plan.balance, status: 'final', note: plan.note, voidReason: null, ...stamp(s.userId),
+        }
+        d.purchases.push(pur)
+        for (const l of plan.lines) {
+          const p = d.products.find((x) => x.id === l.productId)!
+          p.costPrice = l.cost
+          p.trackStock = true
+          if (l.hsn && !p.hsn) p.hsn = l.hsn
+          moveStock(d, p.id, 'purchase', l.qty, `Purchase ${pur.number}${plan.supplierBillNo ? ` · bill ${plan.supplierBillNo}` : ''}`, pur.id, branchId, l.expiry || l.batchNo ? { batchNo: l.batchNo, expiry: l.expiry } : undefined)
+        }
+        if (plan.paid > 0) paySupplier(d, sp.id, { amount: plan.paid, method: input.method, date: plan.date, reference: input.reference }, pur.id)
+        audit(d, 'purchase', pur.id, 'create', `${pur.number} · ${sp.name} · ${pur.total}`)
+        return clone(pur)
+      })
+    },
+    async void(id: string, reason: string): Promise<Purchase> {
+      return tx((d) => {
+        requirePerm(d, 'inventory.manage')
+        const pur = mine(d.purchases).find((x) => x.id === id)
+        if (!pur) throw new ApiError('Purchase not found')
+        if (pur.status === 'void') throw new ApiError('This purchase is already voided')
+        if (!String(reason ?? '').trim()) throw new ApiError('Enter a reason')
+        for (const l of pur.lines) {
+          const have = d.products.find((x) => x.id === l.productId)?.stockByBranch?.[pur.branchId] ?? 0
+          if (have + 1e-9 < l.qty) throw new ApiError(`${l.name}: only ${have} left in stock — the purchase can’t be voided`)
+        }
+        pur.status = 'void'
+        pur.voidReason = reason.trim()
+        for (const l of pur.lines) moveStock(d, l.productId, 'adjustment', -l.qty, `Purchase ${pur.number} voided`, pur.id, pur.branchId)
+        audit(d, 'purchase', pur.id, 'void', `${pur.number}: ${reason}`)
+        return clone(pur)
       })
     },
   },
@@ -1613,6 +1980,7 @@ export const api = {
   system: {
     async runDailyJobs() {
       const d = getDB()
+      if (d.points.some((r) => r.remaining > 0 && r.expiresOn && r.expiresOn < dateKey())) dbTx((db) => { expirePointsMock(db, dateKey()) })
       if (!candidatesForReminder(d, 'auto').length) return 0
       return dbTx((db) => sendReminders(db, { trigger: 'auto' }))
     },
@@ -1624,7 +1992,7 @@ export const api = {
     async list() {
       const d = getDB(); requirePerm(d, 'users.manage')
       const sc = scope(d)
-      return clone(mine(d.users).filter((u) => u.active && allowedBranches(d, u).some((b) => sc.has(b))).map((u) => ({ id: u.id, name: u.name, phone: u.phone, role: d.roles.find((r) => r.id === u.roleId)?.name ?? '', pay: u.pay ?? null })))
+      return clone(mine(d.users).filter((u) => u.active && allowedBranches(d, u).some((b) => sc.has(b))).map((u) => ({ id: u.id, name: u.name, phone: u.phone, role: d.roles.find((r) => r.id === u.roleId)?.name ?? '', pay: u.pay ?? null, canLogin: u.canLogin !== false })))
     },
     async day(date: string) {
       const d = getDB(); requirePerm(d, 'users.manage')
@@ -1789,6 +2157,11 @@ export const api = {
         }
         d.returns.push(r)
         for (const l of lines) if (l.restock) moveStock(d, l.productId, 'return', l.qty, `Returned — ${r.number} (${o.invoiceNumber})`, r.id, r.branchId)
+        if (o.customerId && o.pointsEarned) {
+          const target = pointsForReturn(o.pointsEarned, o.total, r2(returnedBefore + total))
+          const already = -d.points.filter((x) => x.orderId === o.id && x.kind === 'return').reduce((a, x) => a + x.points, 0)
+          if (target > already) movePoints(d, o.customerId, 'return', -(target - already), { orderId: o.id, returnId: r.id, ref: r.number, note: `Return ${r.number}`, cap: true })
+        }
         audit(d, 'order', o.id, 'return', `${r.number} · ${b.currencySymbol}${total} · ${lines.length} item(s)`)
         return clone(r)
       })
@@ -1865,7 +2238,8 @@ export const api = {
 
   /** Endpoints that work without staff login (customer QR menu, TV display). */
   public: {
-    async menu(businessId: string, branchId?: string | null, tableId?: string | null) {
+    /** `_fresh`: a new number after a live "menu changed" event, so the browser doesn't reuse its copy. */
+    async menu(businessId: string, branchId?: string | null, tableId?: string | null, _fresh?: number) {
       const d = getDB()
       const b = d.businesses.find((x) => x.id === businessId)
       if (!b) throw new ApiError('Menu not found')
@@ -1875,10 +2249,10 @@ export const api = {
       const products = d.products.filter((p) => p.businessId === businessId && p.active && !(p.trackStock && stockIn(p, [br.id]) <= 0))
       const sp = applySpecials(products, specialsFor(d, businessId))
       return clone({
-        business: { id: b.id, name: b.name, logoEmoji: b.logoEmoji, subType: b.subType, address: b.address, phone: b.phone, defaultCountry: b.defaultCountry ?? 'IN', currencySymbol: b.currencySymbol, billing: b.billing, modules: b.modules, terminology: b.terminology, qr: qrSettings(b) },
+        business: { id: b.id, name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, address: b.address, phone: b.phone, defaultCountry: b.defaultCountry ?? 'IN', currencySymbol: b.currencySymbol, billing: b.billing, modules: b.modules, terminology: b.terminology, qr: qrSettings(b) },
         categories: d.categories.filter((c) => c.businessId === businessId).sort((a, x) => a.sort - x.sort),
-        products: sp.products,
-        specials: sp.specials,
+        products: sp.products.map(forCustomers),
+        specials: sp.specials.map(forCustomers),
         specialInfo: [...sp.info.entries()].map(([productId, v]) => ({ productId, tag: v.special.tag, originalPrice: v.originalPrice, specialPrice: v.special.specialPrice })),
         tables: d.tables.filter((t) => t.businessId === businessId && t.branchId === br.id).map((t) => ({ id: t.id, label: t.label })),
         branch: { id: br.id, name: br.name, address: br.address, phone: br.phone ?? '' },
@@ -1947,27 +2321,83 @@ export const api = {
       const merged = o.cancelReason?.startsWith('Merged into ') ? d.orders.find((x) => x.businessId === businessId && x.number === o!.cancelReason!.slice(12)) : null
       if (merged) o = { ...merged, qrStatus: 'accepted' }
       const kots = d.kots.filter((k) => k.orderId === o!.id).map((k) => k.status)
-      return clone({
-        number: o.number, type: o.type, status: o.status, qrStatus: o.qrStatus, total: o.total, items: o.items,
+      const view: TrackView = {
+        number: o.number, type: o.type, status: o.status, qrStatus: o.qrStatus ?? null, total: o.total, items: o.items,
         table: d.tables.find((t) => t.id === o!.tableId)?.label ?? null, cancelReason: merged ? null : o.cancelReason,
         kitchen: kots.length ? (kots.includes('new') ? 'new' : kots.includes('preparing') ? 'preparing' : kots.includes('ready') ? 'ready' : 'completed') : null,
-        paymentStatus: o.paymentStatus,
-      })
+        paymentStatus: o.paymentStatus, fulfilment: o.fulfilment ?? null,
+      }
+      return clone({ ...view, checkedAt: nowIso(), cached: false })
     },
-    async specials(businessId: string) {
+    /** "Track my order": today's or yesterday's order with this number (at most 10 tries a minute). */
+    async track(businessId: string, number: string) {
+      const d = getDB()
+      const b = d.businesses.find((x) => x.id === businessId)
+      if (!b) throw new ApiError('Shop not found')
+      const minute = Math.floor(Date.now() / 60_000)
+      if (trackTries.minute !== minute) { trackTries.minute = minute; trackTries.n = 0 }
+      if (++trackTries.n > 10) throw new ApiError('Too many tries. Please wait a minute and try again.')
+      const want = orderNumberCandidates(number, b.billing.orderPrefix ?? '#')
+      if (!want.length) throw new ApiError('Enter your order number')
+      const since = new Date(Date.now() - TRACK_WINDOW_MS).toISOString()
+      const o = d.orders.filter((x) => x.businessId === businessId && want.includes(x.number) && x.createdAt >= since).sort((x, y) => y.createdAt.localeCompare(x.createdAt))[0]
+      if (!o) throw new ApiError('No order with that number today. Check the number on your order screen or bill.')
+      return { orderId: o.id, number: o.number }
+    },
+    /** Browser push isn't set up in the demo: the tracking page updates by itself while it is open. */
+    async pushKey() { return { publicKey: null as string | null } },
+    /** Live updates for public screens: none in the demo (its screens update themselves). */
+    async live() { return { url: null as string | null } },
+    async subscribePush(_businessId: string, _orderId: string, _sub: unknown): Promise<{ ok: boolean; stage: TrackStage }> {
+      throw new ApiError('Notifications are not available in the demo')
+    },
+    async specials(businessId: string, _fresh?: number) {
       const d = getDB()
       const b = d.businesses.find((x) => x.id === businessId)
       if (!b) throw new ApiError('Not found')
       const sp = applySpecials(d.products.filter((p) => p.businessId === businessId && p.active), specialsFor(d, businessId))
       return clone({
-        business: { name: b.name, logoEmoji: b.logoEmoji, subType: b.subType, currencySymbol: b.currencySymbol, qr: qrSettings(b), qrOn: b.modules.qrOrdering },
-        items: sp.specials.map((p) => ({ product: p, ...sp.info.get(p.id)! })),
+        business: { name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, currencySymbol: b.currencySymbol, qr: qrSettings(b), qrOn: b.modules.qrOrdering },
+        items: sp.specials.map((p) => ({ product: forCustomers(p), ...sp.info.get(p.id)! })),
       })
     },
   },
 
   reports: {
     async summary(from: Date, to: Date) { return summarize(getDB(), from, to) },
+    /** Best sellers of the last `days` finished days (the billing screen's quick picks). */
+    async topProducts(days = 7, limit = 10) {
+      const today = new Date(); today.setHours(0, 0, 0, 0)
+      const s = await summarize(getDB(), new Date(today.getTime() - days * 86_400_000), new Date(today.getTime() - 1))
+      return s.topProducts.slice(0, limit)
+    },
+    /** Monthly GST (GSTR-1 tables + GSTR-3B summary) for the whole business. */
+    async gst(month: string) {
+      const d = getDB()
+      requirePerm(d, 'reports.view')
+      let range
+      try { range = monthRange(month) } catch (e) { throw new ApiError((e as Error).message) }
+      const b = biz(d)
+      const inMonth = (iso: string | null) => !!iso && dateKey(new Date(iso)) >= range.from && dateKey(new Date(iso)) < range.to
+      const custName = (id: string | null, o?: Order) => mine(d.customers).find((c) => c.id === id)?.name ?? o?.guest?.name ?? ''
+      const bills: GstBill[] = mine(d.orders).filter((o) => o.status === 'completed' && inMonth(o.billedAt)).map((o) => {
+        const split = splitLineTax(o.items, o.discount, b.billing, o.tax)
+        return {
+          invoiceNumber: o.invoiceNumber ?? '', date: dateKey(new Date(o.billedAt!)), customer: custName(o.customerId, o), gstin: o.customerGstin ?? null, placeOfSupply: o.placeOfSupply ?? null, igst: !!o.igst, total: o.total,
+          lines: o.items.map((i, k) => ({ hsn: i.hsn ?? '', name: i.name, unit: i.unit, qty: i.qty, rate: i.taxRate, taxable: split[k].taxable, tax: split[k].tax })),
+        }
+      })
+      const creditNotes: GstCreditNote[] = mine(d.returns).filter((r) => inMonth(r.createdAt)).map((r) => {
+        const o = mine(d.orders).find((x) => x.id === r.orderId)
+        const lines = r.lines.map((l) => { const it = o?.items.find((i) => i.id === l.orderItemId); return { name: l.name, unit: l.unit, hsn: it?.hsn ?? '', qty: l.qty, rate: it?.taxRate ?? 0, amount: l.amount } })
+        return { number: r.number, date: dateKey(new Date(r.createdAt)), invoiceNumber: r.invoiceNumber, customer: custName(r.customerId, o), gstin: o?.customerGstin ?? null, placeOfSupply: o?.placeOfSupply ?? null, igst: !!o?.igst, total: r.total, lines: b.billing.taxEnabled ? returnLines(lines, r.tax) : lines.map((l) => ({ ...l, taxable: l.amount, tax: 0 })) }
+      })
+      const purchases: GstPurchase[] = mine(d.purchases).filter((p) => p.status === 'final' && p.date >= range.from && p.date < range.to).map((p) => ({
+        number: p.number, supplierBillNo: p.supplierBillNo, date: p.date, supplier: p.supplierName, gstin: mine(d.suppliers).find((x) => x.id === p.supplierId)?.gstin || null, igst: p.igst, total: p.total,
+        lines: p.lines.map((l) => ({ rate: l.taxRate, taxable: l.taxable, tax: l.tax })),
+      }))
+      return buildGstReport({ month, shopState: shopStateOf(b), bills, creditNotes, purchases })
+    },
     /** One summary per branch in the current view, plus live alerts — for the multi-branch dashboard. */
     async byBranch(from: Date, to: Date) {
       const d = getDB()
@@ -2060,7 +2490,7 @@ export const api = {
         const owner = d.users.find((u) => u.id === s.userId)
         const to = owner?.phone
         if (!to) throw new ApiError('Add your mobile number to your profile first')
-        return clone(logWa(d, b, s.userId, { kind: 'test', to, customerName: owner!.name, customerId: null, refId: null, body: `Test message from ${b.name} on BillPoodum. Your WhatsApp integration works.`, attachment: null }))
+        return clone(logWa(d, b, s.userId, { kind: 'test', to, customerName: owner!.name, customerId: null, refId: null, body: `Test message from ${b.name} on Kadai Kalanjiyam. Your WhatsApp integration works.`, attachment: null }))
       })
     },
     /** Save a template as a draft, or submit it to Meta for approval. */
@@ -2145,9 +2575,13 @@ export const api = {
         return { sent, skipped }
       })
     },
-    async messages(limit = 200) {
+    /** Newest first. `q` = how many, or { limit, kind, since, before } to read only what a screen needs. */
+    async messages(q: number | WaMessageQuery = 200) {
       const d = getDB()
-      return clone(mine(d.waMessages).slice(-limit).reverse().map(liveMessage))
+      const o: WaMessageQuery = typeof q === 'object' && q ? q : { limit: Number(q) }
+      const n = Math.min(Math.max(1, Math.floor(Number(o.limit) || 200)), 1000)
+      const list = mine(d.waMessages).filter((m) => (!o.kind || m.kind === o.kind) && (!o.since || m.createdAt >= new Date(o.since).toISOString()) && (!o.before || m.createdAt < new Date(o.before).toISOString()))
+      return clone(list.slice(-n).reverse().map(liveMessage))
     },
   },
 
@@ -2378,7 +2812,7 @@ export const api = {
       })
     },
 
-    // ---- Platform WhatsApp (sends renewal reminders from BillPoodum's own number) ----
+    // ---- Platform WhatsApp (sends renewal reminders from Kadai Kalanjiyam's own number) ----
     async waStatus() {
       const d = getDB(); requireAdmin(d, 'customers.view')
       const w = platformWa(d)
@@ -2415,7 +2849,7 @@ export const api = {
         const a = requireAdmin(d, 'pricing.manage')
         const w = d.platform.whatsapp
         if (!w?.phoneNumberId || !d.secrets.some((x) => x.businessId === PLATFORM && x.kind === 'whatsapp_token')) throw new ApiError('Connect the account first')
-        w.verified = { name: 'BillPoodum', number: w.businessNumber, quality: 'High', at: nowIso() }
+        w.verified = { name: 'Kadai Kalanjiyam', number: w.businessNumber, quality: 'High', at: nowIso() }
         adminLog(d, a, 'settings', null, 'WhatsApp connection tested — OK')
         return clone(w.verified)
       })

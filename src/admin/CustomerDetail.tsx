@@ -177,10 +177,10 @@ function EditModal({ c, onClose }: { c: Detail; onClose: () => void }) {
     <Modal open onClose={onClose} title="Edit customer">
       <form className="space-y-4" onSubmit={async (e) => { e.preventDefault(); if (await run(() => api.admin.updateCustomer(c.id, f), 'Customer updated')) onClose() }}>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Business name"><Input required value={f.businessName} onChange={(e) => setF({ ...f, businessName: e.target.value })} /></Field>
-          <Field label="Owner name"><Input required value={f.ownerName} onChange={(e) => setF({ ...f, ownerName: e.target.value })} /></Field>
-          <Field label="Username" hint="Changing it changes how the customer signs in"><Input required value={f.username} onChange={(e) => setF({ ...f, username: e.target.value.toLowerCase().replace(/\s/g, '') })} className="font-mono" /></Field>
-          <Field label="Mobile number (login ID)"><PhoneInput required value={f.phone} onChange={(v) => setF({ ...f, phone: v })} /></Field>
+          <Field required label="Business name"><Input required value={f.businessName} onChange={(e) => setF({ ...f, businessName: e.target.value })} /></Field>
+          <Field required label="Owner name"><Input required value={f.ownerName} onChange={(e) => setF({ ...f, ownerName: e.target.value })} /></Field>
+          <Field required label="Username" hint="Changing it changes how the customer signs in"><Input required value={f.username} onChange={(e) => setF({ ...f, username: e.target.value.toLowerCase().replace(/\s/g, '') })} className="font-mono" /></Field>
+          <Field required label="Mobile number (login ID)"><PhoneInput required value={f.phone} onChange={(v) => setF({ ...f, phone: v })} /></Field>
           <Field label="Email"><Input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
           <Field label="Note (admins only)"><Input value={f.adminNote} onChange={(e) => setF({ ...f, adminNote: e.target.value })} /></Field>
         </div>
@@ -200,7 +200,7 @@ function PasswordModal({ c, onClose }: { c: Detail; onClose: () => void }) {
         <><CredentialCard phone={c.phone} username={c.username} password={pw} businessName={c.name} /><div className="mt-4 flex justify-end"><Button onClick={onClose}>Done</Button></div></>
       ) : (
         <form className="space-y-4" onSubmit={async (e) => { e.preventDefault(); if (await run(() => api.admin.resetPassword(c.id, pw), 'Password reset')) setDone(true) }}>
-          <Field label="New password" hint="At least 6 characters">
+          <Field required label="New password" hint="At least 6 characters">
             <div className="flex gap-1.5">
               <Input required minLength={6} value={pw} onChange={(e) => setPw(e.target.value)} className="font-mono" autoComplete="new-password" />
               <Button type="button" variant="secondary" icon={Wand2} onClick={() => setPw(randomPassword())} aria-label="New password" title="Generate" />
@@ -239,7 +239,7 @@ function StatusModal({ c, onClose }: { c: Detail; onClose: () => void }) {
     <Modal open onClose={onClose} size="sm" title={activate ? `Activate ${c.name}?` : `Deactivate ${c.name}?`}
       subtitle={activate ? 'The owner and staff can sign in again.' : 'The owner and all staff are signed out and can’t sign in. No data is deleted.'}>
       <form className="space-y-4" onSubmit={async (e) => { e.preventDefault(); if (await run(() => api.admin.setStatus(c.id, activate ? 'active' : 'deactivated', reason), activate ? 'Account activated' : 'Account deactivated')) onClose() }}>
-        <Field label="Reason (saved in the audit log)"><Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder={activate ? 'e.g. Payment received' : 'e.g. Payment pending'} /></Field>
+        <Field required label="Reason (saved in the audit log)"><Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder={activate ? 'e.g. Payment received' : 'e.g. Payment pending'} /></Field>
         <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={onClose}>Cancel</Button><Button type="submit" variant={activate ? 'success' : 'danger'} icon={Power}>{activate ? 'Activate' : 'Deactivate'}</Button></div>
       </form>
     </Modal>
@@ -255,7 +255,7 @@ function DeleteModal({ c, onClose, onDeleted }: { c: Detail; onClose: () => void
         Tip: export the data first (Excel / ZIP on the customer page) if the customer may want it.<br />This deletes <b>{c.name}</b> and all its data — {c.usage.bills} bills, {c.usage.products} items, {c.usage.customers} customers, {c.branches.length} branch{c.branches.length === 1 ? '' : 'es'}, staff logins and payments. <b>This can’t be undone.</b>
       </div>
       <form className="mt-4 space-y-4" onSubmit={async (e) => { e.preventDefault(); if (await run(() => api.admin.deleteCustomer(c.id, typed), 'Customer deleted')) onDeleted() }}>
-        <Field label={`Type the business name to confirm: ${c.name}`}><Input autoFocus value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" /></Field>
+        <Field required label={`Type the business name to confirm: ${c.name}`}><Input autoFocus value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" /></Field>
         <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={onClose}>Cancel</Button><Button type="submit" variant="danger" icon={Trash2} disabled={typed.trim() !== c.name}>Delete permanently</Button></div>
       </form>
     </Modal>
@@ -275,7 +275,7 @@ function SupportModal({ c, onClose }: { c: Detail; onClose: () => void }) {
         e.preventDefault()
         if (await run(() => api.admin.startSupport(c.id, reason))) { await refresh(); nav('/', { replace: true }) }
       }}>
-        <Field label="Why are you opening this account?"><Input autoFocus required minLength={4} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Customer says GST is wrong on bills" /></Field>
+        <Field required label="Why are you opening this account?"><Input autoFocus required minLength={4} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Customer says GST is wrong on bills" /></Field>
         <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={onClose}>Cancel</Button><Button type="submit" icon={Eye} disabled={reason.trim().length < 4}>Open support view</Button></div>
       </form>
     </Modal>

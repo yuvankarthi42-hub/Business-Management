@@ -2,6 +2,7 @@ import clsx from 'clsx'
 import { Bike, Clock, Maximize2, PackageOpen, Pencil, Phone, Plus, ShoppingBag, Undo2, XCircle } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useSaveOnce } from '@/features/billKey'
 import { useApp, useData, useNow } from '@/app/AppContext'
 import { Badge, Button, EmptyState, Segmented, useAction } from '@/components/ui'
 import { usesRetailPos } from '@/core/config'
@@ -32,6 +33,7 @@ export default function CustomerOrders() {
   const [payCustomer, setPayCustomer] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState<string | null>(null)
   const run = useAction()
+  const { once } = useSaveOnce() // collect once, even after a dropped connection
   const count = (s: Stage) => orders.filter((o) => stageOf(o) === s).length
 
   if (me && !usesRetailPos(me.business)) return <EmptyState icon={PackageOpen} title="Customer orders are for supermarket and hardware shops" description="Food and restaurant orders use the Kitchen (KOT) screen." />
@@ -89,7 +91,7 @@ export default function CustomerOrders() {
 
       <PaymentModal open={!!paying} onClose={() => setPaying(null)} total={paying?.balance ?? 0} customerId={payCustomer} onCustomerChange={setPayCustomer}
         title={paying ? `Collect payment · ${paying.number}` : undefined}
-        onConfirm={(pays) => run(() => api.orders.settle(paying!.id, pays, { customerId: payCustomer }), `${paying?.number} delivered`)} />
+        onConfirm={async (pays) => (await once({ o: paying!.id, pays, payCustomer }, () => run(() => api.orders.settle(paying!.id, pays, { customerId: payCustomer }), `${paying?.number} delivered`))) ?? false} />
       {cancelling && <CancelOrderModal orderId={cancelling} onClose={() => setCancelling(null)} />}
     </div>
   )

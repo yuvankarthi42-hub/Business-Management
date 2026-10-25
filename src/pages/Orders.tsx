@@ -1,10 +1,11 @@
 import { Printer, ReceiptText, RotateCcw, ShoppingBag, XCircle, MessageCircle } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { useSaveOnce } from '@/features/billKey'
 import { useApp, useData } from '@/app/AppContext'
 import { Badge, Button, Card, Drawer, EmptyState, PageHeader, SearchInput, Segmented, Select, Table, Td, Th, useAction, type Tone } from '@/components/ui'
 import { ORDER_TYPE_LABEL, PAYMENT_LABEL } from '@/core/config'
 import { itemLabel } from '@/core/orderItem'
-import { lineTotal } from '@/core/pricing'
+import { lineTotal, taxableValue, taxIncluded } from '@/core/pricing'
 import type { Order, OrderType } from '@/core/types'
 import { api } from '@/data'
 import { fmtDateTime, fmtTime, money, rangeFor, type RangeKey } from '@/lib/format'
@@ -93,7 +94,10 @@ export function OrderDetail({ id, onClose }: { id: string; onClose: () => void }
   const { me, t, can } = useApp()
   const run = useAction()
   const { data } = useData(() => api.orders.get(id), [id])
-  const { data: customers = [] } = useData(() => api.customers.list())
+  const { once } = useSaveOnce() // collect once, even after a dropped connection
+  // Only this bill's customer (not the whole customer list).
+  const billCustomerId = data?.order.customerId ?? null
+  const { data: oneCustomer = null } = useData(() => (billCustomerId ? api.customers.one(billCustomerId) : Promise.resolve(null)), [billCustomerId])
   const { data: users = [] } = useData(() => api.users.list().catch(() => []))
   const { data: tables = [] } = useData(() => api.tables.list())
   const [cancel, setCancel] = useState(false)
@@ -105,7 +109,8 @@ export function OrderDetail({ id, onClose }: { id: string; onClose: () => void }
   const runWa = useAction()
   if (!data || !me) return null
   const { order: o, payments, kots } = data
-  const customer = customers.find((c) => c.id === o.customerId) ?? null
+  const incl = taxIncluded(me!.business.billing, o.tax)
+  const customer = oneCustomer && oneCustomer.id === o.customerId ? oneCustomer : null
   const customerId = cid === undefined ? o.customerId : cid
   const who = (uid: string) => users.find((u) => u.id === uid)?.name ?? '—'
   const tableLabel = tables.find((x) => x.id === o.tableId)?.label
@@ -142,9 +147,10 @@ export function OrderDetail({ id, onClose }: { id: string; onClose: () => void }
             </div>
           ))}
           <div className="space-y-1 bg-slate-50 px-4 py-3 text-sm">
-            <Row k="Subtotal" v={money(o.subtotal, { decimals: true })} />
+            {(!incl || o.discount > 0) && <Row k={incl ? 'Items total' : 'Subtotal'} v={money(o.subtotal, { decimals: true })} />}
             {o.discount > 0 && <Row k="Discount" v={`-${money(o.discount, { decimals: true })}`} />}
-            {o.tax > 0 && <Row k="Tax" v={money(o.tax, { decimals: true })} />}
+            {incl && <Row k="Taxable value" v={money(taxableValue(o), { decimals: true })} />}
+            {o.tax > 0 && <Row k={incl ? 'GST (included)' : 'Tax'} v={money(o.tax, { decimals: true })} />}
             {o.roundOff !== 0 && <Row k="Round off" v={money(o.roundOff, { decimals: true })} />}
             <div className="flex justify-between pt-1 text-base font-semibold"><span>Total</span><span>{money(o.total, { decimals: true })}</span></div>
             <Row k="Paid" v={money(o.paid, { decimals: true })} />
@@ -176,7 +182,7 @@ export function OrderDetail({ id, onClose }: { id: string; onClose: () => void }
       {cancel && <CancelOrderModal orderId={o.id} onClose={() => setCancel(false)} />}
       {returning && <ReturnModal order={o} onClose={() => setReturning(false)} />}
       <PaymentModal open={pay} onClose={() => setPay(false)} total={o.balance} customerId={customerId} onCustomerChange={setCid}
-        onConfirm={(pays) => run(() => api.orders.settle(o.id, pays, { customerId }), `${t('invoice')} generated`)} />
+        onConfirm={async (pays) => (await once({ o: o.id, pays, customerId }, () => run(() => api.orders.settle(o.id, pays, { customerId }), `${t('invoice')} generated`))) ?? false} />
     </Drawer>
   )
 }

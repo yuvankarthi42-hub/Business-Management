@@ -16,6 +16,8 @@ export function ExportButtons({ load, size: btn = 'md' }: { load: () => Promise<
       const bundle = await load()
       const bytes = await downloadExport(bundle, f)
       toast(`Downloaded ${bundle.tables.length} tables · ${bundle.tables.reduce((a, t) => a + t.rows.length, 0).toLocaleString('en-IN')} rows${f === 'zip' ? ` · ${bundle.images.length} photos` : ''} · ${size(bytes)}`)
+      // A very big shop: the file holds only the newest rows of some lists — say so plainly.
+      if (bundle.truncated?.length) toast(`Note: only the newest rows of ${bundle.truncated.join(', ')} are in this file (see the “Read me” sheet).`, 'info')
     } catch (e) { toast((e as Error).message || 'Export failed', 'error') } finally { setBusy(null) }
   }
   return (

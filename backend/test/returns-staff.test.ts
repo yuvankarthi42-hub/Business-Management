@@ -146,3 +146,49 @@ test('staff: pay, attendance, advances, month numbers, salary', async () => {
     assert.equal((await s.db.select('salary_payments'))[0].expense_id, exps[1].ROWID)
   } finally { s.close() }
 })
+
+test('staff without app access: attendance and salary, never sign in', async () => {
+  const s = await withShop()
+  try {
+    type U = { id: string; canLogin: boolean; roleId: string; pay?: { amount: number } }
+    // A cleaner: name + mobile only — no role, no password.
+    const cleaner = await s.call<U>('users.save', { name: 'Muthu', phone: '9811100001', roleId: '', canLogin: false, pay: { type: 'monthly', amount: 9000, commissionPct: 0 } })
+    assert.equal(cleaner.canLogin, false)
+    assert.equal(cleaner.roleId, '')
+    assert.equal(cleaner.pay?.amount, 9000)
+    const list = await s.call<{ id: string; canLogin: boolean }[]>('staff.list')
+    assert.equal(list.find((x) => x.id === cleaner.id)?.canLogin, false)
+    // Attendance works like for everyone else.
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date())
+    await s.call('staff.mark', cleaner.id, today, { status: 'present' })
+    assert.equal((await s.call<{ userId: string; status: string }[]>('staff.day', today)).find((a) => a.userId === cleaner.id)?.status, 'present')
+    // Their mobile is not a sign-in name.
+    const owner = s.ownerToken
+    s.setToken(null)
+    await assert.rejects(s.call('auth.login', '9811100001', 'anything123'), /Wrong mobile number/)
+    s.setToken(owner)
+
+    // A cashier who had a login, turned into "no app access": signed out, mobile no longer signs in.
+    const roles = await s.call<{ id: string; name: string }[]>('roles.list')
+    const cashierRole = roles.find((r) => r.name === 'Cashier')!.id
+    const cashier = await s.call<U>('users.save', { name: 'Kavi', phone: '9811100002', roleId: cashierRole, password: 'kavi1234' })
+    s.setToken(null)
+    const kaviLogin = await s.call<{ token: string }>('auth.login', '9811100002', 'kavi1234')
+    s.setToken(owner)
+    await s.call('users.save', { id: cashier.id, name: 'Kavi', phone: '9811100002', roleId: cashierRole, canLogin: false })
+    s.setToken(kaviLogin.token)
+    await assert.rejects(s.call('auth.me'), (e: Error & { status: number }) => e.status === 401)
+    s.setToken(null)
+    await assert.rejects(s.call('auth.login', '9811100002', 'kavi1234'), /Wrong mobile number/)
+    // Giving app access back needs a (new) password.
+    s.setToken(owner)
+    await assert.rejects(s.call('users.save', { id: cashier.id, name: 'Kavi', phone: '9811100002', roleId: cashierRole, canLogin: true }), /password/i)
+    await s.call('users.save', { id: cashier.id, name: 'Kavi', phone: '9811100002', roleId: cashierRole, canLogin: true, password: 'kavi5678' })
+    s.setToken(null)
+    await s.call('auth.login', '9811100002', 'kavi5678')
+    // The owner can't remove their own app access.
+    s.setToken(owner)
+    const me = await s.call<{ user: { id: string; name: string; phone: string; roleId: string } }>('auth.me')
+    await assert.rejects(s.call('users.save', { id: me.user.id, name: me.user.name, phone: me.user.phone, roleId: me.user.roleId, canLogin: false }), /yourself/)
+  } finally { s.close() }
+})

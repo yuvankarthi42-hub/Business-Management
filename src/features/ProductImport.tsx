@@ -141,7 +141,7 @@ export function ProductImportModal({ onClose }: { onClose: () => void }) {
         <div>
           <p className="mb-3 text-sm text-slate-600">We matched your columns where we could. Check each one — choose <b>Don’t import</b> for anything you don’t need.</p>
           <div className="overflow-hidden rounded-xl border border-slate-200">
-            <div className="hidden grid-cols-[1fr_1fr_1fr] gap-3 bg-slate-50 px-4 py-2 text-xs font-medium text-slate-500 sm:grid"><span>Field in BillPoodum</span><span>Your CSV column</span><span>First value</span></div>
+            <div className="hidden grid-cols-[1fr_1fr_1fr] gap-3 bg-slate-50 px-4 py-2 text-xs font-medium text-slate-500 sm:grid"><span>Field in Kadai Kalanjiyam</span><span>Your CSV column</span><span>First value</span></div>
             <ul className="max-h-[50vh] divide-y divide-slate-100 overflow-y-auto">
               {fields.map((f) => {
                 const col = mapping[f.key]

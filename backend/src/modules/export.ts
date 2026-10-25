@@ -21,6 +21,8 @@ export interface ExportBundle {
   tables: { name: string; rows: Record<string, Cell>[] }[]
   /** Product photos for the ZIP: the browser downloads each `url` and stores it at `path`. */
   images: { path: string; url: string }[]
+  /** Lists that hold only their newest EXPORT_LIMIT rows (empty = everything is in the file). */
+  truncated?: string[]
 }
 
 export async function exportTables(c: Ctx, businessId: string, forAdmin: boolean): Promise<ExportBundle> {
@@ -118,7 +120,11 @@ export async function exportTables(c: Ctx, businessId: string, forAdmin: boolean
   ]
   if (forAdmin) out.push({ name: 'Subscription', rows: periods.map((p) => ({ Kind: nameOf(E.PeriodKind, p.kind), From: dt(p.start_at), To: dt(p.end_at), Months: p.months == null ? 'custom' : Number(p.months), Branches: Number(p.branches), Amount: fromMinor(p.amount_minor), Note: str(p.note) })) })
   const images = products.map((p) => photo(p)?.image).filter((x): x is { path: string; url: string } => !!x)
-  return { businessName: str(b.name), exportedAt: c.now.toISOString(), tables: out, images }
+  // Never cut off silently: say which lists hold only their newest EXPORT_LIMIT rows.
+  const cut = ([['Bills', orders], ['Payments', payments], ['Returns', returns], ['Return lines', returnItems], ['Expenses', expenses], ['Stock movements', movements],
+    ['Attendance', attendance], ['WhatsApp messages', wa], ['Audit log', logs]] as [string, unknown[]][]).filter(([, rows]) => rows.length >= EXPORT_LIMIT).map(([n]) => n)
+  if (cut.length) out.unshift({ name: 'Read me', rows: [{ Note: `Only the newest ${EXPORT_LIMIT.toLocaleString('en-IN')} rows of: ${cut.join(', ')}. Older rows are kept safely in the database — ask support for a full backup.` }] })
+  return { businessName: str(b.name), exportedAt: c.now.toISOString(), tables: out, images, truncated: cut }
 }
 
 const rowCount = (x: ExportBundle) => x.tables.reduce((n, t) => n + t.rows.length, 0)

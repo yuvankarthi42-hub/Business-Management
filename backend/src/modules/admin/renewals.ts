@@ -1,4 +1,4 @@
-// Product admin: renewal reminders (sent to shop owners from BillPoodum's own WhatsApp number), the platform
+// Product admin: renewal reminders (sent to shop owners from Kadai Kalanjiyam's own WhatsApp number), the platform
 // WhatsApp setup, and system.runDailyJobs (called once a day by a Catalyst Cron).
 //
 // Storage (no reminder log table):
@@ -14,7 +14,9 @@ import type { AdminSession, Ctx } from '../../core/context'
 import { ApiError } from '../../core/errors'
 import { adminRead, adminWrite, define, publicWrite } from '../../core/registry'
 import type { Row } from '../../db/types'
+import { eachShop } from '../../domain/directory'
 import { selectIn } from '../../domain/orders'
+import { expirePoints } from '../../domain/points'
 import { bumpEpoch, pricePerBranch } from '../../domain/session'
 import { bizDay, bizDayStart, E, getPlatformSetting, putPlatformSetting, str, strOrNull } from '../../domain/util'
 import { cleanPhone } from '../business'
@@ -27,7 +29,7 @@ const TEMPLATE_KEY = `platform:${E.WaTemplateKind.renewal_reminder}`
 const MSG_REF = /msg (\d+)$/
 
 type Stored = ReminderSettings & { lastRunOn?: string | null }
-export const DEFAULT_REMINDERS: ReminderSettings = { enabled: true, daysBefore: 7, supportContact: '+91 90000 12345', template: REMINDER_SAMPLE.en }
+export const DEFAULT_REMINDERS: ReminderSettings = { enabled: true, daysBefore: 7, supportContact: '+91 70139 05970', template: REMINDER_SAMPLE.en }
 
 const loadSettings = async (c: Ctx): Promise<Stored> => ({ ...DEFAULT_REMINDERS, ...(await getPlatformSetting<Partial<Stored>>(c.platform, 'reminders', {})) })
 const publicSettings = ({ enabled, daysBefore, supportContact, template }: Stored): ReminderSettings => ({ enabled, daysBefore, supportContact, template })
@@ -162,6 +164,9 @@ export async function runDailyJobs(c: Ctx) {
   const stale = await c.platform.select('login_names', { where: { user_id: '0', CREATEDTIME: { lt: new Date(c.now.getTime() - DAY).toISOString() } }, limit: 500 })
   if (stale.length) await c.platform.deleteMany('login_names', stale.map((r) => r.ROWID))
   const today = bizDay(c)
+  // Loyalty points past their expiry date (safe to run more than once a day).
+  const shops = await c.platform.select('businesses', { where: { deleted_at: null } })
+  await eachShop(c, shops.map((b) => b.ROWID), async (bid, db) => { await expirePoints(db, bid, today) })
   if ((await loadSettings(c)).lastRunOn === today) return 0
   if (!isReady(await platformWa(c))) return 0
   // Claim the day first, inside one transaction, so a second run (retry, overlapping cron) doesn't send again.
@@ -255,7 +260,7 @@ define('admin', {
     return publicSettings(next)
   }),
 
-  // ---- platform WhatsApp (sends renewal reminders from BillPoodum's own number) ----
+  // ---- platform WhatsApp (sends renewal reminders from Kadai Kalanjiyam's own number) ----
   waStatus: adminRead('customers.view', async (c) => {
     const [w, cfg, price, sent7, logRows] = await Promise.all([
       platformWa(c), loadSettings(c), pricePerBranch(c.platform),
@@ -285,7 +290,7 @@ define('admin', {
     const a = c.requireAdmin()
     const w = await getPlatformSetting<WaSetting | null>(c.platform, 'whatsapp', null)
     if (!w?.phoneNumberId || !(await tokenRow(c, 'platform', null))) throw new ApiError('Connect the account first')
-    const verified = { name: 'BillPoodum', number: w.businessNumber, quality: 'High' as const, at: c.now.toISOString() }
+    const verified = { name: 'Kadai Kalanjiyam', number: w.businessNumber, quality: 'High' as const, at: c.now.toISOString() }
     await putPlatformSetting(c.platform, 'whatsapp', { ...w, verified, updatedAt: c.now.toISOString() }, a.id)
     await adminLog(c, a, 'settings', null, 'WhatsApp connection tested — OK')
     return verified
@@ -297,7 +302,7 @@ define('admin', {
     if (!w?.verified) throw new ApiError('Test the connection first')
     const num = cleanPhone(to, 'IN', 'Enter a mobile number')
     const token = await tokenRow(c, 'platform', null)
-    const body = 'Test message from BillPoodum. The WhatsApp connection for renewal reminders works.'
+    const body = 'Test message from Kadai Kalanjiyam. The WhatsApp connection for renewal reminders works.'
     const res = await sendWhatsApp({ phoneNumberId: w.phoneNumberId, token: str(token?.value), to: num, template: null, body, attachment: null })
     await c.platform.insert('whatsapp_messages', {
       business_id: null, sender: E.WaSender.platform, kind: E.WaMessageKind.test, to_number: num.slice(0, 16), body, meta_message_id: res.messageId,

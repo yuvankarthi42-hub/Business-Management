@@ -1,21 +1,25 @@
 import clsx from 'clsx'
 import { CategoryLabel, Thumb } from '@/components/Thumb'
-import { Bike, Check, ChefHat, Clock, Flame, Minus, Phone, Plus, ShoppingBag, ShoppingBasket, UtensilsCrossed, XCircle } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
-import { useParams, useSearchParams } from 'react-router-dom'
-import { useData, useNow } from '@/app/AppContext'
+import { Bell, BellRing, Bike, Check, ChefHat, Clock, Flame, Minus, PackageSearch, Phone, Plus, RefreshCw, Search, ShoppingBag, ShoppingBasket, UtensilsCrossed, XCircle } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useData } from '@/app/AppContext'
 import { Button, Chips, Field, Input, SearchInput, Textarea, VegMark, useAction } from '@/components/ui'
 import { ORDER_TYPE_LABEL } from '@/core/config'
 import { itemLabel } from '@/core/orderItem'
 import { lineTotal } from '@/core/pricing'
 import type { OrderType, Product } from '@/core/types'
-import { api } from '@/data'
-import { money, setCurrencySymbol } from '@/lib/format'
+import { api, BACKEND } from '@/data'
+import { REFRESH_GAP_MS, trackStage, type TrackStage } from '@/core/tracking'
+import { enablePush, onPushMessage, pushStateFor, type PushState } from '@/features/tracking/push'
+import { usePublicLive } from '@/features/tracking/publicLive'
+import { fmtTime, money, setCurrencySymbol } from '@/lib/format'
 import { useCart } from '@/features/cart'
 import { PhoneInput } from '@/components/PhoneInput'
 import { normalizePhone } from '@/core/phone'
 import { priceLabel, tintFor } from '@/features/Catalog'
 import { ItemOptionsModal, needsOptions, optionsJustClosed } from '@/features/ItemOptions'
+import { ShopLogo } from '@/components/ShopLogo'
 
 type Menu = Awaited<ReturnType<typeof api.public.menu>>
 const TYPE_ICON: Record<OrderType, typeof ShoppingBag> = { dine_in: UtensilsCrossed, takeaway: ShoppingBag, delivery: Bike, counter: ShoppingBag }
@@ -26,7 +30,10 @@ export default function CustomerMenu() {
   const [params] = useSearchParams()
   const branchParam = params.get('b')
   const tableParam = params.get('t')
-  const { data: menu, error } = useData(() => api.public.menu(businessId, branchParam, tableParam), [businessId, branchParam, tableParam])
+  // Prices / items changed while the menu is open (live event): read it again once.
+  const [fresh, setFresh] = useState(0)
+  usePublicLive(businessId, null, { menu: () => setFresh(Date.now()) })
+  const { data: menu, error } = useData(() => (fresh ? api.public.menu(businessId, branchParam, tableParam, fresh) : api.public.menu(businessId, branchParam, tableParam)), [businessId, branchParam, tableParam, fresh])
   useEffect(() => { if (menu) { setCurrencySymbol(menu.business.currencySymbol); document.title = `${menu.business.name} — Order` } }, [menu])
 
   if (error) return <Message icon={XCircle} title="Menu not available" text="This menu could not be loaded on this device. Please ask the staff for help." />
@@ -85,11 +92,14 @@ function MenuApp({ menu, tableId }: { menu: Menu; tableId: string | null }) {
     <div className="mx-auto min-h-[100dvh] max-w-md bg-white pb-28">
       <header className="bg-gradient-to-br from-navy-800 to-navy-700 px-4 pb-5 pt-5 text-white">
         <div className="flex items-center gap-3">
-          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 text-2xl">{b.logoEmoji}</span>
+          <ShopLogo business={b} className="h-12 w-12 !rounded-2xl" />
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-lg font-bold">{b.name}</h1>
             <p className="truncate text-xs text-slate-300">{menu.branchCount > 1 ? `${menu.branch.name} · ` : ''}{menu.branch.address || b.address || b.subType}</p>
           </div>
+          <Link to={`/q/${b.id}/track${menu.branchCount > 1 ? `?b=${menu.branch.id}` : ''}`} className="flex shrink-0 items-center gap-1.5 rounded-xl bg-white/10 px-2.5 py-2 text-xs font-semibold text-white hover:bg-white/20">
+            <PackageSearch className="h-4 w-4" />Track order
+          </Link>
         </div>
         {table ? (
           <p className="mt-4 inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1.5 text-sm font-semibold"><UtensilsCrossed className="h-4 w-4" />Dine in · Table {table.label}</p>
@@ -234,9 +244,9 @@ function Checkout({ menu, cart, type, table, onBack, onPlaced }: {
 
         <div className="space-y-3 rounded-2xl bg-white p-4 shadow-card">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{needContact ? 'Your details' : 'Your name (optional)'}</p>
-          <Field><Input value={guest.name} onChange={(e) => setGuest({ ...guest, name: e.target.value })} placeholder="Name" autoComplete="name" /></Field>
-          {needContact && <PhoneInput value={guest.phone} onChange={(v) => setGuest({ ...guest, phone: v })} defaultCountry={menu.business.defaultCountry} placeholder="Mobile number" required />}
-          {type === 'delivery' && <Field><Textarea value={guest.address} onChange={(e) => setGuest({ ...guest, address: e.target.value })} placeholder="Full delivery address with landmark" autoComplete="street-address" /></Field>}
+          <Field><Input value={guest.name} onChange={(e) => setGuest({ ...guest, name: e.target.value })} placeholder={type !== 'dine_in' ? 'Name *' : 'Name'} autoComplete="name" /></Field>
+          {needContact && <PhoneInput value={guest.phone} onChange={(v) => setGuest({ ...guest, phone: v })} defaultCountry={menu.business.defaultCountry} placeholder="Mobile number *" required />}
+          {type === 'delivery' && <Field><Textarea value={guest.address} onChange={(e) => setGuest({ ...guest, address: e.target.value })} placeholder="Full delivery address with landmark *" autoComplete="street-address" /></Field>}
           <Field><Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Any request? (e.g. less spicy)" /></Field>
         </div>
 
@@ -254,26 +264,120 @@ function Checkout({ menu, cart, type, table, onBack, onPlaced }: {
   )
 }
 
-function Tracking({ businessId, orderId, table, onNew }: { businessId: string; orderId: string; table: string | null; onNew: () => void }) {
-  const tick = useNow(5000) // poll — a real backend would push updates
-  const { data: o, error } = useData(() => api.public.order(businessId, orderId), [orderId, tick])
-  if (error) return <Message icon={XCircle} title="Order not found" text="Please ask the staff." />
-  if (!o) return null
-  const rejected = o.qrStatus === 'rejected' || (o.status === 'cancelled' && o.cancelReason)
-  const done = o.status === 'completed' || o.kitchen === 'completed'
-  const readyText = o.type === 'delivery' ? 'Packed — out for delivery soon' : o.type === 'takeaway' ? 'Ready for pickup' : 'Ready — serving now'
-  const steps = [
-    { key: 'sent', label: 'Order sent', icon: Check, done: true },
-    { key: 'ok', label: 'Confirmed by restaurant', icon: Check, done: o.qrStatus === 'accepted' },
-    { key: 'cook', label: 'Being prepared', icon: ChefHat, done: ['preparing', 'ready', 'completed'].includes(o.kitchen ?? '') || done },
-    { key: 'ready', label: readyText, icon: Clock, done: ['ready', 'completed'].includes(o.kitchen ?? '') || done },
-  ]
+/** "Track my order": enter the order number (from the order screen or bill) → the same tracking screen. */
+export function TrackOrderPage() {
+  const { businessId = '' } = useParams()
+  const [params, setParams] = useSearchParams()
+  const orderId = params.get('o')
+  const nav = useNavigate()
+  const { data: menu } = useData(() => api.public.menu(businessId, params.get('b'), null).catch(() => null), [businessId])
+  const [number, setNumber] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { if (menu) setCurrencySymbol(menu.business.currencySymbol) }, [menu])
+  const back = () => nav(`/q/${businessId}${params.get('b') ? `?b=${params.get('b')}` : ''}`)
+  if (orderId) return <Tracking businessId={businessId} orderId={orderId} table={null} onNew={back} newLabel="Back to menu" />
+  const find = async () => {
+    if (!number.trim()) { setError('Enter your order number'); return }
+    setBusy(true); setError('')
+    try { const r = await api.public.track(businessId, number); params.set('o', r.orderId); setParams(params, { replace: true }) }
+    catch (e) { setError((e as Error).message) } finally { setBusy(false) }
+  }
   return (
     <div className="mx-auto min-h-[100dvh] max-w-md bg-slate-50 p-4">
+      <div className="rounded-2xl bg-white p-5 shadow-card">
+        <div className="flex items-center gap-3">
+          <ShopLogo business={menu?.business} className="h-11 w-11 !rounded-xl" />
+          <div className="min-w-0"><p className="truncate font-semibold">{menu?.business.name ?? 'Track my order'}</p><p className="text-xs text-slate-500">Track my order</p></div>
+        </div>
+        <form className="mt-5 space-y-3" noValidate onSubmit={(e) => { e.preventDefault(); void find() }}>
+          <Field required label="Order number" hint="Shown on your order screen and on the bill, e.g. #1042">
+            <Input value={number} onChange={(e) => { setNumber(e.target.value); setError('') }} placeholder="#1042" inputMode="text" autoFocus autoComplete="off" />
+          </Field>
+          {error && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+          <Button type="submit" block size="lg" icon={Search} disabled={busy}>{busy ? 'Checking…' : 'Check status'}</Button>
+        </form>
+        <p className="mt-3 text-center text-xs text-slate-400">Today’s and yesterday’s orders can be tracked.</p>
+      </div>
+      <Button className="mt-4" block variant="ghost" onClick={back}>Back to menu</Button>
+    </div>
+  )
+}
+
+/**
+ * The customer's order status. Never checks on a timer: it asks when the page opens, when the customer comes back
+ * to it, when they press Refresh (at most every 10 s) and when a push arrives. The server answers from its cache.
+ */
+function Tracking({ businessId, orderId, table, onNew, newLabel }: { businessId: string; orderId: string; table: string | null; onNew: () => void; newLabel?: string }) {
+  const [nonce, setNonce] = useState(0)
+  const [lastAsk, setLastAsk] = useState(() => Date.now())
+  const [cooling, setCooling] = useState(false)
+  const { data: o, error } = useData(() => api.public.order(businessId, orderId), [orderId, nonce])
+  const { data: push } = useData(() => api.public.pushKey().catch(() => ({ publicKey: null })), [])
+  const [pushState, setPushState] = useState<PushState>(() => pushStateFor(orderId))
+  const [alert, setAlert] = useState<string | null>(null)
+  const run = useAction()
+  const refresh = (force = false) => {
+    const wait = REFRESH_GAP_MS - (Date.now() - lastAsk)
+    if (!force && wait > 0) { setCooling(true); setTimeout(() => setCooling(false), Math.min(wait, 2500)); return }
+    setLastAsk(Date.now()); setNonce((n) => n + 1)
+  }
+  // Back to the page (from WhatsApp, another app, screen off): check once.
+  useEffect(() => {
+    const h = () => { if (document.visibilityState === 'visible') refresh() }
+    document.addEventListener('visibilitychange', h)
+    return () => document.removeEventListener('visibilitychange', h)
+  })
+  useEffect(() => onPushMessage((id) => { if (id === orderId) refresh(true) }))
+  // Live: the shop changed this order → read it (from the server's cache).
+  usePublicLive(businessId, orderId, { order: () => refresh(true) })
+  const stage = o ? trackStage(o) : null
+  const prev = useRef<TrackStage | null>(null)
+  useEffect(() => {
+    if (!o || !stage) return
+    if (prev.current && prev.current !== stage && (stage === 'ready' || stage === 'confirmed' || stage === 'rejected')) {
+      setAlert(stage === 'ready' ? `Order ${o.number} is ready!` : stage === 'confirmed' ? `Order ${o.number} confirmed` : `Order ${o.number} was not accepted`)
+      try { navigator.vibrate?.([200, 100, 200]) } catch { /* not supported */ }
+    }
+    prev.current = stage
+  }, [stage, o])
+
+  if (error) return <Message icon={XCircle} title="Order not found" text="Please ask the staff." />
+  if (!o || !stage) return <div className="flex h-[100dvh] items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-[3px] border-brand-200 border-t-brand-600" /></div>
+  const rejected = stage === 'rejected'
+  const done = stage === 'done'
+  const finished = done || rejected
+  const readyText = o.type === 'delivery' ? 'Packed — out for delivery soon' : o.type === 'takeaway' ? 'Ready for pickup' : 'Ready — serving now'
+  const at = (s: TrackStage[]) => s.includes(stage)
+  const steps = [
+    { key: 'sent', label: 'Order sent', icon: Check, done: true },
+    { key: 'ok', label: 'Confirmed', icon: Check, done: at(['confirmed', 'preparing', 'ready', 'done']) },
+    { key: 'cook', label: 'Being prepared', icon: ChefHat, done: at(['preparing', 'ready', 'done']) },
+    { key: 'ready', label: readyText, icon: Clock, done: at(['ready', 'done']) },
+  ]
+  const notify = () => run(async () => {
+    if (!push?.publicKey) return
+    const st = await enablePush(businessId, orderId, push.publicKey)
+    setPushState(st)
+    if (st === 'denied') throw new Error('Notifications are blocked for this site. Allow them in the browser settings, or tap Refresh.')
+  }, undefined)
+  const canPush = !finished && !!push?.publicKey && pushState !== 'unsupported'
+  return (
+    <div className="mx-auto min-h-[100dvh] max-w-md bg-slate-50 p-4">
+      {alert && (
+        <button onClick={() => setAlert(null)} className="mb-3 flex w-full items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-left text-sm font-semibold text-white shadow-card">
+          <BellRing className="h-5 w-5 shrink-0" /><span className="flex-1">{alert}</span><span className="text-xs font-normal opacity-80">Close</span>
+        </button>
+      )}
       <div className="rounded-2xl bg-white p-5 text-center shadow-card">
         {rejected ? <XCircle className="mx-auto h-12 w-12 text-red-500" /> : <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 text-emerald-600"><Check className="h-8 w-8" /></div>}
-        <h1 className="mt-3 text-xl font-bold">{rejected ? 'Order not accepted' : done ? 'Enjoy your meal!' : o.qrStatus === 'pending' ? 'Order sent!' : 'Order confirmed'}</h1>
-        <p className="text-sm text-slate-500">Order {o.number}{table ? ` · Table ${table}` : ` · ${ORDER_TYPE_LABEL[o.type]}`}</p>
+        <h1 className="mt-3 text-xl font-bold">{rejected ? 'Order not accepted' : done ? 'Thank you!' : stage === 'sent' ? 'Order sent!' : stage === 'ready' ? 'Your order is ready' : 'Order confirmed'}</h1>
+        <p className="mt-1 text-sm text-slate-500">{table ? `Table ${table}` : ORDER_TYPE_LABEL[o.type]}</p>
+        <div className="mx-auto mt-3 inline-flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-1.5">
+          <span className="text-xs text-slate-500">Order number</span>
+          <span className="text-lg font-bold tracking-wide" data-no-i18n>{o.number}</span>
+        </div>
+        {!finished && <p className="mt-2 text-xs text-slate-400">Keep this number to check the status later.</p>}
         {rejected && <p className="mt-2 text-sm text-red-600">{o.cancelReason}. Please talk to our staff.</p>}
       </div>
       {!rejected && (
@@ -289,13 +393,30 @@ function Tracking({ businessId, orderId, table, onNew }: { businessId: string; o
           ))}
         </ol>
       )}
+      {!finished && (
+        <div className="mt-4 rounded-2xl bg-white p-4 shadow-card">
+          <div className="grid grid-cols-2 gap-2">
+            {canPush ? (
+              <Button variant={pushState === 'on' ? 'secondary' : 'primary'} icon={pushState === 'on' ? BellRing : Bell} disabled={pushState === 'on'} onClick={notify}>
+                {pushState === 'on' ? 'Notifications on' : 'Notify me'}
+              </Button>
+            ) : <span />}
+            <Button variant="secondary" icon={RefreshCw} onClick={() => refresh()} className={canPush ? '' : 'col-span-2'}>{cooling ? 'Just checked' : 'Refresh status'}</Button>
+          </div>
+          <p className="mt-2 text-center text-xs text-slate-400">
+            Updated {fmtTime(o.checkedAt)}
+            {' · '}
+            {pushState === 'on' ? 'We’ll notify you when it’s ready.' : BACKEND === 'mock' ? 'This page updates by itself while it’s open.' : 'Tap Refresh to see the latest status.'}
+          </p>
+        </div>
+      )}
       <div className="mt-4 rounded-2xl bg-white p-4 shadow-card">
         {o.items.map((i) => <div key={i.id} className="flex justify-between py-1 text-sm"><span>{i.qty} × {itemLabel(i)}</span><span>{money(lineTotal(i))}</span></div>)}
         <div className="mt-2 flex justify-between border-t border-dashed border-slate-200 pt-2 font-bold"><span>Total</span><span>{money(o.total)}</span></div>
         <p className="mt-1 text-xs text-slate-500">{o.paymentStatus === 'paid' ? 'Paid ✓' : 'Pay at the counter / on delivery'}</p>
       </div>
       <div className="mt-4 grid gap-2">
-        <Button size="lg" variant="secondary" icon={Plus} onClick={onNew}>{table ? 'Order more' : 'New order'}</Button>
+        <Button size="lg" variant="secondary" icon={newLabel ? undefined : Plus} onClick={onNew}>{newLabel ?? (table ? 'Order more' : 'New order')}</Button>
         <p className="flex items-center justify-center gap-1 text-center text-xs text-slate-400"><Phone className="h-3 w-3" />Need help? Ask our staff</p>
       </div>
     </div>

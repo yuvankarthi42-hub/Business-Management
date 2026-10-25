@@ -2,13 +2,15 @@ import clsx from 'clsx'
 import { ArrowLeft, CheckCircle2, LifeBuoy, Plus, Send } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
+import { BRAND } from '@/core/brand'
+import { LegalLinks, SupportContacts } from '@/components/SupportLinks'
 import { useApp, useData } from '@/app/AppContext'
 import { Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Textarea, useAction } from '@/components/ui'
 import type { Ticket, TicketCategory, TicketPriority } from '@/core/types'
 import { api } from '@/data'
 import { CATEGORY, PRIORITY, ScreenshotPicker, StatusBadge, Thread, when } from '@/features/support/TicketParts'
 
-/** Help & support: report a problem to the BillPoodum team (with screenshots) and follow the replies. */
+/** Help & support: report a problem to the Kadai Kalanjiyam team (with screenshots) and follow the replies. */
 export default function Support() {
   const { data: tickets = [] } = useData(() => api.support.mine())
   const [openId, setOpenId] = useState<string | null>(null)
@@ -17,7 +19,14 @@ export default function Support() {
   if (open) return <TicketView t={open} onBack={() => setOpenId(null)} />
   return (
     <div className="mx-auto max-w-4xl">
-      <PageHeader title="Help & support" subtitle="Tell us about a problem — the BillPoodum team replies here" actions={<Button icon={Plus} write={false} onClick={() => setCreating(true)}>Report a problem</Button>} />
+      <PageHeader title="Help & support" subtitle="Tell us about a problem — the Kadai Kalanjiyam team replies here" actions={<Button icon={Plus} write={false} onClick={() => setCreating(true)}>Report a problem</Button>} />
+      <Card className="mb-4 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div><p className="text-sm font-semibold text-slate-800">Need help quickly?</p><p className="text-xs text-slate-500">Call, WhatsApp or email the {BRAND.name} team.</p></div>
+          <SupportContacts />
+        </div>
+        <p className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-500"><LegalLinks /></p>
+      </Card>
       <Card>
         {!tickets.length ? <EmptyState icon={LifeBuoy} title="No requests yet" description="Something not working? Report it with a screenshot and we’ll help." action={<Button icon={Plus} write={false} onClick={() => setCreating(true)}>Report a problem</Button>} /> : (
           <ul className="divide-y divide-slate-100">
@@ -53,14 +62,14 @@ function NewTicket({ onClose, onCreated }: { onClose: () => void; onCreated: (id
         <form className="space-y-4" onSubmit={async (e) => {
           e.preventDefault()
           let id = ''
-          if (await run(async () => { id = (await api.support.create({ ...f, images, page: from || loc.pathname })).id }, 'Sent to the BillPoodum team')) onCreated(id)
+          if (await run(async () => { id = (await api.support.create({ ...f, images, page: from || loc.pathname })).id }, 'Sent to the Kadai Kalanjiyam team')) onCreated(id)
         }}>
-          <Field label="What’s the problem?"><Input autoFocus required value={f.subject} onChange={(e) => setF({ ...f, subject: e.target.value })} placeholder="e.g. Bill doesn’t print after payment" maxLength={120} /></Field>
+          <Field required label="What’s the problem?"><Input autoFocus required value={f.subject} onChange={(e) => setF({ ...f, subject: e.target.value })} placeholder="e.g. Bill doesn’t print after payment" maxLength={120} /></Field>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="About"><Select value={f.category} onChange={(e) => setF({ ...f, category: e.target.value as TicketCategory })}>{(Object.keys(CATEGORY) as TicketCategory[]).map((c) => <option key={c} value={c}>{CATEGORY[c]}</option>)}</Select></Field>
+            <Field required label="About"><Select value={f.category} onChange={(e) => setF({ ...f, category: e.target.value as TicketCategory })}>{(Object.keys(CATEGORY) as TicketCategory[]).map((c) => <option key={c} value={c}>{CATEGORY[c]}</option>)}</Select></Field>
             <Field label="How urgent?"><Select value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value as TicketPriority })}>{(Object.keys(PRIORITY) as TicketPriority[]).map((p) => <option key={p} value={p}>{PRIORITY[p].label}</option>)}</Select></Field>
           </div>
-          <Field label="Details"><Textarea required value={f.message} onChange={(e) => setF({ ...f, message: e.target.value })} rows={4} placeholder="What were you doing, what happened, and what did you expect?" /></Field>
+          <Field required label="Details"><Textarea required value={f.message} onChange={(e) => setF({ ...f, message: e.target.value })} rows={4} placeholder="What were you doing, what happened, and what did you expect?" /></Field>
           <ScreenshotPicker images={images} onChange={setImages} upload={(b) => api.support.uploadScreenshot(b)} onHide={() => {}} />
           <p className="text-xs text-slate-500">We also get the page you were on, your browser and the app version.</p>
           <div className="flex justify-end gap-2"><Button type="button" variant="ghost" write={false} onClick={onClose}>Cancel</Button><Button type="submit" icon={Send} write={false}>Send</Button></div>

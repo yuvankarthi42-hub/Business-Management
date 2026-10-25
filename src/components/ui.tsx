@@ -89,10 +89,18 @@ export function Select({ className, children, ...rest }: SelectHTMLAttributes<HT
   return <select className={clsx(fieldBase, 'h-10 pr-8', className)} {...rest}>{children}</select>
 }
 
-export function Field({ label, hint, error, children, className }: { label?: string; hint?: string; error?: string; children: ReactNode; className?: string }) {
+/** Red asterisk after a label: the field must be filled before saving. */
+export const RequiredMark = () => <span className="ml-0.5 text-red-500" aria-hidden="true" data-no-i18n>*</span>
+
+/** A label for inputs that aren't wrapped in <Field> (phone input, chips…). */
+export function FieldLabel({ children, required }: { children: ReactNode; required?: boolean }) {
+  return <span className="mb-1.5 block text-xs font-medium text-slate-600">{children}{required && <RequiredMark />}</span>
+}
+
+export function Field({ label, hint, error, children, className, required }: { label?: string; hint?: string; error?: string; children: ReactNode; className?: string; required?: boolean }) {
   return (
     <label className={clsx('block', className)}>
-      {label && <span className="mb-1.5 block text-xs font-medium text-slate-600">{label}</span>}
+      {label && <span className="mb-1.5 block text-xs font-medium text-slate-600"><span>{label}</span>{required && <RequiredMark />}{required && <span className="sr-only"> (required)</span>}</span>}
       {children}
       {error ? <span className="mt-1 block text-xs text-red-600">{error}</span> : hint && <span className="mt-1 block text-xs text-slate-400">{hint}</span>}
     </label>

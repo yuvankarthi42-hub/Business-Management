@@ -1,4 +1,4 @@
-# BillPoodum — Configurable Business Management & POS
+# Kadai Kalanjiyam — Configurable Business Management & POS
 
 One platform that adapts to the business using it: common core (products, customers, orders,
 payments, expenses), optional modules (tables, kitchen, inventory, mobile ordering…), and
@@ -52,7 +52,7 @@ Cashier, Waiter, Kitchen Staff — each sees only what their role allows). Demo 
 | Price lists | Retail shops can turn on a second price list (Settings → Billing, e.g. "Contractor rate"): wholesale price per item / size, customer price list, billing switches automatically for those customers (or by the toggle) |
 | Staff | **Staff** page: daily attendance (present / half day / absent / leave), monthly summary, pay (monthly or daily) with sales commission %, advances, salary payment with slip — booked as expenses |
 | Help & support | User menu → Help & support: report a problem with screenshots (capture this screen or attach), category & urgency, conversation with the team. Admin **Support** inbox with status, priority, assignee and reply |
-| Renewals | Admin **Renewals**: expiring (next 14 days) and expired lists; WhatsApp reminder every day from 7 days before the end (pause per customer, send now), reminder log. Admin **WhatsApp**: connect BillPoodum's own WhatsApp Business number (Meta Cloud API), test, reminder template with Meta's rules, preview and approval. Demo mode logs instead of sending |
+| Renewals | Admin **Renewals**: expiring (next 14 days) and expired lists; WhatsApp reminder every day from 7 days before the end (pause per customer, send now), reminder log. Admin **WhatsApp**: connect Kadai Kalanjiyam's own WhatsApp Business number (Meta Cloud API), test, reminder template with Meta's rules, preview and approval. Demo mode logs instead of sending |
 | Data export | Admin customer page and Settings → Audit & data: full data as **Excel** (one sheet per table) or **ZIP** (CSVs + photos + README), without passwords — offered before a delete |
 | Setup | Sign-up → 6-step onboarding, Settings: profile, billing & tax, terminology, modules, staff & roles (permission matrix), tables, audit log |
 

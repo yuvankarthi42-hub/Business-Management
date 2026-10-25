@@ -102,3 +102,37 @@ test('tables, running order, kitchen tickets and QR menu', async () => {
     assert.equal((await s.call<O[]>('qr.pending')).length, 0)
   } finally { s.close() }
 })
+
+test('takeaway: KOT, then open the running bill and pay — no second order, no duplicate KOT', async () => {
+  const s = await withShop()
+  try {
+    await s.call('business.update', { billing: { taxEnabled: false }, modules: { billing: true, kitchen: true, products: true } })
+    const tea = await s.call<P>('products.save', { name: 'Tea', price: 20, sendToKitchen: true })
+    const vada = await s.call<P>('products.save', { name: 'Vada', price: 15, sendToKitchen: true })
+    const line = (p: P, qty: number, extra = {}) => ({ id: `tmp_${Math.random()}`, productId: p.id, name: '', variantId: null, variantName: null, addOns: [], qty, unit: 'pc', unitPrice: 0, taxRate: 0, notes: '', kotQty: 0, ...extra })
+    const draft = (items: unknown[], extra = {}) => ({ type: 'takeaway', tableId: null, customerId: null, items, discount: 0, notes: '', source: 'pos', ...extra })
+
+    // Billing page → KOT: a running takeaway order and one kitchen ticket.
+    const held = await s.call<{ order: O; kot: { items: unknown[] } | null }>('orders.save', draft([line(tea, 2)]), { sendToKitchen: true })
+    assert.ok(held.kot)
+    assert.equal((await s.call<unknown[]>('kitchen.list')).length, 1)
+
+    // Open the running bill (the app sends the items as the server returned them) and pay.
+    const [running] = await s.call<(O & { type: string })[]>('orders.running')
+    assert.equal(running.id, held.order.id)
+    const paid = await s.call<O>('orders.checkout', draft(running.items, { id: running.id }), [{ method: 'cash', amount: 40 }])
+    assert.equal(paid.id, held.order.id) // the same order, now billed
+    assert.equal(paid.status, 'completed')
+    assert.equal((await s.call<unknown[]>('kitchen.list')).length, 1) // no duplicate KOT
+    assert.equal((await s.call<unknown[]>('orders.running')).length, 0)
+
+    // Another running bill, one item added before paying: only that item goes to the kitchen.
+    const held2 = await s.call<{ order: O }>('orders.save', draft([line(tea, 1)]), { sendToKitchen: true })
+    const [r2] = await s.call<O[]>('orders.running')
+    await s.call('orders.checkout', draft([...r2.items, line(vada, 3)], { id: held2.order.id }), [{ method: 'upi', amount: 65 }])
+    const kots = await s.call<{ orderId: string; items: { qty: number }[] }[]>('kitchen.list')
+    const forOrder2 = kots.filter((k) => k.orderId === held2.order.id)
+    assert.equal(forOrder2.length, 2)
+    assert.deepEqual(forOrder2.map((k) => k.items.map((i) => i.qty)).sort(), [[1], [3]])
+  } finally { s.close() }
+})

@@ -1,4 +1,4 @@
-# BillPoodum on Catalyst + Turso — how it works and what it costs
+# Kadai Kalanjiyam on Catalyst + Turso — how it works and what it costs
 
 Prices below were read from the official pricing pages on **12 Oct 2026**
 ([Catalyst](https://catalyst.zoho.com/pricing.html) pay-as-you-go calculator, [Turso](https://turso.tech/pricing)).
@@ -21,7 +21,7 @@ The Catalyst **Data Store is not used** in this setup. No business data is kept 
 ```mermaid
 flowchart LR
   subgraph Device["Counter / phone / tablet"]
-    APP["BillPoodum app<br/>(browser)"]
+    APP["Kadai Kalanjiyam app<br/>(browser)"]
     MEM["Read cache<br/>(memory only)"]
     APP <--> MEM
   end

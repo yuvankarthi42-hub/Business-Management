@@ -1,4 +1,4 @@
-# BillPoodum on Catalyst + Turso — as built
+# Kadai Kalanjiyam on Catalyst + Turso — as built
 
 This is how the backend works now. It replaces the design parts of [TURSO-PLAN.md](TURSO-PLAN.md): the plan proposed one
 database for all shops, but what was built is **one platform database plus one database per shop**.

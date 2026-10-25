@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { CalendarDays, ChevronDown, LifeBuoy, LogOut, Menu, MoreHorizontal, PanelLeftClose, PanelLeftOpen, ShoppingCart, X } from 'lucide-react'
+import { CalendarDays, ChevronDown, LifeBuoy, LogOut, Menu, MoreHorizontal, PanelLeftClose, PanelLeftOpen, X } from 'lucide-react'
 import { Suspense, useEffect, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '@/data'
@@ -12,12 +12,14 @@ import { formatPhone } from '@/core/phone'
 import { LanguageMenu } from '@/i18n/LanguagePicker'
 import { SubscriptionBanner } from '@/features/SubscriptionBanner'
 import { migrateLegacyPrinter } from '@/features/printing/printer'
+import { BRAND, BRAND_LOGO } from '@/core/brand'
+import { ShopLogo } from '@/components/ShopLogo'
 
 export function Logo({ light = true, compact = false }: { light?: boolean; compact?: boolean }) {
   return (
-    <div className="flex items-center gap-2.5">
-      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600 text-white shadow-sm"><ShoppingCart className="h-[18px] w-[18px]" /></div>
-      {!compact && <span className={clsx('text-[17px] font-bold tracking-tight', light ? 'text-white' : 'text-slate-900')}>BillPoodum</span>}
+    <div className="flex min-w-0 items-center gap-2.5">
+      <img src={BRAND_LOGO} alt="" className="h-8 w-8 shrink-0 rounded-lg shadow-sm" draggable={false} />
+      {!compact && <span className={clsx('truncate whitespace-nowrap text-[15px] font-bold tracking-tight', light ? 'text-white' : 'text-slate-900')} data-no-i18n>{BRAND.name}</span>}
     </div>
   )
 }
@@ -50,7 +52,8 @@ export function useQrAlerts() {
       const fresh = pending.filter((o) => !seen.current!.has(o.id))
       if (fresh.length) { chime(); toast(`New QR order · ${fresh[0].number}${fresh[0].guest?.name ? ` from ${fresh[0].guest.name}` : ''}`, 'info') }
     }
-    seen.current = ids
+    // Every order ever seen in this tab: the chime plays once per order, even if an update brings it back.
+    seen.current = new Set([...(seen.current ?? []), ...ids])
   }, [pending, toast])
   return pending?.length ?? 0
 }
@@ -89,7 +92,7 @@ export function UserMenu({ onDark }: { onDark?: boolean }) {
   const { me } = useApp()
   const nav = useNavigate()
   const loc = useLocation()
-  // Replies from the BillPoodum team that this shop hasn't read yet.
+  // Replies from the Kadai Kalanjiyam team that this shop hasn't read yet.
   const { data: tickets = [] } = useData(() => (me && !me.support ? api.support.mine() : Promise.resolve([])), [me?.business.id])
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -199,7 +202,7 @@ export function AppLayout() {
         <header className="flex h-16 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4 print:hidden lg:px-6">
           <button className="-ml-1 rounded-lg p-2 text-slate-600 hover:bg-slate-100 lg:hidden" onClick={() => setDrawer(true)} aria-label="Menu"><Menu className="h-5 w-5" /></button>
           <Link to="/settings" className="flex min-w-0 items-center gap-2.5">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-orange-50 text-lg">{me.business.logoEmoji}</span>
+            <ShopLogo business={me.business} />
             <div className="min-w-0 leading-tight">
               <p className="truncate text-sm font-semibold text-slate-900">{me.business.name || 'My Business'}</p>
               <p className="truncate text-[11px] text-slate-500">{me.business.subType}</p>

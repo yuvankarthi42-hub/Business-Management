@@ -11,7 +11,7 @@ import { ScanAddModal } from '@/features/supermarket/ScanAdd'
 import { ProductImportModal } from '@/features/ProductImport'
 import { CategoryLabel, Thumb } from '@/components/Thumb'
 import { priceLabel } from '@/features/Catalog'
-import { DEFAULT_TERMS, defaultCategoriesFor, modulesShownFor, modulesFor, ORDER_TYPE_LABEL, TEMPLATES, TERM_LABELS, templateFor } from '@/core/config'
+import { DEFAULT_TERMS, defaultCategoriesFor, modulesShownFor, modulesFor, ORDER_TYPE_LABEL, TEMPLATES, TERM_LABELS, templateFor, templateKeyOf, type BusinessTemplate } from '@/core/config'
 import type { BusinessCategory, ModuleConfig, OrderType, TermKey, Terminology } from '@/core/types'
 import { api } from '@/data'
 import { uid } from '@/lib/format'
@@ -34,6 +34,8 @@ export default function Onboarding() {
   const saved = me?.business
   const [category, setCategory] = useState<BusinessCategory>(saved?.category ?? 'food')
   const [subType, setSubType] = useState(saved?.subType ?? 'Fast Food')
+  // Which type card is chosen (Textile is its own card, saved as a retail business).
+  const [tplKey, setTplKey] = useState<BusinessTemplate['key']>(saved ? templateKeyOf(saved) : 'food')
   const [modules, setModules] = useState<ModuleConfig>(saved?.modules ?? modulesFor('food'))
   const [orderTypes, setOrderTypes] = useState<OrderType[]>(saved?.billing.orderTypes ?? templateFor('food').orderTypes)
   const [terms, setTerms] = useState<Terminology>(saved?.terminology ?? { ...DEFAULT_TERMS, ...templateFor('food').terms })
@@ -53,10 +55,12 @@ export default function Onboarding() {
     setCats(startCats(category, subType))
   }, [category, subType])
 
-  const pickCategory = (c: BusinessCategory) => {
-    const tpl = templateFor(c)
-    setCategory(c); setSubType(tpl.subTypes[0]); setModules(modulesFor(c)); setOrderTypes(tpl.orderTypes)
-    setTerms({ ...DEFAULT_TERMS, ...tpl.terms })
+  const pickCategory = (t: BusinessTemplate) => {
+    const c = t.category
+    // Textile: counter billing only, no delivery board (both can be turned on later in Settings).
+    setTplKey(t.key); setCategory(c); setSubType(t.subTypes[0]); setOrderTypes(t.orderTypes)
+    setModules(t.key === 'textile' ? { ...modulesFor(c), customerOrders: false } : modulesFor(c))
+    setTerms({ ...DEFAULT_TERMS, ...t.terms })
   }
 
   const steps: { key: StepKey; label: string }[] = [
@@ -103,7 +107,7 @@ export default function Onboarding() {
     if (ok) { await refresh(); nav(goTo, { replace: true }) }
   }
 
-  const tpl = templateFor(category)
+  const tpl = TEMPLATES.find((t) => t.key === tplKey) ?? templateFor(category)
   const isFood = category === 'food' || category === 'restaurant'
 
   return (
@@ -131,7 +135,7 @@ export default function Onboarding() {
             <>
               <h2 className="text-xl font-semibold">What’s your business called?</h2>
               <p className="mt-1 text-sm text-slate-500">This appears on your bills and dashboard. You can change it later.</p>
-              <Field label="Business name" className="mt-6"><Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Sri Murugan Bakery" className="h-12 text-base" /></Field>
+              <Field required label="Business name" className="mt-6"><Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Sri Murugan Bakery" className="h-12 text-base" /></Field>
             </>
           )}
 
@@ -139,12 +143,12 @@ export default function Onboarding() {
             <>
               <h2 className="text-xl font-semibold">What type of business do you run?</h2>
               <p className="mt-1 text-sm text-slate-500">Choose a type to get started. You can always change features later.</p>
-              <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
                 {TEMPLATES.map((t) => (
-                  <button key={t.category} onClick={() => pickCategory(t.category)}
+                  <button key={t.key} onClick={() => pickCategory(t)}
                     className={clsx('relative flex flex-col items-center rounded-xl border-2 p-4 text-center transition',
-                      category === t.category ? 'border-brand-600 bg-brand-50/50' : 'border-slate-200 hover:border-slate-300')}>
-                    {category === t.category && <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-brand-600 text-white"><Check className="h-3 w-3" /></span>}
+                      tplKey === t.key ? 'border-brand-600 bg-brand-50/50' : 'border-slate-200 hover:border-slate-300')}>
+                    {tplKey === t.key && <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-brand-600 text-white"><Check className="h-3 w-3" /></span>}
                     <span className="text-3xl">{t.emoji}</span>
                     <span className="mt-2 text-sm font-semibold">{t.name}</span>
                     <span className="mt-1 text-[11px] leading-snug text-slate-500">{t.examples}</span>

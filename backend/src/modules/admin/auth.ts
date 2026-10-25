@@ -32,7 +32,7 @@ export async function ensureFirstAdmin(db: Db): Promise<string | null> {
   const username = (process.env.LOCAL_ADMIN_USER ?? '').trim().toLowerCase()
   const password = process.env.LOCAL_ADMIN_PASSWORD ?? ''
   if (!username || !password) { console.log('No product admin yet. Set LOCAL_ADMIN_USER and LOCAL_ADMIN_PASSWORD, or call admin.setup.'); return null }
-  await db.insert('platform_admins', { name: 'BillPoodum Admin', username, password_hash: await hashPassword(password), role: E.AdminRole.super, is_active: true })
+  await db.insert('platform_admins', { name: 'Kadai Kalanjiyam Admin', username, password_hash: await hashPassword(password), role: E.AdminRole.super, is_active: true })
   return username
 }
 
@@ -66,7 +66,7 @@ define('admin', {
     const username = String(input?.username ?? '').trim().toLowerCase()
     if (!/^[a-z0-9._-]{4,30}$/.test(username)) throw new ApiError('Username: 4–30 letters, numbers, dot, dash or underscore')
     assertPassword(input.password)
-    const a = await c.platform.insert('platform_admins', { name: String(input.name ?? '').trim() || 'BillPoodum Admin', username, password_hash: await hashPassword(input.password), role: code(E.AdminRole, 'super'), is_active: true })
+    const a = await c.platform.insert('platform_admins', { name: String(input.name ?? '').trim() || 'Kadai Kalanjiyam Admin', username, password_hash: await hashPassword(input.password), role: code(E.AdminRole, 'super'), is_active: true })
     return { id: a.ROWID, username }
   }),
 })

@@ -20,6 +20,7 @@ interface Stream { db: string; tx: SqlTx | null }
 export async function startFakeTurso() {
   const SQL = await sqlJs()
   const dbs = new Map<string, SqlJsDriver>()
+  const dbTokens = new Map<string, string>()
   const streams = new Map<string, Stream>()
   const body = (req: IncomingMessage) => new Promise<string>((res) => { let s = ''; req.on('data', (d) => { s += d }); req.on('end', () => res(s)) })
 
@@ -39,7 +40,10 @@ export async function startFakeTurso() {
   const server = createServer(async (req, res) => {
     const m = /^\/db\/([a-z0-9-]+)\/v2\/pipeline$/.exec(req.url ?? '')
     if (req.method !== 'POST' || !m) { res.writeHead(404).end('not found'); return }
-    if (req.headers.authorization !== `Bearer ${TOKEN}`) { res.writeHead(401).end('unauthorized'); return }
+    const auth = req.headers.authorization
+    // TOKEN opens only the platform database (like a Turso database token); a shop database needs its own.
+    const ok = m[1] === 'platform' ? auth === `Bearer ${TOKEN}` : auth === `Bearer ${dbTokens.get(m[1])}`
+    if (!ok) { res.writeHead(401).end('unauthorized'); return }
     if (!dbs.has(m[1])) { res.writeHead(404).end('database not found'); return }
     const { baton, requests } = JSON.parse(await body(req)) as { baton: string | null; requests: { type: string; stmt?: { sql: string; args?: HValue[] }; sql?: string; batch?: { steps: { stmt: { sql: string; args?: HValue[] }; condition?: Cond }[] } }[] }
     let st: Stream | undefined = baton ? streams.get(baton) : { db: m[1], tx: null }
@@ -75,8 +79,9 @@ export async function startFakeTurso() {
 
   const provisioner: Provisioner = {
     platform: async () => new HranaDriver(`${base}/platform`, TOKEN),
-    create: async (name) => { make(name); return `${base}/${name}` },
-    connect: async (url) => new HranaDriver(url, TOKEN),
+    // Like Turso: each new database gets its own token, and only that token (or the group token) opens it.
+    create: async (name) => { make(name); const t = `db-token-${name}`; dbTokens.set(name, t); return { url: `${base}/${name}`, token: t } },
+    connect: async (url, token) => new HranaDriver(url, token || TOKEN),
     drop: async (name) => { dbs.delete(name) },
   }
   return { provisioner, close: () => server.close(), drivers: dbs }

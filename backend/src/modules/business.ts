@@ -1,7 +1,10 @@
 // Business settings, sign-up setup, branches, roles and staff logins.
 import { COUNTRIES, normalizePhone } from '@/core/phone'
 import { branchLimitMessage } from '@/core/subscription'
-import { isHardware, isSupermarket } from '@/core/config'
+import { isHardware, isSupermarket, isTextile } from '@/core/config'
+import { cleanStickers, stickerSettings } from '@/core/stickers'
+import { cleanGstin, GST_STATES, gstinError } from '@/core/gst'
+import { cleanLoyalty, loyaltyOf } from '@/core/loyalty'
 import type { BillingSettings, Branch, BranchPrinter, Business, OrderType, Permission, Role, User } from '@/core/types'
 import { PERMISSIONS } from '@/core/config'
 import type { Ctx } from '../core/context'
@@ -9,6 +12,7 @@ import { ApiError, forbidden } from '../core/errors'
 import { assertPassword, hashPassword } from '../core/passwords'
 import { define, userRead, userWrite } from '../core/registry'
 import { branchFrom, loadBusiness, PRINTER_DEFAULTS } from '../domain/business'
+import { storeImage } from './catalog'
 import { loadRoles, loadUsers, payColumns, setUserBranches } from '../domain/people'
 import { saveUserWithLogins, syncBranchCount, syncOwner } from '../domain/directory'
 import { bumpEpoch } from '../domain/session'
@@ -39,6 +43,7 @@ async function setSeqSafely(c: Ctx, branchId: string | null, name: SeqName, pref
 
 async function saveBilling(c: Ctx, patch: Partial<BillingSettings>) {
   const { invoicePrefix, nextInvoiceNumber, orderPrefix, nextOrderNumber, nextKotNumber, creditNotePrefix, nextCreditNoteNumber, taxRates, defaultTaxRateId, wholesale, ...rest } = patch
+  if (rest.mrpDiscounts !== undefined) rest.mrpDiscounts = rest.mrpDiscounts !== false
   if (Object.keys(rest).length) {
     const cur = await getSetting<Record<string, unknown>>(c.db, c.businessId, 'billing', {})
     await putSetting(c.db, c.businessId, 'billing', { ...cur, ...rest }, c.userId)
@@ -108,7 +113,12 @@ define('business', {
     if (patch.subType !== undefined) row.sub_type = String(patch.subType).slice(0, 60)
     if (patch.address !== undefined) row.address = patch.address.slice(0, 255)
     if (patch.email !== undefined) row.email = patch.email.trim().slice(0, 150) || null
-    if (patch.gstin !== undefined) row.gstin = patch.gstin.trim().toUpperCase().slice(0, 15) || null
+    if (patch.gstin !== undefined && cleanGstin(patch.gstin) !== cleanGstin(b.gstin)) {
+      // Checked only when it changes, so a profile with an older GSTIN can still be saved.
+      const err = gstinError(patch.gstin)
+      if (err) throw new ApiError(err)
+      row.gstin = cleanGstin(patch.gstin) || null
+    }
     if (patch.defaultCountry !== undefined) row.country_code = patch.defaultCountry
     if (patch.currency !== undefined) row.currency_code = patch.currency.slice(0, 3)
     if (patch.currencySymbol !== undefined) row.currency_symbol = patch.currencySymbol.slice(0, 5)
@@ -117,6 +127,20 @@ define('business', {
     if (patch.terminology) await putSetting(c.db, b.id, 'terminology', patch.terminology, c.userId)
     if (patch.modules) await putSetting(c.db, b.id, 'modules', patch.modules, c.userId)
     if (patch.qr) await putSetting(c.db, b.id, 'qr', patch.qr, c.userId)
+    if (patch.stateCode !== undefined) {
+      if (patch.stateCode && !GST_STATES[patch.stateCode]) throw new ApiError('Choose a state')
+      await putSetting(c.db, b.id, 'gst', { stateCode: patch.stateCode || '' }, c.userId)
+    }
+    if (patch.loyalty) {
+      let l
+      try { l = cleanLoyalty(patch.loyalty, loyaltyOf(b)) } catch (e) { throw new ApiError((e as Error).message) }
+      await putSetting(c.db, b.id, 'loyalty', l, c.userId)
+    }
+    if (patch.stickers) {
+      let st
+      try { st = cleanStickers(patch.stickers, stickerSettings(b)) } catch (e) { throw new ApiError((e as Error).message) }
+      await putSetting(c.db, b.id, 'stickers', st, c.userId)
+    }
     if (patch.billing) await saveBilling(c, patch.billing)
     await audit(c, 'settings', b.id, 'update', Object.keys(patch).join(', '))
     await bumpEpoch(c, b.id)
@@ -124,6 +148,22 @@ define('business', {
     if (Object.keys(row).length) await c.platform.update('businesses', b.id, row)
     return freshBusiness(c)
   }, { perm: 'settings.manage' }),
+  /** Shop logo, compressed in the browser (≤ 80 KB, 512 px). null removes it — the Kadai Kalanjiyam logo shows again. */
+  setLogo: userWrite(async (c, input: { image: string; width?: number; height?: number; quality?: number; originalBytes?: number } | null) => {
+    const old = await getSetting<{ logoKey?: string; mediaId?: string }>(c.db, c.businessId, 'brand', {})
+    const img = input ? await storeImage(c, 'logo', input) : null
+    const key = img ? c.files.keyOf(img.url) : null
+    await putSetting(c.db, c.businessId, 'brand', img && key ? { logoKey: key, mediaId: img.id } : {}, c.userId)
+    await c.platform.update('businesses', c.businessId, { logo_media_id: img?.id ?? null })
+    // The old file is removed only after the new one is saved.
+    if (old.logoKey && old.logoKey !== key) {
+      await c.files.remove(old.logoKey)
+      if (old.mediaId) await c.db.delete('media_files', old.mediaId).catch(() => {})
+    }
+    await audit(c, 'settings', c.businessId, 'update', img ? 'logo uploaded' : 'logo removed')
+    await bumpEpoch(c, c.businessId)
+    return freshBusiness(c)
+  }, { perm: 'settings.manage', tx: 'none' }),
 
   /**
    * Sign-up setup, saved before items are added so the normal product form can be used.
@@ -139,9 +179,9 @@ define('business', {
     await c.platform.update('businesses', c.businessId, { name: input.name.trim().slice(0, 150), category: code(E.BusinessCategory, input.category), sub_type: String(input.subType).slice(0, 60) })
     await putSetting(c.db, c.businessId, 'modules', modules, c.userId)
     await putSetting(c.db, c.businessId, 'terminology', input.terminology, c.userId)
-    // MRP / shelf prices include GST in supermarkets.
-    await saveBilling(c, { orderTypes: input.orderTypes, taxMode: isSupermarket(probe) ? 'inclusive' : 'exclusive' })
-    await setDefaultTaxByRate(c, isHardware(probe) ? 18 : input.category === 'retail' ? 0 : 5)
+    // MRP / shelf prices include GST in supermarkets and textile shops (MRP on the sticker is what the customer pays).
+    await saveBilling(c, { orderTypes: input.orderTypes, taxMode: isSupermarket(probe) || isTextile(probe) ? 'inclusive' : 'exclusive' })
+    await setDefaultTaxByRate(c, isHardware(probe) ? 18 : isTextile(probe) ? 5 : input.category === 'retail' ? 0 : 5)
 
     // Categories: update kept ones, add new ones, remove the ones taken out of the list.
     const cats = await c.db.select('categories', { where: { business_id: c.businessId } })
@@ -300,33 +340,43 @@ define('users', {
   save: userWrite(async (c, u: Partial<User> & { name: string; phone: string; roleId: string }) => {
     const name = String(u.name ?? '').trim()
     if (!name) throw new ApiError('Enter the name')
-    const phone = cleanPhone(u.phone, c.business.defaultCountry, 'Enter the mobile number (used to sign in)')
+    const existing0 = u.id ? await own(c, 'users', u.id, 'User not found') : null
+    // Staff who don't use the app (cleaners, helpers): no role, no password, never sign in.
+    const canLogin = u.canLogin === undefined ? (existing0 ? existing0.can_login !== false : true) : u.canLogin !== false
+    if (!canLogin && existing0?.ROWID === c.userId) throw new ApiError('You can’t turn off app access for yourself')
+    if (!canLogin && existing0?.username) throw new ApiError('The owner’s login can’t be turned into a staff member without app access')
+    const phone = cleanPhone(u.phone, c.business.defaultCountry, canLogin ? 'Enter the mobile number (used to sign in)' : 'Enter the mobile number')
     const clash = await c.db.first('users', { phone })
     if (clash && clash.ROWID !== u.id) throw new ApiError('Mobile number already used by another user')
-    await own(c, 'roles', u.roleId, 'Choose a role')
+    const roleId = canLogin ? (await own(c, 'roles', u.roleId, 'Choose a role')).ROWID : (u.roleId ? (await own(c, 'roles', u.roleId, 'Choose a role')).ROWID : null)
     const email = String(u.email ?? '').trim().toLowerCase()
     if (email && !/^[^\s@'"\\]+@[^\s@'"\\]+\.[^\s@'"\\]+$/.test(email)) throw new ApiError('Enter a valid email')
     const branchList = (u.branchIds?.length ? u.branchIds : [c.writeBranch({ fallback: true })]).filter((id) => c.s.allBranches.some((b) => b.id === id))
     if (!branchList.length) throw new ApiError('Select at least one branch')
-    const existing = u.id ? await own(c, 'users', u.id, 'User not found') : null
+    const existing = existing0
     if (existing && existing.ROWID === c.userId && u.active === false) throw new ApiError('You can’t turn off your own login')
-    if (!existing) assertPassword(u.password)
-    else if (u.password) assertPassword(u.password)
-    const hash = u.password ? await hashPassword(u.password) : null
-    const logins = { username: existing ? str(existing.username) || null : null, phone, email: email || null }
+    // A password is needed for a new login, or when app access is turned on for someone who had none.
+    const needsPassword = canLogin && (!existing || !existing.password_hash || existing.can_login === false)
+    if (needsPassword) assertPassword(u.password)
+    else if (canLogin && u.password) assertPassword(u.password)
+    const hash = canLogin && u.password ? await hashPassword(u.password) : null
+    // Without app access nothing is a sign-in name, so the mobile / email can't be used to sign in (and are freed).
+    const logins = canLogin ? { username: existing ? str(existing.username) || null : null, phone, email: email || null } : { username: null, phone: null, email: null }
+    const losesAccess = !!existing && !canLogin && existing.can_login !== false
     const row = await saveUserWithLogins(c, c.businessId, existing, logins, async () => {
       if (existing) {
-        const patch: Record<string, string | number | boolean | null> = { name: name.slice(0, 120), phone, email: email || null, role_id: u.roleId, is_active: u.active ?? existing.is_active !== false, default_branch_id: branchList[0] }
+        const patch: Record<string, string | number | boolean | null> = { name: name.slice(0, 120), phone, email: email || null, role_id: roleId, is_active: u.active ?? existing.is_active !== false, default_branch_id: branchList[0], can_login: canLogin }
         if (hash) { patch.password_hash = hash; patch.token_version = Number(existing.token_version ?? 1) + 1 }
-        if (u.active === false && existing.is_active !== false) patch.token_version = Number(existing.token_version ?? 1) + 1 // signs them out everywhere
+        if (!canLogin) patch.password_hash = null
+        if ((u.active === false && existing.is_active !== false) || losesAccess) patch.token_version = Number(existing.token_version ?? 1) + 1 // signs them out everywhere
         const saved = await c.db.update('users', existing.ROWID, patch)
         if (u.branchIds) await setUserBranches(c.db, existing.ROWID, branchList)
         await audit(c, 'user', existing.ROWID, 'update', name)
         return saved
       }
       const made = await c.db.insert('users', {
-        business_id: c.businessId, role_id: u.roleId, default_branch_id: branchList[0], name: name.slice(0, 120), phone, email: email || null,
-        password_hash: hash!, must_change_password: false, is_active: true, ...payColumns(u.pay),
+        business_id: c.businessId, role_id: roleId, default_branch_id: branchList[0], name: name.slice(0, 120), phone, email: email || null,
+        password_hash: hash, can_login: canLogin, must_change_password: false, is_active: true, ...payColumns(u.pay),
       })
       await setUserBranches(c.db, made.ROWID, branchList)
       await audit(c, 'user', made.ROWID, 'create', name)

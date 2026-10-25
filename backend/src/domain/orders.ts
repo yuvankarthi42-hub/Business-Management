@@ -1,7 +1,9 @@
 // Orders / bills ⇄ tables (orders, order_items, order_item_addons, order_item_batches, payments,
 // kitchen_tickets, kitchen_ticket_items, dining_tables). Same rules as the app's mock API.
+import { customerStateOf, isInterState, shopStateOf, splitLineTax } from '@/core/gst'
+import { loyaltyOf, pointsToEarn, pointsValue, redeemError } from '@/core/loyalty'
 import { computeTotals, r2, taxBreakup } from '@/core/pricing'
-import { makeItem } from '@/core/orderItem'
+import { makeItem, priceOverrideError, withCounterPrice } from '@/core/orderItem'
 import { applySpecials } from '@/core/specials'
 import type { Customer, DiningTable, KitchenTicket, Order, OrderItem, OrderType, Payment, PaymentMethod } from '@/core/types'
 import { randomBytes } from 'node:crypto'
@@ -12,6 +14,7 @@ import type { Db, Row, Where } from '../db/types'
 import { DuplicateError } from '../db/types'
 import { DEFAULT_SEQ } from './business'
 import { loadProducts, wholesaleList } from './catalog'
+import { movePoints } from './points'
 import { moveStockMany, stockProduct } from './stock'
 import { audit, bizDay, code, codeOrNull, E, fromMilli, fromMinor, isId, nameOf, nameOrNull, nextNumber, str, strOrNull, toBp, toMilli, toMinor } from './util'
 
@@ -25,6 +28,10 @@ export interface OrderDraft {
   notes: string
   source: Order['source']
   fulfilment?: Order['fulfilment']
+  /** Who sold it (textile counters). undefined = keep as is, null = nobody. */
+  salespersonId?: string | null
+  /** Loyalty points to use on this bill (checkout only). Their value is given as a discount before GST. */
+  pointsToRedeem?: number
 }
 export interface PaymentInput { method: PaymentMethod; amount: number; reference?: string }
 
@@ -49,6 +56,9 @@ export function itemFrom(r: Row, addons: Row[]): OrderItem {
     addOns: addons.filter((a) => a.order_item_id === r.ROWID).map((a) => ({ id: str(a.addon_id) || a.ROWID, name: str(a.name), price: fromMinor(a.price_minor) })),
     qty: fromMilli(r.qty_milli), unit: str(r.unit), unitPrice: fromMinor(r.unit_price_minor), taxRate: Number(r.tax_bp ?? 0) / 100, notes: str(r.note),
     kotQty: fromMilli(r.kot_qty_milli), ...(r.price_list_id ? { priceTier: 'wholesale' as const } : {}),
+    ...(r.mrp_minor != null && Number(r.mrp_minor) > Number(r.unit_price_minor) ? { mrp: fromMinor(r.mrp_minor) } : {}),
+    ...(r.hsn_code ? { hsn: str(r.hsn_code) } : {}),
+    ...(r.list_price_minor != null ? { listPrice: fromMinor(r.list_price_minor), priceOverride: fromMinor(r.unit_price_minor) } : {}),
   }
 }
 export function orderFrom(r: Row, items: OrderItem[]): Order {
@@ -64,6 +74,13 @@ export function orderFrom(r: Row, items: OrderItem[]): Order {
     ...(r.qr_status != null ? { qrStatus: nameOf(E.QrStatus, r.qr_status) as Order['qrStatus'] } : {}),
     ...(r.fulfilment != null ? { fulfilment: nameOf(E.Fulfilment, r.fulfilment) as Order['fulfilment'] } : {}),
     ...(guest ? { guest } : {}),
+    ...(r.salesperson_id ? { salespersonId: str(r.salesperson_id) } : {}),
+    ...(r.customer_gstin ? { customerGstin: str(r.customer_gstin) } : {}),
+    ...(r.place_of_supply ? { placeOfSupply: str(r.place_of_supply) } : {}),
+    ...(r.is_igst ? { igst: true } : {}),
+    ...(Number(r.points_redeemed) > 0 ? { pointsRedeemed: Number(r.points_redeemed), pointsValue: fromMinor(r.points_value_minor) } : {}),
+    ...(Number(r.points_earned) > 0 ? { pointsEarned: Number(r.points_earned) } : {}),
+    ...(r.points_balance_after != null ? { pointsBalance: Number(r.points_balance_after) } : {}),
     createdAt: r.CREATEDTIME, createdBy: str(r.created_by) || 'guest', updatedAt: r.MODIFIEDTIME, updatedBy: str(r.updated_by),
   }
 }
@@ -114,6 +131,7 @@ export function customerFrom(r: Row, wholesaleListId: string | null): Customer {
   return {
     id: r.ROWID, businessId: str(r.business_id), name: str(r.name), phone: str(r.phone), email: str(r.email), address: str(r.address), notes: str(r.notes),
     marketingOptIn: r.marketing_opt_in !== false, priceTier: r.price_list_id && r.price_list_id === wholesaleListId ? 'wholesale' : 'retail',
+    gstin: strOrNull(r.gstin), stateCode: strOrNull(r.state_code), pointsBalance: Number(r.points_balance ?? 0),
     createdAt: r.CREATEDTIME, createdBy: '', updatedAt: r.MODIFIEDTIME, updatedBy: '',
   }
 }
@@ -123,13 +141,16 @@ export function customerFrom(r: Row, wholesaleListId: string | null): Customer {
  * Never trust prices from the browser: every line is re-priced from the catalogue (size, add-ons,
  * contractor rate, today's special, tax). Only the item, size, add-ons, quantity and note are taken from the request.
  */
-export async function priceItems(c: Ctx, items: OrderItem[], previous: Map<string, Row> = new Map(), businessId = c.businessId, branchIds?: string[]) {
+export async function priceItems(c: Ctx, items: OrderItem[], previous: Map<string, Row> = new Map(), businessId = c.businessId, branchIds?: string[], trusted = false) {
   const ids = [...new Set(items.map((i) => i.productId))]
   if (ids.some((id) => !isId(id))) throw new ApiError('An item on this bill was not found')
   const products = await loadProducts(c, { ids, withExpiry: false, withStock: false, branches: branchIds })
   const specials = (await c.db.select('daily_specials', { where: { business_id: businessId, special_date: bizDay(c) } })).map((r) => ({ id: r.ROWID, businessId, date: str(r.special_date), productId: str(r.product_id), specialPrice: r.offer_price_minor == null ? null : fromMinor(r.offer_price_minor), tag: str(r.tag), sort: Number(r.sort_order ?? 0) }))
   const priced = applySpecials(products, specials).products
   const billing = c.business.billing
+  // HSN: the item's own code, else its category's (snapshot on the bill line).
+  const catIds = [...new Set(priced.filter((p) => !p.hsn && p.categoryId).map((p) => p.categoryId!))]
+  const catHsn = new Map((catIds.length ? await selectIn(c, 'categories', 'ROWID', catIds, { business_id: businessId }) : []).map((r) => [r.ROWID, str(r.hsn_code)]))
   return items.map((i) => {
     const p = priced.find((x) => x.id === i.productId)
     const prev = isId(i.id) ? previous.get(i.id) : undefined
@@ -139,16 +160,27 @@ export async function priceItems(c: Ctx, items: OrderItem[], previous: Map<strin
     const variant = i.variantId ? p.variants.find((v) => v.id === i.variantId) ?? null : null
     if (i.variantId && !variant) throw new ApiError(`${p.name}: that size is no longer available`)
     const addOns = (i.addOns ?? []).map((a) => p.addOns.find((x) => x.id === a.id)).filter(Boolean) as typeof p.addOns
-    const item = makeItem(p, billing, { variant, addOns, qty, notes: String(i.notes ?? '').slice(0, 150), tier: i.priceTier })
+    let item = makeItem(p, billing, { variant, addOns, qty, notes: String(i.notes ?? '').slice(0, 150), tier: i.priceTier })
+    // Price changed at the counter (price change / line discount): needs its own permission, unless the line
+    // already had exactly this price (a running order saved again).
+    if (i.priceOverride !== undefined && i.priceOverride !== null) {
+      const price = r2(Number(i.priceOverride))
+      const err = priceOverrideError(price, variant ? null : p.mrp)
+      if (err) throw new ApiError(`${p.name}: ${err}`)
+      const same = !!prev && prev.list_price_minor != null && Number(prev.unit_price_minor) === toMinor(price)
+      if (!same && !trusted && c.session && !c.can('billing.price')) throw new ApiError('You don’t have permission to change prices at billing', 403, 'FORBIDDEN')
+      item = withCounterPrice(item, price, variant ? null : p)
+    }
     // Keep the line id and what the kitchen already has.
-    return { ...item, id: prev ? prev.ROWID : i.id, kotQty: prev ? fromMilli(prev.kot_qty_milli) : 0, cost: p.costPrice, sendToKitchen: p.sendToKitchen, isVeg: p.isVeg }
+    const hsn = p.hsn || (p.categoryId ? catHsn.get(p.categoryId) : '') || ''
+    return { ...item, ...(hsn ? { hsn } : {}), id: prev ? prev.ROWID : i.id, kotQty: prev ? fromMilli(prev.kot_qty_milli) : 0, cost: p.costPrice, sendToKitchen: p.sendToKitchen, isVeg: p.isVeg }
   })
 }
 type PricedItem = Awaited<ReturnType<typeof priceItems>>[number]
 
 const itemColumns = (c: Ctx, orderId: string, it: PricedItem, sort: number, listId: string | null) => ({
   business_id: c.businessId, order_id: orderId, product_id: it.productId, variant_id: it.variantId, product_name: it.name.slice(0, 150), variant_name: it.variantName?.slice(0, 60) ?? null,
-  unit: (it.unit || 'pc').slice(0, 10), qty_milli: toMilli(it.qty), unit_price_minor: toMinor(it.unitPrice), price_list_id: it.priceTier === 'wholesale' ? listId : null,
+  unit: (it.unit || 'pc').slice(0, 10), qty_milli: toMilli(it.qty), unit_price_minor: toMinor(it.unitPrice), mrp_minor: it.mrp ? toMinor(it.mrp) : null, hsn_code: it.hsn || null, list_price_minor: it.listPrice !== undefined ? toMinor(it.listPrice) : null, price_list_id: it.priceTier === 'wholesale' ? listId : null,
   discount_minor: 0, tax_bp: toBp(it.taxRate), tax_minor: 0, line_total_minor: toMinor(r2(it.qty * it.unitPrice)), cost_minor: toMinor(it.cost ?? 0),
   note: it.notes.slice(0, 150) || null, kot_qty_milli: toMilli(it.kotQty), sort_order: sort,
 })
@@ -185,31 +217,64 @@ const totalsColumns = (t: { subtotal: number; discount: number; tax: number; rou
   total_minor: toMinor(t.total), balance_minor: toMinor(r2(t.total - paid)),
 })
 
+/** Points the customer wants to use on this bill: checked against the shop's rules and their balance. */
+function redeemPlan(c: Ctx, draft: OrderDraft, customer: Row | null, items: OrderItem[]) {
+  const points = Math.floor(Number(draft.pointsToRedeem ?? 0))
+  if (!points) return { points: 0, value: 0 }
+  if (!customer) throw new ApiError('Select the customer to use their points')
+  const s = loyaltyOf(c.business)
+  const before = computeTotals(items, draft.discount, c.business.billing).total
+  const err = redeemError(s, points, Number(customer.points_balance ?? 0), before)
+  if (err) throw new ApiError(err)
+  return { points, value: pointsValue(s, points) }
+}
+
 /** Create or update a running order (the app's writeOrder). Returns the order row id. */
-export async function writeOrder(c: Ctx, draft: OrderDraft, opts: { qr?: { guest: { name: string; phone: string; address: string }; branchId: string; auto: boolean }; info?: { existing?: boolean } } = {}): Promise<string> {
+export async function writeOrder(c: Ctx, draft: OrderDraft, opts: { qr?: { guest: { name: string; phone: string; address: string }; branchId: string; auto: boolean }; info?: { existing?: boolean }; trustedDiscount?: boolean } = {}): Promise<string> {
   if (!Array.isArray(draft.items)) throw new ApiError('Add at least one item')
+  const discount = r2(Number(draft.discount ?? 0))
+  if (!(discount >= 0)) throw new ApiError('Enter a valid discount')
+  // A discount needs "Give discounts" — the screen hides the box, but the server decides. Saving a running order
+  // again with the discount it already has is fine (merging tables passes the existing discounts on).
+  if (discount > 0 && c.session && !opts.trustedDiscount && !c.can('billing.discount')) {
+    const prev = draft.id && isId(draft.id) ? await c.db.first('orders', { ROWID: draft.id, business_id: c.businessId }) : null
+    const prevManual = prev ? fromMinor(prev.discount_minor) - fromMinor(prev.points_value_minor) : 0
+    if (Math.abs(prevManual - discount) > 0.001) throw new ApiError('You don’t have permission to give a discount', 403, 'FORBIDDEN')
+  }
   if (!['counter', 'dine_in', 'takeaway', 'delivery'].includes(draft.type)) throw new ApiError('Choose the order type')
   const branchId = opts.qr ? opts.qr.branchId : null
   if (draft.tableId) {
     const t = await c.db.first('dining_tables', { ROWID: isId(draft.tableId) ? draft.tableId : '0', business_id: c.businessId })
     if (!t) throw new ApiError('Table not found')
   }
+  let customer: Row | null = null
   if (draft.customerId) {
-    const cu = await c.db.first('customers', { ROWID: isId(draft.customerId) ? draft.customerId : '0', business_id: c.businessId })
-    if (!cu) throw new ApiError('Customer not found')
+    customer = await c.db.first('customers', { ROWID: isId(draft.customerId) ? draft.customerId : '0', business_id: c.businessId })
+    if (!customer) throw new ApiError('Customer not found')
   }
   const list = draft.items.some((i) => i.priceTier === 'wholesale') ? await wholesaleList(c) : null
+  let salesperson: { salesperson_id: string | null } | Record<string, never> = {}
+  if (draft.salespersonId !== undefined) {
+    const id = draft.salespersonId ? String(draft.salespersonId) : null
+    if (id) {
+      const u = await c.db.first('users', { ROWID: isId(id) ? id : '0', business_id: c.businessId })
+      if (!u || u.is_active === false) throw new ApiError('Choose a salesperson from your staff')
+    }
+    salesperson = { salesperson_id: id }
+  }
   if (draft.id) {
     const { row } = await loadOrder(c, draft.id)
     if (Number(row.status) !== E.OrderStatus.open) throw new ApiError('Only running orders can be edited')
     const existing = await c.db.select('order_items', { where: { order_id: row.ROWID } })
-    const items = await priceItems(c, draft.items, new Map(existing.map((r) => [r.ROWID, r])))
-    const totals = computeTotals(items, draft.discount, c.business.billing)
+    const items = await priceItems(c, draft.items, new Map(existing.map((r) => [r.ROWID, r])), c.businessId, undefined, !!opts.trustedDiscount)
+    const redeem = redeemPlan(c, draft, customer, items)
+    const totals = computeTotals(items, r2(draft.discount + redeem.value), c.business.billing)
     await writeItems(c, row.ROWID, items, existing, list?.ROWID ?? null)
     await c.db.update('orders', row.ROWID, {
+      points_redeemed: redeem.points, points_value_minor: toMinor(redeem.value),
       order_type: code(E.OrderType, draft.type), table_id: draft.tableId || null, customer_id: draft.customerId || null, note: String(draft.notes ?? '').slice(0, 255) || null,
       price_list_id: list?.ROWID ?? null, ...totalsColumns(totals, fromMinor(row.paid_minor)),
-      ...(draft.fulfilment ? { fulfilment: code(E.Fulfilment, draft.fulfilment) } : {}), updated_by: c.actorId,
+      ...(draft.fulfilment ? { fulfilment: code(E.Fulfilment, draft.fulfilment) } : {}), ...salesperson, updated_by: c.actorId,
       row_version: Number(row.row_version) + 1, // a settle that read the old lines will now be refused
     })
     return row.ROWID
@@ -218,8 +283,9 @@ export async function writeOrder(c: Ctx, draft: OrderDraft, opts: { qr?: { guest
   const uuid = clientUuid(c, ':o')
   const again = await c.db.first('orders', { client_uuid: uuid })
   if (again) { if (str(again.business_id) !== c.businessId) throw new ApiError('Duplicate request', 409); if (opts.info) opts.info.existing = true; return again.ROWID }
-  const items = await priceItems(c, draft.items, new Map(), c.businessId, branchId ? [branchId] : undefined)
-  const totals = computeTotals(items, draft.discount, c.business.billing)
+  const items = await priceItems(c, draft.items, new Map(), c.businessId, branchId ? [branchId] : undefined, !!opts.trustedDiscount)
+  const redeem = redeemPlan(c, draft, customer, items)
+  const totals = computeTotals(items, r2(draft.discount + redeem.value), c.business.billing)
   const num = await nextNumber(c.db, c.businessId, null, 'order', { prefix: c.business.billing.orderPrefix ?? DEFAULT_SEQ.order.prefix, start: DEFAULT_SEQ.order.start })
   const g = opts.qr?.guest
   let row: Row
@@ -230,7 +296,7 @@ export async function writeOrder(c: Ctx, draft: OrderDraft, opts: { qr?: { guest
       table_id: draft.tableId || null, customer_id: draft.customerId || null, customer_name: g?.name?.slice(0, 120) || null, customer_phone: g?.phone || null, customer_address: g?.address?.slice(0, 255) || null,
       qr_status: opts.qr ? E.QrStatus.pending : null, fulfilment: codeOrNull(E.Fulfilment, draft.fulfilment ?? null),
       price_list_id: list?.ROWID ?? null, ...totalsColumns(totals, 0), paid_minor: 0, returned_minor: 0, note: String(draft.notes ?? '').slice(0, 255) || null,
-      created_by: c.actorId, updated_by: c.actorId,
+      created_by: c.actorId, updated_by: c.actorId, ...salesperson, points_redeemed: redeem.points, points_value_minor: toMinor(redeem.value),
     })
   } catch (e) {
     if (e instanceof DuplicateError) { const r = await c.db.first('orders', { client_uuid: uuid }); if (r) { if (opts.info) opts.info.existing = true; return r.ROWID } }
@@ -302,6 +368,8 @@ export async function settle(c: Ctx, orderId: string, pays: PaymentInput[]) {
   })
   if (!claimed) throw new ApiError('This bill was just changed on another device. Please check it and try again.', 409, 'CONFLICT')
   try {
+    // Loyalty points used on the bill (already taken off as a discount) — the balance is checked again here.
+    if (order.pointsRedeemed && order.customerId) await movePoints(c, order.customerId, 'redeem', -order.pointsRedeemed, { orderId: row.ROWID, note: `Used on bill ${num.text}` })
     for (const [k, p] of real.entries()) {
       const returnId = p.method === 'credit_note' ? await redeemCreditNote(c, p.reference ?? '', r2(Number(p.amount))) : null
       await c.db.insert('payments', {
@@ -320,9 +388,27 @@ export async function settle(c: Ctx, orderId: string, pays: PaymentInput[]) {
   const moved = await moveStockMany(c, sold.map(({ i, p }) => ({ p: stockProduct(p), branchId: str(row.branch_id), qty: -i.qty, reason: 'sale' as const, opts: { note: `Sold — ${num.text}`, refType: 'order' as const, refId: row.ROWID } })))
   const used = sold.flatMap(({ i }, k) => moved[k].batches.map((b) => ({ business_id: c.businessId, order_item_id: i.id, batch_id: b.batchId, qty_milli: b.qtyMilli })))
   if (used.length) await c.db.insertMany('order_item_batches', used)
-  // GST break-up for the bill and reports.
-  const lines = taxBreakup(order.items, order.discount, c.business.billing, order.tax)
-  if (lines.length) await c.db.update('orders', row.ROWID, { tax_breakup_json: JSON.stringify(lines) })
+  // GST: B2B (customer's GSTIN) and place of supply → IGST for another state; per-line value before GST for returns.
+  const billing = c.business.billing
+  const cu = order.customerId ? await c.db.first('customers', { ROWID: order.customerId, business_id: c.businessId }) : null
+  const pos = cu ? customerStateOf({ gstin: strOrNull(cu.gstin), stateCode: strOrNull(cu.state_code) }) : null
+  const igst = billing.taxEnabled && order.tax > 0 && isInterState(shopStateOf(c.business), pos)
+  const split = splitLineTax(order.items, order.discount, billing, order.tax)
+  await c.db.updateMany('order_items', order.items.map((i, k) => ({ ROWID: i.id, discount_minor: toMinor(split[k].discount), taxable_minor: toMinor(split[k].taxable), tax_minor: toMinor(split[k].tax) })))
+  const lines = taxBreakup(order.items, order.discount, billing, order.tax).map((l) => ({ ...l, igst }))
+  // Loyalty: points for this bill (whole points on the amount after every discount).
+  const loyalty = loyaltyOf(c.business)
+  let earned = 0, balanceAfter: number | null = cu ? Number(cu.points_balance ?? 0) : null
+  if (cu && loyalty.enabled) {
+    const r = await movePoints(c, cu.ROWID, 'earn', pointsToEarn(loyalty, order.total, order.items), { orderId: row.ROWID, note: `Bill ${num.text}`, settings: loyalty })
+    earned = r.moved
+    if (r.balance !== null) balanceAfter = r.balance
+  }
+  await c.db.update('orders', row.ROWID, {
+    ...(lines.length ? { tax_breakup_json: JSON.stringify(lines) } : {}),
+    customer_gstin: cu && cu.gstin ? str(cu.gstin) : null, place_of_supply: pos, is_igst: igst,
+    points_earned: earned, points_balance_after: loyalty.enabled || order.pointsRedeemed ? balanceAfter : null,
+  })
   // Free merged tables.
   if (row.table_id) {
     const merged = await c.db.select('dining_tables', { where: { business_id: c.businessId, merged_into_id: str(row.table_id) } })

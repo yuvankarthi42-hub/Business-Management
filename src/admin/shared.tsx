@@ -53,7 +53,7 @@ export function ValidityPicker({ value, onChange, from, branches, pricePerBranch
       <Segmented size="sm" block value={key} onChange={(k) => onChange(k === 'custom' ? { endDate: '' } : { months: Number(k) })}
         options={[...VALIDITY_OPTIONS.map((o) => ({ value: String(o.months), label: o.label })), { value: 'custom', label: 'Custom date' }]} />
       {'endDate' in value && (
-        <Field label="Valid until"><Input type="date" min={minDate} value={value.endDate} onChange={(e) => onChange({ endDate: e.target.value })} /></Field>
+        <Field required label="Valid until"><Input type="date" min={minDate} value={value.endDate} onChange={(e) => onChange({ endDate: e.target.value })} /></Field>
       )}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
         <span className="text-slate-600">{fmtDate(from.toISOString())} → <b className="text-slate-900">{end ? fmtDate(end.toISOString()) : 'pick a date'}</b></span>
@@ -68,7 +68,7 @@ export function CredentialCard({ phone, username, password, businessName }: { ph
   const toast = useToast()
   const [copied, setCopied] = useState(false)
   const loginUrl = appUrl('/login')
-  const text = `BillPoodum login for ${businessName}\nWebsite: ${loginUrl}${phone ? `\nMobile number: ${formatPhone(phone)}` : ''}\nUsername: ${username}${password ? `\nPassword: ${password}` : ''}\nSign in and finish your shop setup.`
+  const text = `Kadai Kalanjiyam login for ${businessName}\nWebsite: ${loginUrl}${phone ? `\nMobile number: ${formatPhone(phone)}` : ''}\nUsername: ${username}${password ? `\nPassword: ${password}` : ''}\nSign in and finish your shop setup.`
   return (
     <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4" data-no-i18n>
       <dl className="grid grid-cols-[90px_1fr] gap-y-1.5 text-sm">

@@ -8,6 +8,8 @@
 
 export const MAX_IMAGE_BYTES = 50 * 1024
 export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+/** Shop logo: sharp enough for the bill header and the QR menu. */
+export const LOGO_IMAGE = { maxBytes: 80 * 1024, maxSide: 512 } as const
 const MAX_PIXELS = 200_000_000
 /** Very large photos are scaled down while decoding, so a 200 MP photo doesn't need gigabytes of memory. */
 const DECODE_SIDE = 1600

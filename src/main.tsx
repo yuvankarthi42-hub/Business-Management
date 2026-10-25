@@ -17,6 +17,7 @@ import type { ModuleKey, Permission } from './core/types'
 const load = {
   Login: () => import('./pages/Login'),
   Landing: () => import('./pages/Landing'),
+  Legal: () => import('./pages/Legal'),
   Onboarding: () => import('./pages/Onboarding'),
   Dashboard: () => import('./pages/Dashboard'),
   Billing: () => import('./pages/Billing'),
@@ -53,6 +54,8 @@ const load = {
 }
 const Login = lazy(load.Login)
 const Landing = lazy(load.Landing)
+const TermsPage = lazy(() => load.Legal().then((m) => ({ default: m.TermsPage })))
+const PrivacyPage = lazy(() => load.Legal().then((m) => ({ default: m.PrivacyPage })))
 const Onboarding = lazy(load.Onboarding)
 const Dashboard = lazy(load.Dashboard)
 const Billing = lazy(load.Billing)
@@ -74,6 +77,7 @@ const SpecialsDisplay = lazy(load.SpecialsDisplay)
 const QrOrders = lazy(load.QrOrders)
 const CustomerOrders = lazy(load.CustomerOrders)
 const CustomerMenu = lazy(load.CustomerMenu)
+const TrackOrderPage = lazy(() => load.CustomerMenu().then((m) => ({ default: m.TrackOrderPage })))
 const AdminLogin = lazy(load.AdminLogin)
 const AdminLayout = lazy(load.AdminLayout)
 const AdminCustomers = lazy(load.AdminCustomers)
@@ -144,6 +148,8 @@ function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/welcome" element={<Landing />} />
+        <Route path="/terms" element={<TermsPage />} />
+        <Route path="/privacy" element={<PrivacyPage />} />
         {/* No public sign-up: the product admin creates customer accounts. */}
         <Route path="/signup" element={<Navigate to="/login" replace state={{ signup: true }} />} />
         <Route path="/admin/login" element={<AdminLogin />} />
@@ -162,6 +168,7 @@ function App() {
         </Route>
         {/* Public pages — no staff login */}
         <Route path="/q/:businessId" element={<CustomerMenu />} />
+        <Route path="/q/:businessId/track" element={<TrackOrderPage />} />
         <Route path="/display/:businessId" element={<SpecialsDisplay />} />
         <Route path="/onboarding" element={<RequireAuth><Onboarding /></RequireAuth>} />
         <Route path="/m/order" element={<RequireAuth><ReadOnlyGate><Gate module="mobileOrders" perm="tables.manage" branch="taking orders"><MobileOrder /></Gate></ReadOnlyGate></RequireAuth>} />
@@ -194,6 +201,15 @@ function App() {
 // Slate and other file-only hosts: hash links (/#/login). An address typed without the hash (/login) is moved
 // into it, and a hash link opened on a normal host is moved out of it — old links keep working both ways.
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, '')
+// Tapping an order notification opens "?track=<shop>.<order>" (the service worker can't know the router mode).
+{
+  const m = /^([A-Za-z0-9_-]{1,40})\.([A-Za-z0-9_-]{1,40})$/.exec(new URLSearchParams(location.search).get('track') ?? '')
+  if (m) {
+    const path = `/q/${m[1]}/track?o=${m[2]}`
+    if (HASH_ROUTER) history.replaceState(null, '', `${BASE}/#${path}`)
+    else history.replaceState(null, '', `${BASE}${path}`)
+  }
+}
 if (HASH_ROUTER && !location.hash.startsWith('#/') && location.pathname !== `${BASE}/` && location.pathname !== BASE) {
   location.replace(`${location.origin}${BASE}/#${location.pathname.slice(BASE.length) || '/'}${location.search}`)
 } else if (!HASH_ROUTER && location.hash.startsWith('#/')) {

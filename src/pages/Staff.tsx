@@ -1,13 +1,14 @@
 import clsx from 'clsx'
-import { ChevronLeft, ChevronRight, HandCoins, Pencil, Printer, UserCheck, Users, Wallet } from 'lucide-react'
+import { ChevronLeft, ChevronRight, HandCoins, Pencil, Printer, UserCheck, UserPlus, Users, Wallet } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useApp, useData } from '@/app/AppContext'
-import { Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Segmented, Select, Table, Td, Th, useAction } from '@/components/ui'
+import { Badge, Button, Card, EmptyState, Field, FieldLabel, Input, Modal, PageHeader, Segmented, Select, Table, Td, Th, useAction } from '@/components/ui'
 import { PAYMENT_LABEL } from '@/core/config'
 import type { AttendanceStatus, PaymentMethod, StaffPay } from '@/core/types'
 import { api } from '@/data'
 import { money } from '@/lib/format'
 import { usePrint } from '@/features/Payment'
+import { PhoneInput } from '@/components/PhoneInput'
 
 type Tab = 'attendance' | 'month' | 'payroll'
 type PayrollRow = Awaited<ReturnType<typeof api.staff.month>>[number]
@@ -42,6 +43,7 @@ export default function Staff() {
 
 function AttendanceTab() {
   const run = useAction()
+  const [adding, setAdding] = useState(false)
   const [date, setDate] = useState(todayKey())
   const { data: staff = [] } = useData(() => api.staff.list())
   const { data: day = [] } = useData(() => api.staff.day(date), [date])
@@ -63,16 +65,18 @@ function AttendanceTab() {
           <span className="inline-flex items-center gap-1 rounded-md bg-slate-50 px-2 py-1 text-slate-500">Not marked {unmarked.length}</span>
         </div>
         <div className="flex-1" />
+        <Button size="sm" variant="secondary" icon={UserPlus} onClick={() => setAdding(true)} title="For staff who don’t use the app — cleaners, helpers, drivers">Add staff member</Button>
         <Button size="sm" icon={UserCheck} disabled={!unmarked.length || future} onClick={() => run(() => api.staff.markAll(date, unmarked.map((s) => s.id)), `${unmarked.length} marked present`)}>Mark all present</Button>
       </div>
-      {!staff.length ? <EmptyState icon={Users} title="No staff in this branch" description="Add staff in Settings → Staff & Roles." /> : (
+      {adding && <AddWorker onClose={() => setAdding(false)} />}
+      {!staff.length ? <EmptyState icon={Users} title="No staff in this branch" description="Add staff here (for people who don’t use the app), or in Settings → Staff & Roles (with an app login)." /> : (
         <ul className="divide-y divide-slate-100">
           {staff.map((s) => {
             const a = rec(s.id)
             return (
               <li key={s.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-50 text-sm font-semibold text-brand-700">{s.name[0]}</span>
-                <div className="min-w-[140px] flex-1"><p className="text-sm font-medium">{s.name}</p><p className="text-xs text-slate-500">{s.role}</p></div>
+                <div className="min-w-[140px] flex-1"><p className="text-sm font-medium">{s.name}</p><p className="text-xs text-slate-500">{s.canLogin === false ? 'No app login' : s.role}</p></div>
                 <div className="flex gap-1" role="group" aria-label={`Attendance for ${s.name}`}>
                   {(Object.keys(ST) as AttendanceStatus[]).map((k) => (
                     <button key={k} type="button" disabled={future} aria-pressed={a?.status === k} onClick={() => run(() => api.staff.mark(s.id, date, { status: k }))}
@@ -93,6 +97,40 @@ function AttendanceTab() {
         </ul>
       )}
     </Card>
+  )
+}
+
+/**
+ * A staff member who doesn't use the app (cleaner, helper, driver): name, mobile and salary — attendance, salary
+ * and advances work like for everyone else, but they never sign in. App logins are added in Settings → Staff & Roles.
+ */
+function AddWorker({ onClose }: { onClose: () => void }) {
+  const run = useAction()
+  const { me } = useApp()
+  const [name, setName] = useState('')
+  const [phone, setPhone] = useState('')
+  const [payType, setPayType] = useState<'none' | StaffPay['type']>('monthly')
+  const [amount, setAmount] = useState('')
+  const save = async () => {
+    const pay = payType === 'none' ? undefined : { type: payType, amount: Number(amount) || 0, commissionPct: 0 }
+    const ok = await run(() => api.users.save({ name: name.trim(), phone, roleId: '', canLogin: false, branchIds: [me!.branch.id], ...(pay ? { pay } : {}) }), `${name.trim()} added`)
+    if (ok) onClose()
+  }
+  return (
+    <Modal open onClose={onClose} size="sm" title="Add staff member" subtitle="For people who don’t use the app — cleaners, helpers, drivers"
+      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button disabled={!name.trim() || !phone} onClick={save}>Add</Button></>}>
+      <div className="space-y-4">
+        <Field required label="Name"><Input autoFocus value={name} onChange={(e) => setName(e.target.value)} /></Field>
+        <div><FieldLabel required>Mobile</FieldLabel><PhoneInput value={phone} onChange={setPhone} defaultCountry={me?.business.defaultCountry} required /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Salary"><Select value={payType} onChange={(e) => setPayType(e.target.value as typeof payType)}>
+            <option value="monthly">Monthly</option><option value="daily">Per day</option><option value="none">Not on payroll</option>
+          </Select></Field>
+          {payType !== 'none' && <Field required label={payType === 'daily' ? 'Amount per day' : 'Amount per month'}><Input type="number" inputMode="decimal" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>}
+        </div>
+        <p className="text-xs text-slate-500">Works at {me?.branch.name}. They can’t sign in to the app — attendance, salary and advances are marked by you.</p>
+      </div>
+    </Modal>
   )
 }
 
@@ -200,7 +238,7 @@ function PayModal({ r, onClose }: { r: PayrollRow; onClose: () => void }) {
     <Modal open onClose={onClose} size="sm" title={`Salary · ${r.name}`}>
       <form className="space-y-4" onSubmit={async (e) => { e.preventDefault(); if (await run(() => api.staff.setPay(r.userId, p), 'Salary saved')) onClose() }}>
         <Segmented value={p.type} onChange={(type) => setP({ ...p, type })} options={[{ value: 'monthly', label: 'Monthly salary' }, { value: 'daily', label: 'Daily wage' }]} />
-        <Field label={p.type === 'monthly' ? 'Salary per month (₹)' : 'Wage per day (₹)'}><Input autoFocus type="number" min={0} inputMode="decimal" value={p.amount || ''} onChange={(e) => setP({ ...p, amount: Number(e.target.value) })} /></Field>
+        <Field required label={p.type === 'monthly' ? 'Salary per month (₹)' : 'Wage per day (₹)'}><Input autoFocus type="number" min={0} inputMode="decimal" value={p.amount || ''} onChange={(e) => setP({ ...p, amount: Number(e.target.value) })} /></Field>
         <Field label="Commission (% of bills they make)" hint="0 = no commission"><Input type="number" min={0} max={50} step="0.5" inputMode="decimal" value={p.commissionPct || ''} onChange={(e) => setP({ ...p, commissionPct: Number(e.target.value) })} placeholder="0" /></Field>
         <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={onClose}>Cancel</Button><Button type="submit">Save</Button></div>
       </form>
@@ -220,7 +258,7 @@ function AdvanceModal({ r, onClose }: { r: PayrollRow; onClose: () => void }) {
   return (
     <Modal open onClose={onClose} size="sm" title={`Advance · ${r.name}`} subtitle="Taken off the next salary.">
       <form className="space-y-4" onSubmit={async (e) => { e.preventDefault(); if (await run(() => api.staff.giveAdvance(r.userId, { amount: Number(amount), method, note }), 'Advance recorded')) onClose() }}>
-        <div className="grid grid-cols-2 gap-3"><Field label="Amount (₹)"><Input autoFocus type="number" min={1} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field><Field label="Paid by"><Methods value={method} onChange={setMethod} /></Field></div>
+        <div className="grid grid-cols-2 gap-3"><Field required label="Amount (₹)"><Input autoFocus type="number" min={1} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field><Field required label="Paid by"><Methods value={method} onChange={setMethod} /></Field></div>
         <Field label="Note (optional)"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Festival" /></Field>
         <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={onClose}>Cancel</Button><Button type="submit" icon={HandCoins} disabled={!(Number(amount) > 0)}>Give advance</Button></div>
       </form>
@@ -250,7 +288,7 @@ function PaySalaryModal({ r, month, onClose }: { r: PayrollRow; month: string; o
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <Field label="Bonus (₹)"><Input type="number" min={0} inputMode="decimal" value={bonus} onChange={(e) => setBonus(e.target.value)} placeholder="0" /></Field>
           <Field label="Other deduction (₹)"><Input type="number" min={0} inputMode="decimal" value={deduction} onChange={(e) => setDeduction(e.target.value)} placeholder="0" /></Field>
-          <Field label="Paid by"><Methods value={method} onChange={setMethod} /></Field>
+          <Field required label="Paid by"><Methods value={method} onChange={setMethod} /></Field>
         </div>
         <Field label="Note (optional)"><Input value={note} onChange={(e) => setNote(e.target.value)} /></Field>
         {net < 0 && <p className="text-sm text-amber-700">The advance is more than this month’s pay — {money(-net)} stays to recover.</p>}

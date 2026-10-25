@@ -8,6 +8,7 @@ const DEMO_PLANS: Record<string, { username: string; startDaysAgo: number; month
   biz_freshmart: { username: 'freshmart', startDaysAgo: 20, months: 6, maxBranches: 2 },
   biz_murugan_hw: { username: 'murugan', startDaysAgo: 24, months: 1 }, // expires in a few days
   biz_sweetspot: { username: 'sweetspot', startDaysAgo: 63, months: 2 }, // already expired → read-only
+  biz_kanchi_silks: { username: 'kanchisilks', startDaysAgo: 15, months: 12 },
 }
 export const DEFAULT_PRICE_PER_BRANCH = 499
 
@@ -19,7 +20,7 @@ export function seedPlatform(d: DB) {
   d.subscriptionPeriods ??= []
   d.adminAudit ??= []
   d.platform ??= { pricePerBranchMonth: DEFAULT_PRICE_PER_BRANCH }
-  if (!d.admins.length) d.admins.push({ id: 'adm_1', name: 'BillPoodum Admin', username: 'admin', password: 'demo123', role: 'super', active: true, createdAt: new Date().toISOString() })
+  if (!d.admins.length) d.admins.push({ id: 'adm_1', name: 'Kadai Kalanjiyam Admin', username: 'admin', password: 'demo123', role: 'super', active: true, createdAt: new Date().toISOString() })
   const taken = new Set(d.users.map((u) => u.username).filter(Boolean))
   for (const b of d.businesses) {
     const plan = DEMO_PLANS[b.id]
@@ -62,7 +63,7 @@ export function seedAdminTeam(d: DB) {
   if (!d.admins.some((a) => a.username === 'manager')) d.admins.push({ id: 'adm_manager', name: 'Priya (Accounts)', username: 'manager', password: 'demo123', role: 'manager', active: true, createdAt: t, lastLoginAt: null })
   if (!d.admins.some((a) => a.username === 'support')) d.admins.push({ id: 'adm_support', name: 'Arun (Support)', username: 'support', password: 'demo123', role: 'support', active: true, createdAt: t, lastLoginAt: null })
   const ago = (days: number) => { const x = new Date(); x.setDate(x.getDate() - days); x.setHours(10, 15, 0, 0); return x.toISOString() }
-  const recent: Record<string, number> = { biz_foodcorner: 0, biz_freshmart: 1, biz_murugan_hw: 3, biz_sweetspot: 9 }
+  const recent: Record<string, number> = { biz_foodcorner: 0, biz_freshmart: 1, biz_murugan_hw: 3, biz_sweetspot: 9, biz_kanchi_silks: 0 }
   for (const [biz, days] of Object.entries(recent)) {
     const b = d.businesses.find((x) => x.id === biz)
     const owner = b && ownerOf(d, b)

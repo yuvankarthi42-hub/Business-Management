@@ -422,7 +422,7 @@ export function buildSeed(version: number): DB {
     branches: [{ id: BR, businessId: BIZ, name: 'T. Nagar', address: biz.address, phone: biz.phone, isDefault: true, active: true }],
     roles, users, categories: cats, products, customers, orders, payments, kots, tables, expenses, stockMovements,
     specials: demoSpecials(BIZ, products), campaigns: [], batches: [], auditLogs: [],
-    admins: [], subscriptionPeriods: [], adminAudit: [], platform: { pricePerBranchMonth: 499 }, waMessages: [], secrets: [], returns: [], attendance: [], advances: [], salaries: [], reminderLog: [], tickets: [],
+    admins: [], subscriptionPeriods: [], adminAudit: [], platform: { pricePerBranchMonth: 499 }, waMessages: [], secrets: [], returns: [], attendance: [], advances: [], salaries: [], reminderLog: [], tickets: [], suppliers: [], purchases: [], supplierPayments: [], points: [],
   }
   // Per-branch stock for the main branch, then two extra demo branches.
   for (const p of products) p.stockByBranch = p.trackStock ? { [BR]: p.stock } : {}

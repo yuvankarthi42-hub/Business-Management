@@ -17,7 +17,7 @@ export default function AdminSettings() {
       <p className="mb-5 text-sm text-slate-500">The price of a customer depends on how many branches you allow them.</p>
       <Card className="p-5">
         <form className="space-y-4" onSubmit={async (e) => { e.preventDefault(); await run(() => api.admin.updateSettings({ pricePerBranchMonth: p }), 'Price saved') }}>
-          <Field label="Price per branch per month (₹)" hint="Used for new subscriptions and renewals. Past payments keep their price.">
+          <Field required label="Price per branch per month (₹)" hint="Used for new subscriptions and renewals. Past payments keep their price.">
             <Input type="number" min={0} inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value)} className="max-w-[200px]" />
           </Field>
           <div className="overflow-hidden rounded-xl border border-slate-200">

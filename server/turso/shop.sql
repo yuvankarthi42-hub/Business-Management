@@ -118,6 +118,11 @@ CREATE TABLE IF NOT EXISTS "suppliers" (
   "gstin"                    TEXT,  -- max 15
   "address"                  TEXT,  -- max 255
   "is_active"                INTEGER  NOT NULL DEFAULT 1 CHECK ("is_active" IN (0, 1)),
+  "state_code"               TEXT,  -- max 2 · GST state (01–38); from the GSTIN when given — decides IGST vs CGST + SGST
+  "opening_balance_minor"    INTEGER  NOT NULL DEFAULT 0,  -- owed to the supplier before using the app (+) or advance paid (−)
+  "notes"                    TEXT,  -- max 255
+  "name_key"                 TEXT,  -- max 200 · '<business_id>:<lower(name)>' — duplicate check (enforced by the API)
+  "row_version"              INTEGER  NOT NULL DEFAULT 1,
   "created_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),  -- CREATEDTIME
   "updated_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))  -- MODIFIEDTIME
 ) STRICT;
@@ -235,6 +240,7 @@ CREATE TABLE IF NOT EXISTS "users" (
   "username"                 TEXT     UNIQUE,  -- max 40 · owner login created by the product admin
   "catalyst_user_id"         INTEGER  UNIQUE,  -- only if Catalyst Authentication is used later
   "password_hash"            TEXT,  -- max 100 · bcrypt of the password the admin gives; never plain text
+  "can_login"                INTEGER  NOT NULL DEFAULT 1 CHECK ("can_login" IN (0, 1)),  -- false = staff who don't use the app (cleaners, helpers): attendance & salary only
   "must_change_password"     INTEGER  NOT NULL DEFAULT 1 CHECK ("must_change_password" IN (0, 1)),  -- ask for a new password on first sign-in
   "password_changed_at"      TEXT,
   "failed_logins"            INTEGER  NOT NULL DEFAULT 0,  -- lock for 15 min after 5 wrong tries
@@ -275,6 +281,8 @@ CREATE TABLE IF NOT EXISTS "customers" (
   "notes"                    TEXT,  -- max 255
   "is_active"                INTEGER  NOT NULL DEFAULT 1 CHECK ("is_active" IN (0, 1)),
   "row_version"              INTEGER  NOT NULL DEFAULT 1,
+  "state_code"               TEXT,  -- max 2 · GST place of supply (from the GSTIN when given)
+  "points_balance"           INTEGER  NOT NULL DEFAULT 0,  -- loyalty points (sum of customer_points; kept for quick reads)
   "created_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),  -- CREATEDTIME
   "updated_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))  -- MODIFIEDTIME
 ) STRICT;
@@ -405,6 +413,12 @@ CREATE TABLE IF NOT EXISTS "purchases" (
   "status"                   INTEGER  NOT NULL DEFAULT 2 CHECK ("status" >= 1),  -- PurchaseStatus: 1 draft, 2 final, 3 void
   "note"                     TEXT,  -- max 255
   "created_by"               INTEGER  REFERENCES "users"("id") ON DELETE SET NULL,
+  "client_uuid"              TEXT,  -- max 40 · retry safety (checked by the API before insert)
+  "is_igst"                  INTEGER  NOT NULL DEFAULT 0 CHECK ("is_igst" IN (0, 1)),  -- supplier in another state: tax is IGST (input credit)
+  "round_off_minor"          INTEGER  NOT NULL DEFAULT 0,
+  "void_reason"              TEXT,  -- max 255
+  "voided_at"                TEXT,
+  "row_version"              INTEGER  NOT NULL DEFAULT 1,
   "created_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),  -- CREATEDTIME
   "updated_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))  -- MODIFIEDTIME
 ) STRICT;
@@ -455,6 +469,14 @@ CREATE TABLE IF NOT EXISTS "orders" (
   "cancelled_at"             TEXT,
   "cancel_reason"            TEXT,  -- max 255
   "created_by"               INTEGER  REFERENCES "users"("id") ON DELETE SET NULL,  -- staff on the bill (commission)
+  "salesperson_id"           INTEGER  REFERENCES "users"("id") ON DELETE SET NULL,  -- who sold it (textile counters); NULL = the person who made the bill
+  "customer_gstin"           TEXT,  -- max 15 · snapshot at billing: B2B tax invoice
+  "place_of_supply"          TEXT,  -- max 2 · GST state code of the customer (snapshot); NULL = shop's state
+  "is_igst"                  INTEGER  NOT NULL DEFAULT 0 CHECK ("is_igst" IN (0, 1)),  -- other-state customer: IGST instead of CGST + SGST
+  "points_redeemed"          INTEGER  NOT NULL DEFAULT 0,  -- loyalty points used on this bill
+  "points_value_minor"       INTEGER  NOT NULL DEFAULT 0,  -- their value (part of discount_minor, given before GST)
+  "points_earned"            INTEGER  NOT NULL DEFAULT 0,
+  "points_balance_after"     INTEGER,  -- customer's points after this bill (printed)
   "updated_by"               INTEGER  REFERENCES "users"("id") ON DELETE SET NULL,
   "row_version"              INTEGER  NOT NULL DEFAULT 1,
   "created_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),  -- CREATEDTIME
@@ -468,12 +490,14 @@ CREATE INDEX IF NOT EXISTS "ix_orders_business_id_branch_id_status_created_at" O
 CREATE INDEX IF NOT EXISTS "ix_orders_business_id_billed_at" ON "orders" ("business_id", "billed_at");
 CREATE INDEX IF NOT EXISTS "ix_orders_business_id_customer_id_status" ON "orders" ("business_id", "customer_id", "status");
 CREATE INDEX IF NOT EXISTS "ix_orders_business_id_table_id_status" ON "orders" ("business_id", "table_id", "status");
+CREATE INDEX IF NOT EXISTS "ix_orders_business_id_order_number" ON "orders" ("business_id", "order_number");
 CREATE INDEX IF NOT EXISTS "ix_orders_branch_id" ON "orders" ("branch_id");
 CREATE INDEX IF NOT EXISTS "ix_orders_device_id" ON "orders" ("device_id");
 CREATE INDEX IF NOT EXISTS "ix_orders_table_id" ON "orders" ("table_id");
 CREATE INDEX IF NOT EXISTS "ix_orders_customer_id" ON "orders" ("customer_id");
 CREATE INDEX IF NOT EXISTS "ix_orders_price_list_id" ON "orders" ("price_list_id");
 CREATE INDEX IF NOT EXISTS "ix_orders_created_by" ON "orders" ("created_by");
+CREATE INDEX IF NOT EXISTS "ix_orders_salesperson_id" ON "orders" ("salesperson_id");
 CREATE INDEX IF NOT EXISTS "ix_orders_updated_by" ON "orders" ("updated_by");
 
 CREATE TABLE IF NOT EXISTS "expenses" (
@@ -485,7 +509,7 @@ CREATE TABLE IF NOT EXISTS "expenses" (
   "amount_minor"             INTEGER  NOT NULL,
   "method"                   INTEGER  NOT NULL CHECK ("method" >= 1),  -- PayMethod: 1 cash, 2 upi, 3 card, 4 bank, 5 credit_note
   "notes"                    TEXT,  -- max 255
-  "ref_type"                 INTEGER  CHECK ("ref_type" IS NULL OR "ref_type" >= 1),  -- ExpenseRef: 1 salary, 2 advance, 3 purchase
+  "ref_type"                 INTEGER  CHECK ("ref_type" IS NULL OR "ref_type" >= 1),  -- ExpenseRef: 1 salary, 2 advance, 3 purchase, 4 supplier_payment
   "ref_id"                   INTEGER,
   "is_voided"                INTEGER  NOT NULL DEFAULT 0 CHECK ("is_voided" IN (0, 1)),
   "created_by"               INTEGER  REFERENCES "users"("id") ON DELETE SET NULL,
@@ -556,6 +580,7 @@ CREATE TABLE IF NOT EXISTS "categories" (
   "name"                     TEXT     NOT NULL,  -- max 80
   "emoji"                    TEXT,  -- max 8
   "image_media_id"           INTEGER  REFERENCES "media_files"("id") ON DELETE SET NULL,
+  "hsn_code"                 TEXT,  -- max 10 · default HSN / SAC for items in this category (item's own wins)
   "sort_order"               INTEGER  NOT NULL DEFAULT 0,
   "is_active"                INTEGER  NOT NULL DEFAULT 1 CHECK ("is_active" IN (0, 1)),
   "uniq_key"                 TEXT     NOT NULL UNIQUE,  -- max 120 · '<business_id>:<lower(name)>'
@@ -569,6 +594,35 @@ BEGIN UPDATE "categories" SET "updated_at" = (strftime('%Y-%m-%dT%H:%M:%fZ', 'no
 CREATE INDEX IF NOT EXISTS "ix_categories_business_id" ON "categories" ("business_id");
 CREATE INDEX IF NOT EXISTS "ix_categories_parent_id" ON "categories" ("parent_id");
 CREATE INDEX IF NOT EXISTS "ix_categories_image_media_id" ON "categories" ("image_media_id");
+
+-- Money paid to a supplier (at purchase, or later against the balance). Voided, never edited.
+CREATE TABLE IF NOT EXISTS "supplier_payments" (
+  "id"                       INTEGER  PRIMARY KEY AUTOINCREMENT,  -- ROWID
+  "business_id"              INTEGER  NOT NULL,  -- → businesses.id in the platform database (checked by the API)
+  "branch_id"                INTEGER  NOT NULL REFERENCES "branches"("id") ON DELETE CASCADE,
+  "supplier_id"              INTEGER  NOT NULL REFERENCES "suppliers"("id") ON DELETE CASCADE,
+  "purchase_id"              INTEGER  REFERENCES "purchases"("id") ON DELETE SET NULL,  -- paid with this purchase bill; NULL = against the balance
+  "client_uuid"              TEXT     NOT NULL UNIQUE,  -- max 40
+  "method"                   INTEGER  NOT NULL CHECK ("method" >= 1),  -- PayMethod: 1 cash, 2 upi, 3 card, 4 bank
+  "amount_minor"             INTEGER  NOT NULL,
+  "paid_on"                  TEXT     NOT NULL CHECK ("paid_on" GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+  "reference"                TEXT,  -- max 80
+  "note"                     TEXT,  -- max 255
+  "is_voided"                INTEGER  NOT NULL DEFAULT 0 CHECK ("is_voided" IN (0, 1)),
+  "voided_at"                TEXT,
+  "created_by"               INTEGER  REFERENCES "users"("id") ON DELETE SET NULL,
+  "created_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),  -- CREATEDTIME
+  "updated_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))  -- MODIFIEDTIME
+) STRICT;
+
+CREATE TRIGGER IF NOT EXISTS "supplier_payments_updated_at" AFTER UPDATE ON "supplier_payments" FOR EACH ROW WHEN NEW."updated_at" = OLD."updated_at"
+BEGIN UPDATE "supplier_payments" SET "updated_at" = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) WHERE "id" = NEW."id"; END;
+
+CREATE INDEX IF NOT EXISTS "ix_supplier_payments_business_id" ON "supplier_payments" ("business_id");
+CREATE INDEX IF NOT EXISTS "ix_supplier_payments_branch_id" ON "supplier_payments" ("branch_id");
+CREATE INDEX IF NOT EXISTS "ix_supplier_payments_supplier_id" ON "supplier_payments" ("supplier_id");
+CREATE INDEX IF NOT EXISTS "ix_supplier_payments_purchase_id" ON "supplier_payments" ("purchase_id");
+CREATE INDEX IF NOT EXISTS "ix_supplier_payments_created_by" ON "supplier_payments" ("created_by");
 
 -- Returns / credit notes.
 CREATE TABLE IF NOT EXISTS "sale_returns" (
@@ -635,6 +689,27 @@ CREATE INDEX IF NOT EXISTS "ix_kitchen_tickets_business_id_branch_id_status" ON 
 CREATE INDEX IF NOT EXISTS "ix_kitchen_tickets_order_id" ON "kitchen_tickets" ("order_id");
 CREATE INDEX IF NOT EXISTS "ix_kitchen_tickets_branch_id" ON "kitchen_tickets" ("branch_id");
 CREATE INDEX IF NOT EXISTS "ix_kitchen_tickets_created_by" ON "kitchen_tickets" ("created_by");
+
+-- Browser push for the QR / order tracking page ("Notify me when ready"). Removed when the order is done or after a day.
+CREATE TABLE IF NOT EXISTS "push_subscriptions" (
+  "id"                       INTEGER  PRIMARY KEY AUTOINCREMENT,  -- ROWID
+  "business_id"              INTEGER  NOT NULL,  -- → businesses.id in the platform database (checked by the API)
+  "order_id"                 INTEGER  NOT NULL REFERENCES "orders"("id") ON DELETE CASCADE,
+  "endpoint"                 TEXT     NOT NULL,  -- max 500 · push service URL (Google / Apple / Mozilla)
+  "p256dh"                   TEXT     NOT NULL,  -- max 120 · the browser's public key (base64url)
+  "auth_secret"              TEXT     NOT NULL,  -- max 40 · the browser's auth secret (base64url)
+  "uniq_key"                 TEXT     NOT NULL UNIQUE,  -- max 80 · '<order_id>:<hash of endpoint>'
+  "last_stamp"               TEXT,  -- max 40 · status last sent, so each change is sent once
+  "expires_at"               TEXT     NOT NULL,
+  "created_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),  -- CREATEDTIME
+  "updated_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))  -- MODIFIEDTIME
+) STRICT;
+
+CREATE TRIGGER IF NOT EXISTS "push_subscriptions_updated_at" AFTER UPDATE ON "push_subscriptions" FOR EACH ROW WHEN NEW."updated_at" = OLD."updated_at"
+BEGIN UPDATE "push_subscriptions" SET "updated_at" = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) WHERE "id" = NEW."id"; END;
+
+CREATE INDEX IF NOT EXISTS "ix_push_subscriptions_business_id_expires_at" ON "push_subscriptions" ("business_id", "expires_at");
+CREATE INDEX IF NOT EXISTS "ix_push_subscriptions_order_id" ON "push_subscriptions" ("order_id");
 
 CREATE TABLE IF NOT EXISTS "salary_payments" (
   "id"                       INTEGER  PRIMARY KEY AUTOINCREMENT,  -- ROWID
@@ -717,6 +792,7 @@ CREATE TABLE IF NOT EXISTS "products" (
   "low_stock_milli"          INTEGER  NOT NULL DEFAULT 0,
   "image_media_id"           INTEGER  REFERENCES "media_files"("id") ON DELETE SET NULL,
   "emoji"                    TEXT,  -- max 8
+  "details_json"             TEXT,  -- textile shops: {"design","fabric","colour","size"} (printed on price stickers)
   "sort_order"               INTEGER  NOT NULL DEFAULT 0,
   "is_active"                INTEGER  NOT NULL DEFAULT 1 CHECK ("is_active" IN (0, 1)),
   "row_version"              INTEGER  NOT NULL DEFAULT 1,
@@ -731,6 +807,35 @@ CREATE INDEX IF NOT EXISTS "ix_products_business_id_is_active" ON "products" ("b
 CREATE INDEX IF NOT EXISTS "ix_products_category_id" ON "products" ("category_id");
 CREATE INDEX IF NOT EXISTS "ix_products_tax_rate_id" ON "products" ("tax_rate_id");
 CREATE INDEX IF NOT EXISTS "ix_products_image_media_id" ON "products" ("image_media_id");
+
+-- Loyalty points: every earn / use / reversal / expiry / manual change, with the balance after it.
+CREATE TABLE IF NOT EXISTS "customer_points" (
+  "id"                       INTEGER  PRIMARY KEY AUTOINCREMENT,  -- ROWID
+  "business_id"              INTEGER  NOT NULL,  -- → businesses.id in the platform database (checked by the API)
+  "branch_id"                INTEGER  REFERENCES "branches"("id") ON DELETE SET NULL,
+  "customer_id"              INTEGER  NOT NULL REFERENCES "customers"("id") ON DELETE CASCADE,
+  "order_id"                 INTEGER  REFERENCES "orders"("id") ON DELETE SET NULL,
+  "return_id"                INTEGER  REFERENCES "sale_returns"("id") ON DELETE SET NULL,
+  "kind"                     INTEGER  NOT NULL CHECK ("kind" >= 1),  -- PointsKind: 1 earn, 2 redeem, 3 return, 4 cancel, 5 expire, 6 adjust
+  "points"                   INTEGER  NOT NULL,  -- + added, − taken
+  "balance_after"            INTEGER  NOT NULL,
+  "remaining"                INTEGER  NOT NULL DEFAULT 0,  -- earned points not yet used or expired (used oldest first)
+  "expires_on"               TEXT     CHECK ("expires_on" IS NULL OR "expires_on" GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),  -- earned points only; NULL = never
+  "note"                     TEXT,  -- max 150
+  "created_by"               INTEGER  REFERENCES "users"("id") ON DELETE SET NULL,
+  "created_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),  -- CREATEDTIME
+  "updated_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))  -- MODIFIEDTIME
+) STRICT;
+
+CREATE TRIGGER IF NOT EXISTS "customer_points_updated_at" AFTER UPDATE ON "customer_points" FOR EACH ROW WHEN NEW."updated_at" = OLD."updated_at"
+BEGIN UPDATE "customer_points" SET "updated_at" = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) WHERE "id" = NEW."id"; END;
+
+CREATE INDEX IF NOT EXISTS "ix_customer_points_business_id" ON "customer_points" ("business_id");
+CREATE INDEX IF NOT EXISTS "ix_customer_points_branch_id" ON "customer_points" ("branch_id");
+CREATE INDEX IF NOT EXISTS "ix_customer_points_customer_id" ON "customer_points" ("customer_id");
+CREATE INDEX IF NOT EXISTS "ix_customer_points_order_id" ON "customer_points" ("order_id");
+CREATE INDEX IF NOT EXISTS "ix_customer_points_return_id" ON "customer_points" ("return_id");
+CREATE INDEX IF NOT EXISTS "ix_customer_points_created_by" ON "customer_points" ("created_by");
 
 -- Every money movement: sale, due collection, refund. Never edited — voided and re-entered.
 CREATE TABLE IF NOT EXISTS "payments" (
@@ -911,6 +1016,11 @@ CREATE TABLE IF NOT EXISTS "purchase_items" (
   "tax_bp"                   INTEGER  NOT NULL DEFAULT 0,
   "batch_no"                 TEXT,  -- max 40
   "expiry_date"              TEXT     CHECK ("expiry_date" IS NULL OR "expiry_date" GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+  "unit"                     TEXT,  -- max 10
+  "hsn_code"                 TEXT,  -- max 10
+  "taxable_minor"            INTEGER,  -- qty × cost (before GST)
+  "tax_minor"                INTEGER,
+  "sort_order"               INTEGER  NOT NULL DEFAULT 0,
   "created_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),  -- CREATEDTIME
   "updated_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))  -- MODIFIEDTIME
 ) STRICT;
@@ -997,6 +1107,10 @@ CREATE TABLE IF NOT EXISTS "order_items" (
   "unit"                     TEXT     NOT NULL,  -- max 10
   "qty_milli"                INTEGER  NOT NULL,
   "unit_price_minor"         INTEGER  NOT NULL,  -- base / size price + add-ons
+  "hsn_code"                 TEXT,  -- max 10 · snapshot at billing (item's, else its category's)
+  "list_price_minor"         INTEGER,  -- catalogue price when the price was changed at the counter (NULL = not changed)
+  "taxable_minor"            INTEGER,  -- value before GST after the bill discount (set at billing)
+  "mrp_minor"                INTEGER,  -- printed MRP per unit when it is above the price ("You saved" on the bill)
   "price_list_id"            INTEGER  REFERENCES "price_lists"("id") ON DELETE SET NULL,  -- which list priced it
   "discount_minor"           INTEGER  NOT NULL DEFAULT 0,
   "tax_bp"                   INTEGER  NOT NULL DEFAULT 0,

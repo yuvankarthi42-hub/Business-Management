@@ -35,3 +35,18 @@ async function fn(name, entry, type) {
 
 await fn('api', 'index.ts', 'advancedio')
 await fn('daily', 'cron.ts', 'cron')
+
+// Event hub for Catalyst AppSail (Node.js): catalyst/appsail/events → zip and upload in the console.
+{
+  const out = join(root, 'catalyst', 'appsail', 'events')
+  mkdirSync(out, { recursive: true })
+  await build({
+    entryPoints: [join(here, '..', 'src', 'eventsServer.ts')],
+    bundle: true, platform: 'node', target: 'node18', format: 'cjs', outfile: join(out, 'index.js'),
+    alias: { '@': join(root, 'src') }, legalComments: 'none', sourcemap: false, minify: false, logLevel: 'warning',
+  })
+  writeFileSync(join(out, 'package.json'), JSON.stringify({ name: 'events', version: pkg.version, main: 'index.js', private: true, scripts: { start: 'node index.js' } }, null, 2) + '\n')
+  writeFileSync(join(out, 'app-config.json'), JSON.stringify({ command: 'node index.js', build_path: '.', stack: 'node18', env_variables: {}, memory: 256, scripts: {}, raw: {}, platform: 'javascript' }, null, 2) + '\n')
+  console.log('Built catalyst/appsail/events (AppSail — run 1 instance)')
+}
+

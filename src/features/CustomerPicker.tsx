@@ -22,7 +22,7 @@ export function CustomerPicker({ value, onChange, compact }: { value: string | n
       >
         <UserRound className="h-4 w-4 shrink-0 text-slate-400" />
         <span className="min-w-0 flex-1 truncate">
-          {current ? <><span className="font-medium">{current.name}</span>{!compact && <span className="text-slate-400"> · {formatPhone(current.phone)}</span>}</> : <span className="text-slate-500">Walk-in {t('customer').toLowerCase()}</span>}
+          {current ? <><span className="font-medium">{current.name}</span>{!compact && <span className="text-slate-400"> · {formatPhone(current.phone)}</span>}{current.gstin && <span className="ml-1.5 rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700" title={`B2B tax invoice · GSTIN ${current.gstin}`}>B2B</span>}</> : <span className="text-slate-500">Walk-in {t('customer').toLowerCase()}</span>}
         </span>
         {current && current.stats.outstanding > 0 && <span className="shrink-0 rounded bg-amber-50 px-1.5 text-[11px] font-semibold text-amber-700">Due {money(current.stats.outstanding)}</span>}
         {current && <X className="h-4 w-4 shrink-0 text-slate-400 hover:text-slate-700" onClick={(e) => { e.stopPropagation(); onChange(null) }} />}
@@ -79,7 +79,7 @@ function CustomerSearchModal({ customers, value, onClose, onPick }: { customers:
             if (ok) onPick(id)
           }}
         >
-          <Input autoFocus required placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          <Input autoFocus required placeholder="Name *" aria-label="Name (required)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           <PhoneInput value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} defaultCountry={me?.business.defaultCountry} />
           <div className="flex justify-end gap-2 pt-1">
             <Button type="button" variant="ghost" onClick={() => setAdding(false)}>Back</Button>

@@ -87,7 +87,8 @@ export async function claimLogins(c: Ctx, businessId: string, userId: string | n
  * the request fails), the user row is written, and the names it no longer uses are freed after the commit.
  */
 export async function saveUserWithLogins(c: Ctx, businessId: string, existing: Row | null, next: Logins, write: () => Promise<Row>): Promise<Row> {
-  const prev: Logins = existing ? { username: (existing.username as string) ?? null, phone: (existing.phone as string) ?? null, email: (existing.email as string) ?? null } : {}
+  // The names the user holds now. Staff without app access hold none (their mobile isn't a sign-in name).
+  const prev: Logins = existing && existing.can_login !== false ? { username: (existing.username as string) ?? null, phone: (existing.phone as string) ?? null, email: (existing.email as string) ?? null } : {}
   const claim = await claimLogins(c, businessId, existing?.ROWID ?? null, next, prev)
   c.onFail(claim.undo)
   const row = await write()

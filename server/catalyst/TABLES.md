@@ -1,4 +1,4 @@
-# BillPoodum — Tables & Relations
+# Kadai Kalanjiyam — Tables & Relations
 
 A guide to [`schema.sql`](schema.sql): what each table is for and how the tables connect.
 59 tables in 10 groups.
@@ -21,7 +21,7 @@ A guide to [`schema.sql`](schema.sql): what each table is for and how the tables
 ## 0. The big picture
 
 One **business** (a customer shop) owns everything below it. Deleting a business deletes all its rows
-(foreign keys with *Cascade*). The **platform** group is BillPoodum's own data, used by the product admin.
+(foreign keys with *Cascade*). The **platform** group is Kadai Kalanjiyam's own data, used by the product admin.
 
 ```mermaid
 flowchart TB
@@ -90,8 +90,8 @@ erDiagram
 
 | Table | What it is for | Example |
 |---|---|---|
-| `platform_admins` | People who run BillPoodum: super / manager / support. Their own login (password hash, lock after wrong tries). | "Arun (Support)", role 3 |
-| `platform_settings` | One row per platform setting, value as JSON. `pricing`, `reminders` (days before, support number, `lastRunOn` so the 9 AM job runs once a day), `whatsapp` (BillPoodum's own number). | key `reminders` |
+| `platform_admins` | People who run Kadai Kalanjiyam: super / manager / support. Their own login (password hash, lock after wrong tries). | "Arun (Support)", role 3 |
+| `platform_settings` | One row per platform setting, value as JSON. `pricing`, `reminders` (days before, support number, `lastRunOn` so the 9 AM job runs once a day), `whatsapp` (Kadai Kalanjiyam's own number). | key `reminders` |
 | `secrets` | Tokens that must never reach a browser — encrypted. The customer's WhatsApp token and the platform's own token. | `whatsapp_token` |
 | `plans` | What we sell: price per branch per month. Lets pricing change without code. | Standard, ₹499 |
 | `feature_flags` | New features released step by step: off / selected customers / all. | `whatsapp` = selected |
@@ -320,7 +320,7 @@ erDiagram
 | `whatsapp_accounts` | The shop's own WhatsApp Business (Meta Cloud API) connection: number, IDs, verified name, quality, auto-send bill on/off. Token is in `secrets`. | +91 98765 43210, Connected |
 | `whatsapp_templates` | Message templates approved by Meta: the shop's **bill** and **offer** templates, and the platform's **renewal reminder** (`business_id` empty). | Bill, Tamil, Approved |
 | `campaigns` | One "send offer" run: message, items, poster, how many sent. | "Diwali sweets 10% off", 120 sent |
-| `whatsapp_messages` | **Every WhatsApp sent**: bills, offers, tests, and renewal reminders from BillPoodum to shop owners. Status sent → delivered → read / failed comes from Meta. Also the renewal reminder history. | INV-11186 → +91…, Read |
+| `whatsapp_messages` | **Every WhatsApp sent**: bills, offers, tests, and renewal reminders from Kadai Kalanjiyam to shop owners. Status sent → delivered → read / failed comes from Meta. Also the renewal reminder history. | INV-11186 → +91…, Read |
 
 ---
 

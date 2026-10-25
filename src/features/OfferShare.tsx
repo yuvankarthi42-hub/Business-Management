@@ -2,7 +2,7 @@ import clsx from 'clsx'
 import { Check, Download, Flame, ImageDown, Send, ShieldCheck } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useApp, useData, useNow } from '@/app/AppContext'
+import { useApp, useData } from '@/app/AppContext'
 import { Button, Checkbox, Drawer, Input, Segmented, useAction } from '@/components/ui'
 import { Thumb } from '@/components/Thumb'
 import { applySpecials } from '@/core/specials'
@@ -11,7 +11,7 @@ import { isValidPhone, formatPhone } from '@/core/phone'
 import { api } from '@/data'
 import { fmtTime, money } from '@/lib/format'
 import { drawSpecialsPoster } from '@/lib/poster'
-import { MsgStatus } from './whatsapp/Integrations'
+import { MsgStatusOf } from './whatsapp/Integrations'
 import { useWhatsApp } from './whatsapp/useWhatsApp'
 
 type Base = 'all' | 'recent' | 'top' | 'due'
@@ -28,8 +28,9 @@ export function OfferShareDrawer({ onClose }: { onClose: () => void }) {
   const { data: specials = [] } = useData(() => (mod('specials') ? api.specials.list() : Promise.resolve([])))
   const { data: products = [] } = useData(() => api.products.list())
   const { data: customers = [] } = useData(() => api.customers.list())
-  const tick = useNow(5000)
-  const { data: messages = [] } = useData(() => api.whatsapp.messages(500), [tick])
+  // Only today's offer messages (who already got today's offer) — read once; a send refreshes it.
+  const dayStart = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.toISOString() }, [])
+  const { data: messages = [] } = useData(() => api.whatsapp.messages({ kind: 'offer', since: dayStart, limit: 1000 }), [dayStart])
   const sp = useMemo(() => applySpecials(products, specials), [products, specials])
 
   const [picked, setPicked] = useState<string[] | null>(null) // null = all specials
@@ -168,7 +169,7 @@ export function OfferShareDrawer({ onClose }: { onClose: () => void }) {
                   <li key={c.id} className="flex items-center gap-3 px-4 py-2">
                     <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600">{c.name[0]}</span>
                     <span className="min-w-0 flex-1 truncate text-sm">{c.name} <span className="text-xs text-slate-500">· {formatPhone(c.phone)}</span></span>
-                    <span className="text-xs"><MsgStatus s={m.status} /> <span className="text-slate-400">{fmtTime(m.createdAt)}</span></span>
+                    <span className="text-xs"><MsgStatusOf m={m} /> <span className="text-slate-400">{fmtTime(m.createdAt)}</span></span>
                   </li>
                 )
               })}

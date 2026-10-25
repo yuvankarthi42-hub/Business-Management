@@ -1,10 +1,10 @@
 import clsx from 'clsx'
 import {
-  AlertTriangle, BookOpen, Check, CheckCircle2, ChevronRight, Circle, Eye, EyeOff, FlaskConical, Info, Lock, MessageCircle, Pencil, Plug, Plus, Send, Unplug, XCircle,
+  AlertTriangle, BookOpen, Check, CheckCircle2, ChevronRight, Circle, Eye, EyeOff, FlaskConical, Info, Lock, MessageCircle, Pencil, Plug, Plus, RefreshCw, Send, Unplug, XCircle,
 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useData, useNow } from '@/app/AppContext'
+import { useData } from '@/app/AppContext'
 import { Badge, Button, Card, Field, Input, Modal, Segmented, Select, useAction, useToast } from '@/components/ui'
 import { PhoneInput } from '@/components/PhoneInput'
 import { formatPhone } from '@/core/phone'
@@ -16,11 +16,12 @@ type Status = Awaited<ReturnType<typeof api.admin.waStatus>>
 type Lang = 'en' | 'ta'
 const STEPS = ['Connect account', 'Test', 'Reminder template'] as const
 
-/** Admin → WhatsApp: BillPoodum's own WhatsApp Business number, used for renewal reminders to shop owners. */
+/** Admin → WhatsApp: Kadai Kalanjiyam's own WhatsApp Business number, used for renewal reminders to shop owners. */
 export default function AdminWhatsApp() {
   const can = useAdminCan()
-  const tick = useNow(5000) // Meta's template review finishes in the background
-  const { data: wa } = useData(() => api.admin.waStatus(), [tick])
+  // Read when the page opens and after a change. While Meta reviews the template: "Check now" (no timer).
+  const [check, setCheck] = useState(0)
+  const { data: wa } = useData(() => api.admin.waStatus(), [check])
   const [open, setOpen] = useState(false)
   if (!wa) return null
   const editable = can('pricing.manage')
@@ -29,7 +30,7 @@ export default function AdminWhatsApp() {
     <div className="space-y-4">
       <div>
         <h1 className="text-xl font-semibold">WhatsApp</h1>
-        <p className="text-sm text-slate-500">BillPoodum’s own WhatsApp Business number. Renewal reminders go to shop owners from this number.</p>
+        <p className="text-sm text-slate-500">Kadai Kalanjiyam’s own WhatsApp Business number. Renewal reminders go to shop owners from this number.</p>
       </div>
       <Card className="p-5">
         <div className="flex flex-wrap items-center gap-3">
@@ -38,6 +39,7 @@ export default function AdminWhatsApp() {
             <p className="font-semibold">WhatsApp Business (Meta Cloud API)</p>
             <p className="text-sm text-slate-500">{wa.config?.businessNumber ? formatPhone(wa.config.businessNumber) : 'Not connected'} · {wa.ready ? 'renewal reminders are going out' : 'renewal reminders are off until setup is done'}</p>
           </div>
+          {!wa.ready && connected && <Button size="sm" variant="ghost" icon={RefreshCw} write={false} onClick={() => setCheck((n) => n + 1)}>Check now</Button>}
           {wa.ready ? <Badge tone="green" dot>Connected</Badge> : connected ? <Badge tone="amber">Waiting for Meta</Badge> : wa.config ? <Badge tone="amber">Setup incomplete · step {wa.step} of 3</Badge> : <Badge>Not set up</Badge>}
           {editable && !open && <Button variant={connected ? 'secondary' : 'primary'} write={false} onClick={() => setOpen(true)}>{connected ? 'Manage' : wa.config ? 'Continue setup' : 'Set up'}</Button>}
         </div>
@@ -101,20 +103,20 @@ function StepConnect({ wa, onCancel, onNext }: { wa: Status; onCancel: () => voi
   const [help, setHelp] = useState(false)
   return (
     <form className="space-y-4" onSubmit={async (e) => { e.preventDefault(); if (await run(() => api.admin.waConnect(f), 'Account details saved')) onNext() }}>
-      <div><h3 className="text-lg font-semibold">Connect BillPoodum’s WhatsApp Business account</h3><p className="text-sm text-slate-500">Copy these from the Meta account that owns the BillPoodum number.</p></div>
+      <div><h3 className="text-lg font-semibold">Connect Kadai Kalanjiyam’s WhatsApp Business account</h3><p className="text-sm text-slate-500">Copy these from the Meta account that owns the Kadai Kalanjiyam number.</p></div>
       <div className="rounded-xl border border-slate-200 p-4 text-sm">
         <p className="mb-2 font-semibold">You’ll need</p>
         <ul className="space-y-1.5 text-slate-600">
-          <li className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />A verified Meta Business account for BillPoodum (business.facebook.com)</li>
-          <li className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />A mobile number for BillPoodum added to the WhatsApp Business Platform (API)</li>
-          <li className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />A payment method in Meta — Meta charges BillPoodum per reminder (utility message)</li>
+          <li className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />A verified Meta Business account for Kadai Kalanjiyam (business.facebook.com)</li>
+          <li className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />A mobile number for Kadai Kalanjiyam added to the WhatsApp Business Platform (API)</li>
+          <li className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />A payment method in Meta — Meta charges Kadai Kalanjiyam per reminder (utility message)</li>
         </ul>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Provider"><Select defaultValue="meta_cloud"><option value="meta_cloud">Meta WhatsApp Cloud API</option></Select></Field>
-        <Field label="WhatsApp Business number"><PhoneInput value={f.businessNumber} onChange={(v) => setF({ ...f, businessNumber: v })} /></Field>
-        <Field label="WhatsApp Business Account ID"><Input value={f.wabaId} onChange={(e) => setF({ ...f, wabaId: e.target.value.replace(/\D/g, '') })} inputMode="numeric" className="font-mono" placeholder="104857362910473" /></Field>
-        <Field label="Phone number ID"><Input value={f.phoneNumberId} onChange={(e) => setF({ ...f, phoneNumberId: e.target.value.replace(/\D/g, '') })} inputMode="numeric" className="font-mono" placeholder="110293847561029" /></Field>
+        <Field required label="WhatsApp Business number"><PhoneInput value={f.businessNumber} onChange={(v) => setF({ ...f, businessNumber: v })} /></Field>
+        <Field required label="WhatsApp Business Account ID"><Input value={f.wabaId} onChange={(e) => setF({ ...f, wabaId: e.target.value.replace(/\D/g, '') })} inputMode="numeric" className="font-mono" placeholder="104857362910473" /></Field>
+        <Field required label="Phone number ID"><Input value={f.phoneNumberId} onChange={(e) => setF({ ...f, phoneNumberId: e.target.value.replace(/\D/g, '') })} inputMode="numeric" className="font-mono" placeholder="110293847561029" /></Field>
       </div>
       <Field label="Permanent access token" hint={c?.tokenLast4 ? `A token ending in ${c.tokenLast4} is saved. Leave empty to keep it.` : 'Stored encrypted on the server. It’s never shown again after saving.'}>
         <div className="relative">
@@ -168,7 +170,7 @@ function SendTestModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal open onClose={onClose} size="sm" title="Send a test message"
       footer={<><Button variant="ghost" write={false} onClick={onClose}>Cancel</Button><Button icon={Send} write={false} disabled={!to} onClick={async () => { if (await run(() => api.admin.waSendTest(to), 'Test message sent')) onClose() }}>Send</Button></>}>
-      <Field label="Mobile number" hint="“Test message from BillPoodum. WhatsApp works.” goes to this number."><PhoneInput value={to} onChange={setTo} autoFocus /></Field>
+      <Field required label="Mobile number" hint="“Test message from Kadai Kalanjiyam. WhatsApp works.” goes to this number."><PhoneInput value={to} onChange={setTo} autoFocus /></Field>
     </Modal>
   )
 }

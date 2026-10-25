@@ -17,7 +17,7 @@ const ago = (iso: string | null) => {
   return d <= 0 ? 'Today' : d === 1 ? 'Yesterday' : `${d} days ago`
 }
 
-/** Who is really using BillPoodum, and the subscription money coming in. */
+/** Who is really using Kadai Kalanjiyam, and the subscription money coming in. */
 export default function AdminReports() {
   const { data, error } = useData(() => api.admin.usage())
   const [sort, setSort] = useState<Sort>('lastBill')

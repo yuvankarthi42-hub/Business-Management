@@ -6,7 +6,7 @@ import { useApp, useData } from '@/app/AppContext'
 import { EmptyState, VegMark } from '@/components/ui'
 import type { Product } from '@/core/types'
 import { api } from '@/data'
-import { addDays, money, startOfDay } from '@/lib/format'
+import { money } from '@/lib/format'
 import { applySpecials, type SpecialInfo } from '@/core/specials'
 import { optionsJustClosed } from './ItemOptions'
 
@@ -24,7 +24,8 @@ export function useCatalog() {
   const sp = useMemo(() => applySpecials(rawProducts, todays), [rawProducts, todays])
   const products = sp.products
   const { data: categories = [] } = useData(() => api.categories.list())
-  const { data: popular = [] } = useData(() => api.reports.summary(startOfDay(addDays(new Date(), -7)), new Date()).then((s) => s.topProducts.slice(0, 12).map((p) => p.productId)))
+  // Quick picks: last 7 finished days' best sellers (cached on the server; no sales figures needed).
+  const { data: popular = [] } = useData(() => api.reports.topProducts(7, 12).then((t) => t.map((p) => p.productId)))
   const [cat, setCat] = useState<string>('all')
   const [q, setQ] = useState('')
   const active = useMemo(() => products.filter((p) => p.active), [products])

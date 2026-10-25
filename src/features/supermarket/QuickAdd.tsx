@@ -30,7 +30,7 @@ export function QuickAddForm({ barcode, onSaved, onCancel, compact }: { barcode:
     <form onSubmit={(e) => { e.preventDefault(); save() }} className="space-y-3">
       <div className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 font-mono text-sm"><Barcode className="h-4 w-4 text-slate-400" />{barcode}</div>
       <div className={compact ? 'grid gap-3 sm:grid-cols-6' : 'grid grid-cols-2 gap-3'}>
-        <Field label="Product name" className={compact ? 'sm:col-span-2' : 'col-span-2'}><Input autoFocus required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Maggi Noodles 70 g" /></Field>
+        <Field required label="Product name" className={compact ? 'sm:col-span-2' : 'col-span-2'}><Input autoFocus required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Maggi Noodles 70 g" /></Field>
         <Field label="MRP (₹)"><Input type="number" inputMode="decimal" step="0.01" value={f.mrp} onChange={(e) => setF({ ...f, mrp: e.target.value })} placeholder="14" /></Field>
         <Field label="Selling price (₹)"><Input type="number" inputMode="decimal" step="0.01" required={!f.mrp} value={f.price} onChange={(e) => setF({ ...f, price: e.target.value })} placeholder={f.mrp || '0'} /></Field>
         <Field label="Category">

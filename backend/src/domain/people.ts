@@ -14,6 +14,7 @@ export function userFrom(u: Row, branchIds: string[]): User {
     roleId: str(u.role_id), active: u.is_active !== false, ...(branchIds.length ? { branchIds } : {}),
     language: str(u.language) || 'en', ...(u.username ? { username: str(u.username) } : {}), lastLoginAt: strOrNull(u.last_login_at),
     ...(pay ? { pay } : {}),
+    canLogin: u.can_login !== false,
     createdAt: u.CREATEDTIME, createdBy: '', updatedAt: u.MODIFIEDTIME, updatedBy: '',
   }
 }

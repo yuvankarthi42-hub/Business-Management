@@ -3,10 +3,11 @@
 // whatsapp_messages, campaigns, secrets (the access token, never returned to the browser).
 //
 // Meta is SIMULATED in this phase, exactly like the app's demo: a submitted template is approved ~20 s later,
-// delivered / read receipts follow from the message's age. Everything that leaves BillPoodum goes through
+// delivered / read receipts follow from the message's age. Everything that leaves Kadai Kalanjiyam goes through
 // sendWhatsApp() below, so the real Cloud API call is plugged in at one place.
 import { randomBytes } from 'node:crypto'
 import { renderTemplate, templateErrors, WA_KIND, type WaLang, type WaTemplateKind } from '@/core/whatsapp'
+import type { WaMessageQuery } from '@/core/waReceipts'
 import type { Campaign, WaMessage, WaTemplate, WhatsAppConfig } from '@/core/types'
 import type { Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
@@ -35,7 +36,7 @@ export interface WaOutgoing {
 export interface WaSent { status: 'sent' | 'failed'; messageId: string | null; error: string | null }
 
 /**
- * The one place a WhatsApp message leaves BillPoodum (shop bills / offers / tests and the platform's renewal
+ * The one place a WhatsApp message leaves Kadai Kalanjiyam (shop bills / offers / tests and the platform's renewal
  * reminders). The server will call Meta here: POST https://graph.facebook.com/<version>/<phoneNumberId>/messages
  * with the template name, language and parameters, authorised by the token, and keep the returned message id
  * (wamid) so the status webhook can update the row. In this phase the call is simulated like the app's demo:
@@ -194,6 +195,7 @@ async function messagesFrom(c: Ctx, rows: Row[]): Promise<WaMessage[]> {
     return {
       id: r.ROWID, businessId: str(r.business_id), kind, to: str(r.to_number), customerName: name, customerId: strOrNull(r.customer_id),
       refId: strOrNull(r.order_id) ?? strOrNull(r.campaign_id), body: str(r.body), attachment, status: liveStatus(r, c.now),
+      ...(str(r.meta_message_id).startsWith('sim.') ? { simulated: true } : {}),
       ...(r.error ? { error: str(r.error) } : {}), createdAt: r.CREATEDTIME, createdBy: str(r.created_by),
     }
   })
@@ -250,7 +252,7 @@ define('whatsapp', {
     if (!cfg.verified) throw new ApiError('Test the connection first')
     const to = c.s.user.phone
     if (!to) throw new ApiError('Add your mobile number to your profile first')
-    return logWa(c, w, { kind: 'test', to, customerName: c.s.user.name, customerId: null, body: `Test message from ${c.business.name} on BillPoodum. Your WhatsApp integration works.`, attachment: null })
+    return logWa(c, w, { kind: 'test', to, customerName: c.s.user.name, customerId: null, body: `Test message from ${c.business.name} on Kadai Kalanjiyam. Your WhatsApp integration works.`, attachment: null })
   }, { perm: 'settings.manage', tx: 'none' }),
 
   /** Save a template as a draft, or submit it to Meta for approval. */
@@ -350,9 +352,15 @@ define('whatsapp', {
   }, { perm: 'customers.manage', tx: 'none' }),
 
   /** Messages sent through the API, newest first, with live receipts. */
-  messages: userRead(async (c, limit = 200) => {
-    const n = Math.min(Math.max(1, Math.floor(Number(limit) || 200)), 1000)
-    const rows = await c.db.select('whatsapp_messages', { where: { business_id: c.businessId, sender: E.WaSender.business }, orderBy: [['CREATEDTIME', 'DESC'], ['ROWID', 'DESC']], limit: n })
+  /** Newest first. `q` = a number (how many) or { limit, kind, since, before } to read only what a screen needs. */
+  messages: userRead(async (c, q: number | WaMessageQuery = 200) => {
+    const o: WaMessageQuery = typeof q === 'object' && q ? q : { limit: Number(q) }
+    const n = Math.min(Math.max(1, Math.floor(Number(o.limit) || 200)), 1000)
+    const iso = (s?: string) => (typeof s === 'string' && !Number.isNaN(Date.parse(s)) ? new Date(s).toISOString() : null)
+    const since = iso(o.since), before = iso(o.before)
+    const created = since && before ? { gte: since, lt: before } : since ? { gte: since } : before ? { lt: before } : null
+    const where = { business_id: c.businessId, sender: E.WaSender.business, ...(o.kind && o.kind in E.WaMessageKind ? { kind: E.WaMessageKind[o.kind as keyof typeof E.WaMessageKind] } : {}), ...(created ? { CREATEDTIME: created } : {}) }
+    const rows = await c.db.select('whatsapp_messages', { where, orderBy: [['CREATEDTIME', 'DESC'], ['ROWID', 'DESC']], limit: n })
     return messagesFrom(c, rows.filter((r) => !isManualShare(r)))
   }),
 })

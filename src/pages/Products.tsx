@@ -1,11 +1,14 @@
 import clsx from 'clsx'
-import { Boxes, FileUp, FolderPlus, IndianRupee, PackageSearch, Pencil, Plus, ScanLine, Tag, Trash2 } from 'lucide-react'
+import { Boxes, FileUp, FolderPlus, IndianRupee, Layers, PackageSearch, Pencil, Percent, Plus, ScanLine, Shirt, Tag, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useApp, useData } from '@/app/AppContext'
 import { Badge, Button, Card, Chips, EmptyState, Field, Input, Modal, PageHeader, SearchInput, Select, Table, Td, Th, Toggle, VegMark, useAction } from '@/components/ui'
 import { productFormFor, templateFor, usesRetailPos } from '@/core/config'
 import { ScanAddModal } from '@/features/supermarket/ScanAdd'
 import { LabelPrintModal } from '@/features/Labels'
+import { AddDesignModal, CategoryDiscountModal } from '@/features/textile/Textile'
+import { detailsLine, discountedPrice } from '@/core/stickers'
+import { HsnInput } from '@/features/gst/GstFields'
 import { ProductImportModal } from '@/features/ProductImport'
 import type { AddOn, Product, Variant } from '@/core/types'
 import { api } from '@/data'
@@ -27,9 +30,19 @@ export default function Products() {
   const [catModal, setCatModal] = useState(false)
   const [labelsFor, setLabelsFor] = useState<string[] | null>(null)
   const [importing, setImporting] = useState(false)
+  const [designing, setDesigning] = useState(false)
+  const [discounting, setDiscounting] = useState(false)
+  const textile = !!me && productFormFor(me.business).textile
   // Barcode labels: shops that sell packed goods (supermarket, hardware, bakery) — not dine-in menus.
   const labels = superMode || /bakery|sweet/i.test(me?.business.subType ?? '')
-  const list = useMemo(() => (products ?? []).filter((p) => (cat === 'all' || (cat === 'inactive' ? !p.active : p.categoryId === cat)) && (!q || p.name.toLowerCase().includes(q.toLowerCase()) || p.sku.toLowerCase().includes(q.toLowerCase()))), [products, cat, q])
+  const list = useMemo(() => {
+    const s = q.trim().toLowerCase()
+    return (products ?? []).filter((p) => (cat === 'all' || (cat === 'inactive' ? !p.active : p.categoryId === cat))
+      && (!s || p.name.toLowerCase().includes(s) || p.sku.toLowerCase().includes(s) || p.barcode.includes(s) || (p.details?.design ?? '').toLowerCase().includes(s)))
+  }, [products, cat, q])
+  // Print labels for what's on screen when a category or search is chosen, otherwise start empty.
+  const filtered = cat !== 'all' || !!q.trim()
+  const printable = list.filter((p) => p.active)
   const catName = (id: string | null) => categories.find((c) => c.id === id)?.name ?? '—'
 
   return (
@@ -37,19 +50,25 @@ export default function Products() {
       <PageHeader title={t('product', true)} subtitle={`${products?.filter((p) => p.active).length ?? 0} active ${t('product', true).toLowerCase()}`}
         actions={<>
           <Button variant="secondary" icon={FolderPlus} onClick={() => setCatModal(true)}>{t('category', true)}</Button>
-          {labels && <Button variant="secondary" icon={Tag} onClick={() => setLabelsFor([])}>Print labels</Button>}
+          {textile && <Button variant="secondary" icon={Percent} write onClick={() => setDiscounting(true)}>Discount</Button>}
+          {labels && <Button variant="secondary" icon={Tag} onClick={() => setLabelsFor(filtered ? printable.map((p) => p.id) : [])}>{textile ? 'Print stickers' : 'Print labels'}{filtered && printable.length ? ` · ${printable.length}` : ''}</Button>}
           <Button variant="secondary" icon={FileUp} write onClick={() => setImporting(true)}>Import</Button>
-          {superMode ? <>
+          {textile ? <>
+            <Button variant="secondary" icon={Pencil} onClick={() => setEditing({})}>Add single item</Button>
+            <Button icon={Layers} write onClick={() => setDesigning(true)}>Add design</Button>
+          </> : superMode ? <>
             <Button variant="secondary" icon={Pencil} onClick={() => setEditing({})}>Add manually</Button>
             <Button icon={ScanLine} onClick={() => setScanAdd(true)}>Scan to add</Button>
           </> : <Button icon={Plus} onClick={() => setEditing({})}>Add {t('product')}</Button>}
         </>} />
       <Card>
         <div className="space-y-3 border-b border-slate-100 p-3">
-          <SearchInput value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${t('product', true).toLowerCase()} or SKU`} className="max-w-md" />
+          <SearchInput value={q} onChange={(e) => setQ(e.target.value)} placeholder={textile ? 'Search by name, design no. or code' : `Search ${t('product', true).toLowerCase()} or SKU`} className="max-w-md" />
           <Chips value={cat} onChange={setCat} options={[{ value: 'all', label: 'All' }, ...categories.map((c) => ({ value: c.id, label: <CategoryLabel c={c} /> })), { value: 'inactive', label: 'Inactive' }]} />
         </div>
-        {products && !list.length ? <EmptyState icon={PackageSearch} title={`No ${t('product', true).toLowerCase()}`} action={<Button icon={Plus} onClick={() => setEditing({})}>Add {t('product')}</Button>} /> : (
+        {products && !list.length ? <EmptyState icon={PackageSearch} title={`No ${t('product', true).toLowerCase()}`}
+          description={textile && !products.length ? 'Add a design once with all its colours and sizes — each piece gets a QR price sticker.' : undefined}
+          action={textile ? <Button icon={Layers} onClick={() => setDesigning(true)}>Add design</Button> : <Button icon={Plus} onClick={() => setEditing({})}>Add {t('product')}</Button>} /> : (
           <Table>
             <thead><tr><Th>{t('product')}</Th><Th>{t('category')}</Th><Th className="text-right">Price</Th>{mod('inventory') && <Th className="text-right">Stock</Th>}<Th>Status</Th><Th /></tr></thead>
             <tbody>
@@ -60,12 +79,19 @@ export default function Products() {
                       <Thumb item={p} className={clsx('h-11 w-11 rounded-lg text-xl', tintFor(p.id))} />
                       <div className="min-w-0">
                         <p className="flex items-center gap-1.5 font-medium text-slate-900">{food && <VegMark veg={p.isVeg} />}{p.name}</p>
-                        <p className="text-xs text-slate-500">{p.barcode ? <span className="font-mono">{p.barcode}</span> : p.sku || 'No SKU'} · per {UNIT_LABEL[p.unit]?.toLowerCase() ?? p.unit}{p.variants.length ? ` · ${p.variants.length} sizes` : ''}{p.addOns.length ? ` · ${p.addOns.length} add-ons` : ''}</p>
+                        {textile ? (
+                          <p className="text-xs text-slate-500">{[p.details?.design || p.sku, detailsLine(p.details, ['fabric'])].filter(Boolean).join(' · ') || 'No design no.'} · {p.barcode ? <span className="font-mono">{p.barcode}</span> : <span className="text-amber-700">no code</span>}</p>
+                        ) : (
+                          <p className="text-xs text-slate-500">{p.barcode ? <span className="font-mono">{p.barcode}</span> : p.sku || 'No SKU'} · per {UNIT_LABEL[p.unit]?.toLowerCase() ?? p.unit}{p.variants.length ? ` · ${p.variants.length} sizes` : ''}{p.addOns.length ? ` · ${p.addOns.length} add-ons` : ''}</p>
+                        )}
                       </div>
                     </div>
                   </Td>
                   <Td>{catName(p.categoryId)}</Td>
-                  <Td className="text-right font-medium tabular">{priceLabel(p)}</Td>
+                  <Td className="text-right font-medium tabular">
+                    {priceLabel(p)}
+                    {!p.variants.length && !!p.mrp && p.mrp > p.price && <span className="block text-[11px] font-normal text-slate-400"><s>{money(p.mrp)}</s> · <span className="text-emerald-700">{Math.round(((p.mrp - p.price) / p.mrp) * 100)}% off</span></span>}
+                  </Td>
                   {mod('inventory') && <Td className="text-right tabular">{p.trackStock ? <span className={p.stock <= p.lowStockAt ? 'font-semibold text-amber-600' : ''}>{p.stock}</span> : <span className="text-slate-400">—</span>}</Td>}
                   <Td>
                     {!p.active ? <Badge>Inactive</Badge> : p.trackStock && p.stock <= 0 ? <Badge tone="red">Out of stock</Badge> : p.trackStock && p.stock <= p.lowStockAt ? <Badge tone="amber">Low stock</Badge> : <Badge tone="green">{p.kind === 'service' ? 'Available' : 'In stock'}</Badge>}
@@ -84,6 +110,8 @@ export default function Products() {
       {catModal && <CategoryModal onClose={() => setCatModal(false)} />}
       {importing && <ProductImportModal onClose={() => setImporting(false)} />}
       {labelsFor && <LabelPrintModal initialIds={labelsFor} onClose={() => setLabelsFor(null)} />}
+      {designing && <AddDesignModal onClose={() => setDesigning(false)} />}
+      {discounting && <CategoryDiscountModal initialCategory={cat} onClose={() => setDiscounting(false)} />}
       {scanAdd && <ScanAddModal onClose={() => setScanAdd(false)} onEdit={(p) => { setScanAdd(false); setEditing(p) }} />}
     </div>
   )
@@ -121,13 +149,20 @@ export function ProductForm({ initial, onClose }: { initial: Partial<Product>; o
 
   return (
     <Modal open onClose={onClose} size="lg" title={isNew ? `Add ${t('product')}` : `Edit ${initial.name}`}
-      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button onClick={async () => { if (await run(() => api.products.save({ ...p, name: p.name ?? '', ...(isNew && p.trackExpiry && (p.stock ?? 0) > 0 ? { openingBatch } : {}) }), isNew ? `${t('product')} added` : 'Saved')) onClose() }}>Save</Button></>}>
+      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button onClick={async () => {
+        const ok = await run(async () => {
+          const saved = await api.products.save({ ...p, name: p.name ?? '', ...(form.textile ? { sku: p.details?.design ?? p.sku ?? '' } : {}), ...(isNew && p.trackExpiry && (p.stock ?? 0) > 0 ? { openingBatch } : {}) })
+          // Textile: every item needs its own code for its QR sticker.
+          if (form.textile && !saved.barcode) await api.products.assignBarcodes([saved.id])
+        }, isNew ? `${t('product')} added` : 'Saved')
+        if (ok) onClose()
+      }}>Save</Button></>}>
       <div className="space-y-5">
         {/* Photo + basic details */}
         <div className="grid gap-5 sm:grid-cols-[176px_1fr]">
           <div className="mx-auto sm:mx-0"><PhotoDrop imageUrl={p.imageUrl} onChange={(img) => setP((x) => ({ ...x, imageUrl: img?.imageUrl ?? null, thumbUrl: img?.thumbUrl ?? null }))} /></div>
           <div className="grid content-start gap-4">
-            <Field label="Item name"><Input autoFocus value={p.name} onChange={(e) => set('name', e.target.value)} placeholder={form.namePlaceholder} /></Field>
+            <Field required label="Item name"><Input autoFocus value={p.name} onChange={(e) => set('name', e.target.value)} placeholder={form.namePlaceholder} /></Field>
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <Field label={t('category')}>
@@ -148,7 +183,7 @@ export function ProductForm({ initial, onClose }: { initial: Partial<Product>; o
                 )}
               </div>
               {form.barcodeFirst && (
-                <Field label="Barcode" hint="Click here and scan the packet. No barcode (loose / own-packed)? Create one in Print labels.">
+                <Field label={form.textile ? 'Code (QR / barcode)' : 'Barcode'} hint={form.textile ? 'Leave empty — a code is made when you save. Or scan a code already on the item.' : 'Click here and scan the packet. No barcode (loose / own-packed)? Create one in Print labels.'}>
                   <div className="relative flex gap-1.5">
                     <ScanLine className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                     <Input value={p.barcode} onChange={(e) => set('barcode', e.target.value.trim())} placeholder="Scan or type" className="pl-9 font-mono" inputMode="numeric"
@@ -177,7 +212,7 @@ export function ProductForm({ initial, onClose }: { initial: Partial<Product>; o
         {/* Pricing */}
         <section className="border-t border-slate-100 pt-5">
           <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-800"><IndianRupee className="h-4 w-4" />Pricing</h3>
-          <div className={clsx('grid grid-cols-2 gap-4', form.showMrp || ws ? 'sm:grid-cols-5' : 'sm:grid-cols-4', form.showMrp && ws && 'lg:grid-cols-6')}>
+          <div className={clsx('grid grid-cols-2 gap-4', form.textile ? 'sm:grid-cols-3' : form.showMrp || ws ? 'sm:grid-cols-5' : 'sm:grid-cols-4', !form.textile && form.showMrp && ws && 'lg:grid-cols-6')}>
             {form.showMrp && (
               <Field label="MRP">
                 <MoneyInput value={p.mrp ?? undefined} onChange={(v) => setP((x) => ({ ...x, mrp: v || null, price: x.price ? x.price : v }))} />
@@ -185,7 +220,18 @@ export function ProductForm({ initial, onClose }: { initial: Partial<Product>; o
                 {!!p.mrp && !!p.price && p.price > p.mrp && <span className="mt-1 block text-xs font-medium text-red-600">Price is above MRP</span>}
               </Field>
             )}
-            <Field label={p.variants?.length ? 'Base price' : 'Selling price'}><MoneyInput value={p.price} onChange={(v) => set('price', v)} /></Field>
+            {form.textile && (
+              <Field label="Discount %">
+                <div className="relative">
+                  <Input type="number" inputMode="decimal" min={0} max={90} disabled={!p.mrp} placeholder="0"
+                    value={p.mrp && p.price && p.price < p.mrp ? Math.round(((p.mrp - p.price) / p.mrp) * 1000) / 10 : ''}
+                    onChange={(e) => { const pct = Number(e.target.value); if (p.mrp && pct >= 0 && pct < 100) set('price', discountedPrice(p.mrp, pct)) }} className="pr-7" />
+                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">%</span>
+                </div>
+                {billing.mrpDiscounts === false && <span className="mt-1 block text-xs text-amber-700">Discount is off — bills at MRP</span>}
+              </Field>
+            )}
+            <Field required label={p.variants?.length ? 'Base price' : 'Selling price'}><MoneyInput value={p.price} onChange={(v) => set('price', v)} /></Field>
             {ws && (
               <Field label={wholesaleLabel(billing)}>
                 <MoneyInput value={p.wholesalePrice ?? undefined} onChange={(v) => set('wholesalePrice', v || null)} />
@@ -197,7 +243,7 @@ export function ProductForm({ initial, onClose }: { initial: Partial<Product>; o
               {margin && <span className={clsx('mt-1 block text-xs font-medium', margin.value >= 0 ? 'text-emerald-600' : 'text-red-600')}>{margin.value >= 0 ? 'Margin' : 'Loss'} {money(Math.abs(margin.value))} · {Math.abs(margin.pct)}%</span>}
               {!margin && <span className="mt-1 block text-xs text-slate-400">For profit reports</span>}
             </Field>
-            <Field label="Sold per">
+            <Field required label="Sold per">
               <Select value={p.unit} onChange={(e) => set('unit', e.target.value)}>
                 {[...new Set([p.unit!, ...tpl.units, 'pc', 'plate', 'kg', 'g', 'ltr', 'service'])].map((u) => <option key={u} value={u}>{UNIT_LABEL[u] ?? u}</option>)}
               </Select>
@@ -208,8 +254,24 @@ export function ProductForm({ initial, onClose }: { initial: Partial<Product>; o
                 {billing.taxRates.map((r) => <option key={r.id} value={r.id}>{r.rate}%{r.rate === 0 ? ' (exempt)' : ''}</option>)}
               </Select>
             </Field>
+            {billing.taxEnabled && (
+              <HsnInput label={form.isService || p.kind === 'service' ? 'SAC code' : 'HSN code'} value={p.hsn} onChange={(v) => set('hsn', v)}
+                hint={!p.hsn && categories.find((c) => c.id === p.categoryId)?.hsn ? `Empty = category’s ${categories.find((c) => c.id === p.categoryId)!.hsn}` : 'Optional'} placeholder={form.isService ? '9983' : '1006'} />
+            )}
           </div>
         </section>
+
+        {form.textile && (
+          <section className="border-t border-slate-100 pt-5">
+            <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-800"><Shirt className="h-4 w-4" />Design details <span className="text-xs font-normal text-slate-400">printed on the sticker</span></h3>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <Field label="Design no."><Input value={p.details?.design ?? p.sku ?? ''} onChange={(e) => setP((x) => ({ ...x, details: { ...x.details, design: e.target.value.toUpperCase() } }))} placeholder="KS-1024" className="font-mono" /></Field>
+              <Field label="Fabric"><Input value={p.details?.fabric ?? ''} onChange={(e) => setP((x) => ({ ...x, details: { ...x.details, fabric: e.target.value } }))} placeholder="Pure silk" /></Field>
+              <Field label="Colour"><Input value={p.details?.colour ?? ''} onChange={(e) => setP((x) => ({ ...x, details: { ...x.details, colour: e.target.value } }))} placeholder="Maroon" /></Field>
+              <Field label="Size"><Input value={p.details?.size ?? ''} onChange={(e) => setP((x) => ({ ...x, details: { ...x.details, size: e.target.value } }))} placeholder="Free size" /></Field>
+            </div>
+          </section>
+        )}
 
         {form.barcodeFirst && mod('inventory') && (
           <section className="border-t border-slate-100 pt-5">
@@ -221,14 +283,16 @@ export function ProductForm({ initial, onClose }: { initial: Partial<Product>; o
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
                 {isNew && <Field label={`Opening stock (${UNIT_LABEL[p.unit ?? ''] ?? p.unit})`}><Input type="number" inputMode="decimal" value={p.stock || ''} placeholder="0" onChange={(e) => set('stock', Number(e.target.value))} /></Field>}
                 <Field label="Low stock alert at"><Input type="number" inputMode="decimal" value={p.lowStockAt} onChange={(e) => set('lowStockAt', Number(e.target.value))} /></Field>
-                <Field label="SKU / item code"><Input value={p.sku} onChange={(e) => set('sku', e.target.value)} placeholder="Optional" /></Field>
-                <div className="col-span-2 flex items-center justify-between gap-4 rounded-xl border border-slate-200 px-4 py-3 sm:col-span-3">
-                  <div><p className="text-sm font-medium">Track batch & expiry</p><p className="text-xs text-slate-500">For milk, curd, bread, medicines — oldest stock is sold first and you get expiry alerts</p></div>
-                  <Toggle checked={!!p.trackExpiry} onChange={(v) => set('trackExpiry', v)} label="Track batch and expiry" />
-                </div>
+                {!form.textile && <Field label="SKU / item code"><Input value={p.sku} onChange={(e) => set('sku', e.target.value)} placeholder="Optional" /></Field>}
+                {!form.textile && (
+                  <div className="col-span-2 flex items-center justify-between gap-4 rounded-xl border border-slate-200 px-4 py-3 sm:col-span-3">
+                    <div><p className="text-sm font-medium">Track batch & expiry</p><p className="text-xs text-slate-500">For milk, curd, bread, medicines — oldest stock is sold first and you get expiry alerts</p></div>
+                    <Toggle checked={!!p.trackExpiry} onChange={(v) => set('trackExpiry', v)} label="Track batch and expiry" />
+                  </div>
+                )}
                 {isNew && p.trackExpiry && (p.stock ?? 0) > 0 && (
                   <>
-                    <Field label="Opening stock expiry"><Input type="date" required value={openingBatch.expiry} onChange={(e) => setOpeningBatch({ ...openingBatch, expiry: e.target.value })} /></Field>
+                    <Field required label="Opening stock expiry"><Input type="date" required value={openingBatch.expiry} onChange={(e) => setOpeningBatch({ ...openingBatch, expiry: e.target.value })} /></Field>
                     <Field label="Batch no." hint="Optional"><Input value={openingBatch.batchNo} onChange={(e) => setOpeningBatch({ ...openingBatch, batchNo: e.target.value })} placeholder="B2410A" /></Field>
                   </>
                 )}
@@ -297,7 +361,8 @@ function CategoryModal({ onClose }: { onClose: () => void }) {
   const run = useAction()
   const { data: categories = [] } = useData(() => api.categories.list())
   const { data: products = [] } = useData(() => api.products.list())
-  const blank = { id: undefined as string | undefined, name: '', emoji: '🍽️', imageUrl: null as string | null | undefined }
+  const { me } = useApp()
+  const blank = { id: undefined as string | undefined, name: '', emoji: '🍽️', imageUrl: null as string | null | undefined, hsn: '' as string | null | undefined }
   const [form, setForm] = useState(blank)
   const editing = !!form.id
   return (
@@ -313,6 +378,7 @@ function CategoryModal({ onClose }: { onClose: () => void }) {
             <div className="flex gap-2">
               <Input value={form.emoji} onChange={(e) => setForm({ ...form, emoji: e.target.value })} className="w-14 text-center" maxLength={4} aria-label="Emoji" />
               <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Biryani & Rice" required />
+              {me?.business.billing.taxEnabled && <Input value={form.hsn ?? ''} onChange={(e) => setForm({ ...form, hsn: e.target.value.replace(/\D/g, '').slice(0, 8) })} className="w-28 font-mono" placeholder="HSN" aria-label="HSN / SAC code for the category" title="HSN / SAC code — used for items in this category that have none" />}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button type="submit" size="sm" icon={editing ? undefined : Plus}>{editing ? 'Save' : 'Add'}</Button>
@@ -329,10 +395,10 @@ function CategoryModal({ onClose }: { onClose: () => void }) {
       <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
         {categories.map((c) => (
           <li key={c.id}>
-            <button onClick={() => setForm({ id: c.id, name: c.name, emoji: c.emoji, imageUrl: c.imageUrl ?? null })}
+            <button onClick={() => setForm({ id: c.id, name: c.name, emoji: c.emoji, imageUrl: c.imageUrl ?? null, hsn: c.hsn ?? '' })}
               className={clsx('flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm hover:bg-slate-50', form.id === c.id && 'bg-brand-50')}>
               <Thumb item={c} className="h-10 w-10 rounded-lg bg-slate-100 text-xl" />
-              <span className="flex-1 font-medium">{c.name}</span>
+              <span className="flex-1 font-medium">{c.name}{c.hsn && <span className="ml-2 font-mono text-[11px] font-normal text-slate-400">HSN {c.hsn}</span>}</span>
               <span className="text-xs text-slate-500">{products.filter((p) => p.categoryId === c.id).length} items</span>
               <Pencil className="h-3.5 w-3.5 text-slate-400" />
             </button>

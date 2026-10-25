@@ -58,7 +58,7 @@ export function ScreenshotPicker({ images, onChange, upload, onHide }: {
   )
 }
 
-/** Conversation between the shop and the BillPoodum team. `me` = which side is "us". */
+/** Conversation between the shop and the Kadai Kalanjiyam team. `me` = which side is "us". */
 export function Thread({ messages, me }: { messages: TicketMessage[]; me: 'customer' | 'admin' }) {
   const [zoom, setZoom] = useState<string | null>(null)
   return (
@@ -69,7 +69,7 @@ export function Thread({ messages, me }: { messages: TicketMessage[]; me: 'custo
           return (
             <li key={m.id} className={clsx('flex', mine ? 'justify-end' : 'justify-start')}>
               <div className={clsx('max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm', mine ? 'rounded-br-md bg-brand-600 text-white' : 'rounded-bl-md bg-slate-100 text-slate-800')}>
-                <p className={clsx('mb-0.5 text-[11px] font-semibold', mine ? 'text-white/80' : 'text-slate-500')}>{m.from === 'admin' ? `${m.authorName} · BillPoodum team` : m.authorName} · {when(m.at)}</p>
+                <p className={clsx('mb-0.5 text-[11px] font-semibold', mine ? 'text-white/80' : 'text-slate-500')}>{m.from === 'admin' ? `${m.authorName} · Kadai Kalanjiyam team` : m.authorName} · {when(m.at)}</p>
                 {m.text && <p className="whitespace-pre-wrap break-words" data-no-i18n>{m.text}</p>}
                 {m.images.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1.5">

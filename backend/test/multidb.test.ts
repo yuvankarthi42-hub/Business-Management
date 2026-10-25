@@ -8,6 +8,7 @@ import { migrate } from '../src/db/migrate'
 import { MIGRATIONS } from '../src/db/migrations.gen'
 import { SqlJsDriver, sqlJs } from '../src/db/sql/sqljs'
 import { TursoDb } from '../src/db/turso'
+import type { Provisioner } from '../src/db/databases'
 import { withShop } from './fixtures'
 import { PER_SHOP, TEST_DB } from './helpers'
 
@@ -142,8 +143,8 @@ test('secrets are encrypted at rest; migrations add up to the schema file', { sk
   assert.equal((await db.first('secrets', { uniq_key: '2:1:1' }))!.value, 'EAAB-secret-token')
   // Running the migrations again does nothing; every table of the schema file exists.
   assert.deepEqual(await migrate(drv, 'shop'), [])
-  const full = MIGRATIONS.shop[0].sql
-  const want = [...full.matchAll(/CREATE TABLE IF NOT EXISTS "(\w+)"/g)].map((m) => m[1]).sort()
+  const full = MIGRATIONS.shop.map((m) => m.sql).join('\n') // tables can be added by later migrations too
+  const want = [...new Set([...full.matchAll(/CREATE TABLE IF NOT EXISTS "(\w+)"/g)].map((m) => m[1]))].sort()
   const have = (await db.sql("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")).map((r) => String(r.name)).sort()
   assert.deepEqual(have, want)
 })
@@ -153,16 +154,51 @@ test('a failed shop database says which Turso setting to check', async () => {
   const { LocalProvisioner } = await import('../src/db/local')
   const { SqlError } = await import('../src/db/sql/driver')
   const base = new LocalProvisioner()
-  const make = (over: Partial<typeof base>) => new PerShopDatabases(Object.assign(Object.create(Object.getPrototypeOf(base)), base, over), 'local')
+  const make = (over: Partial<Provisioner>) => new PerShopDatabases(Object.assign(Object.create(Object.getPrototypeOf(base)), base, over), 'local')
   const platform = (dbs: InstanceType<typeof PerShopDatabases>) => dbs.platform().then((p) => p.insert('businesses', { name: 'X', category: 2, sub_type: 'Tea Shop' }))
-  const cases: [Partial<typeof base>, RegExp][] = [
+  const cases: [Partial<Provisioner>, RegExp][] = [
     [{ create: async () => { throw new Error('Turso create database 401: {"error":"invalid token"}') } }, /TURSO_API_TOKEN/],
     [{ create: async () => { throw new Error('Turso create database 404: not found') } }, /TURSO_ORG and TURSO_GROUP/],
-    [{ connect: async () => ({ run: async () => { throw new SqlError('auth', 'refused') }, script: async () => {}, batch: async () => [], begin: async () => { throw new SqlError('auth', 'refused') } }) }, /group token/],
+    [{ create: async () => { throw new Error('Turso create database 403: {"error":"token is not scoped to group default"}') } }, /not scoped to group default.*TURSO_GROUP/],
+    [{ connect: async () => ({ run: async () => { throw new SqlError('auth', 'refused') }, script: async () => {}, batch: async () => [], begin: async () => { throw new SqlError('auth', 'refused') } }) }, /refused its access token/],
   ]
   for (const [over, want] of cases) {
     const dbs = make(over)
     const b = await platform(dbs)
     await assert.rejects(dbs.createShop(b.ROWID), want)
   }
+})
+
+test('shop migrations add up to the full shop schema (columns and indexes)', { skip: !perShop }, async () => {
+  const { readFileSync } = await import('node:fs')
+  const SQL = await sqlJs()
+  // An old shop: made with 0001 only, then brought up to date by the later migrations.
+  const old = new SqlJsDriver(new SQL.Database())
+  await old.script(MIGRATIONS.shop[0].sql)
+  for (const m of MIGRATIONS.shop.slice(1)) await old.script(m.sql)
+  const full = new SqlJsDriver(new SQL.Database())
+  await full.script(readFileSync(require('node:path').join(__dirname, '../../server/turso/shop.sql'), 'utf8'))
+  const shape = async (d: SqlJsDriver) => {
+    const [t] = await d.run([{ sql: "SELECT name FROM sqlite_master WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%' AND name <> 'schema_migrations' ORDER BY name" }])
+    const out: Record<string, string[]> = {}
+    for (const [name] of t.rows) out[String(name)] = (await d.run([{ sql: 'SELECT name FROM pragma_table_info(?) ORDER BY name', args: [String(name)] }]))[0].rows.map((r) => String(r[0]))
+    return out
+  }
+  assert.deepEqual(await shape(old), await shape(full))
+})
+
+test('platform migrations add up to the full platform schema', { skip: !perShop }, async () => {
+  const { readFileSync } = await import('node:fs')
+  const SQL = await sqlJs()
+  const viaMigrations = new SqlJsDriver(new SQL.Database())
+  await migrate(viaMigrations, 'platform')
+  const full = new SqlJsDriver(new SQL.Database())
+  await full.script(readFileSync(require('node:path').join(__dirname, '../../server/turso/platform.sql'), 'utf8'))
+  const columns = async (d: SqlJsDriver) => {
+    const [t] = await d.run([{ sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name" }])
+    const out: Record<string, string[]> = {}
+    for (const [name] of t.rows) out[String(name)] = (await d.run([{ sql: 'SELECT name FROM pragma_table_info(?) ORDER BY name', args: [String(name)] }]))[0].rows.map((r) => String(r[0]))
+    return out
+  }
+  assert.deepEqual(await columns(viaMigrations), await columns(full))
 })

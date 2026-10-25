@@ -103,7 +103,7 @@ export function ReturnModal({ order: o, onClose }: { order: Order; onClose: () =
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Reason">
+          <Field required label="Reason">
             <Select value={reason} onChange={(e) => setReason(e.target.value as ReturnReason)}>
               {(Object.keys(RETURN_REASON) as ReturnReason[]).map((r) => <option key={r} value={r}>{RETURN_REASON[r]}</option>)}
             </Select>

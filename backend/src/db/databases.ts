@@ -37,9 +37,13 @@ export class SingleDatabases implements Databases {
 /** Creates, opens and removes databases (Turso Platform API, or local files). */
 export interface Provisioner {
   platform(): Promise<SqlDriver>
-  /** Makes an empty database and returns its URL. Must succeed when it already exists (a retry). */
-  create(name: string): Promise<string>
-  connect(url: string): Promise<SqlDriver>
+  /**
+   * Makes an empty database and returns its URL, and (Turso) an access token for just that database.
+   * Must succeed when it already exists (a retry).
+   */
+  create(name: string): Promise<{ url: string; token?: string | null }>
+  /** `token` = the database's own token; without one the provider's default token is used. */
+  connect(url: string, token?: string | null): Promise<SqlDriver>
   drop(name: string, url: string | null): Promise<void>
 }
 
@@ -77,7 +81,7 @@ export class PerShopDatabases implements Databases {
     const row = await p.first('shop_databases', { business_id: businessId })
     if (!row || !row.db_url) throw new ApiError('This shop has no data yet. Please contact support.', 404, 'NO_SHOP_DB')
     if (Number(row.status) !== E.ShopDbStatus.ready) throw new ApiError('This shop is being set up — please try again in a minute.', 503, 'SHOP_DB_NOT_READY')
-    const driver = await this.prov.connect(String(row.db_url))
+    const driver = await this.prov.connect(String(row.db_url), row.db_token ? String(row.db_token) : null)
     if (row.schema_version !== latestVersion('shop')) {
       await migrate(driver, 'shop')
       await p.update('shop_databases', row.ROWID, { schema_version: latestVersion('shop') })
@@ -98,10 +102,10 @@ export class PerShopDatabases implements Databases {
     const row = existing ?? await p.insert('shop_databases', { business_id: businessId, db_name: name, status: E.ShopDbStatus.creating })
     let step: 'create' | 'tables' = 'create'
     try {
-      const url = await this.prov.create(name)
+      const { url, token } = await this.prov.create(name)
       step = 'tables'
-      await migrateWhenReachable(await this.prov.connect(url), 'shop')
-      await p.update('shop_databases', row.ROWID, { db_url: url, status: E.ShopDbStatus.ready, schema_version: latestVersion('shop') })
+      await migrateWhenReachable(await this.prov.connect(url, token), 'shop')
+      await p.update('shop_databases', row.ROWID, { db_url: url, db_token: token ?? null, status: E.ShopDbStatus.ready, schema_version: latestVersion('shop') })
     } catch (e) {
       console.error(`[createShop ${businessId}] ${step}`, e)
       await p.update('shop_databases', row.ROWID, { status: E.ShopDbStatus.failed }).catch(() => {})
@@ -128,7 +132,7 @@ export class PerShopDatabases implements Databases {
     for (const r of rows) {
       const businessId = String(r.business_id)
       try {
-        const applied = await migrate(await this.prov.connect(String(r.db_url)), 'shop')
+        const applied = await migrate(await this.prov.connect(String(r.db_url), r.db_token ? String(r.db_token) : null), 'shop')
         await p.update('shop_databases', r.ROWID, { schema_version: latestVersion('shop') })
         shops.push({ businessId, applied })
       } catch (e) { shops.push({ businessId, error: (e as Error).message }) }
@@ -138,8 +142,9 @@ export class PerShopDatabases implements Databases {
 }
 
 /**
- * Turso: the platform database + one database per shop, all in one group so one group token opens every
- * database. New shop databases are made with the Turso Platform API.
+ * Turso: the platform database + one database per shop. New shop databases are made with the Turso Platform
+ * API (TURSO_API_TOKEN), which also issues each one its own access token — so TURSO_AUTH_TOKEN only has to open
+ * the platform database (a database token for it is enough; a group token works too).
  */
 export class TursoProvisioner implements Provisioner {
   constructor(private cfg: { platformUrl: string; token: string; org: string; apiToken: string; group: string; location?: string }) {
@@ -151,7 +156,7 @@ export class TursoProvisioner implements Provisioner {
     })
   }
   async platform() { return new HranaDriver(this.cfg.platformUrl, this.cfg.token) }
-  async connect(url: string) { return new HranaDriver(url, this.cfg.token) }
+  async connect(url: string, token?: string | null) { return new HranaDriver(url, token || this.cfg.token) }
   async create(name: string) {
     const res = await this.api('/databases', { method: 'POST', body: JSON.stringify({ name, group: this.cfg.group, ...(this.cfg.location ? { location: this.cfg.location } : {}) }) })
     let host: string | undefined
@@ -163,7 +168,12 @@ export class TursoProvisioner implements Provisioner {
       host = ((await got.json()) as { database?: { Hostname?: string } }).database?.Hostname
     } else throw new Error(`Turso create database ${res.status}: ${(await res.text()).slice(0, 300)}`)
     if (!host) throw new Error('Turso did not return the database address')
-    return `libsql://${host}`
+    // An access token for just this database (full access, no expiry), kept encrypted in shop_databases.
+    const tok = await this.api(`/databases/${encodeURIComponent(name)}/auth/tokens?expiration=never&authorization=full-access`, { method: 'POST' })
+    if (!tok.ok) throw new Error(`Turso create database token ${tok.status}: ${(await tok.text()).slice(0, 300)}`)
+    const jwt = ((await tok.json()) as { jwt?: string }).jwt
+    if (!jwt) throw new Error('Turso did not return a database token')
+    return { url: `libsql://${host}`, token: jwt }
   }
   async drop(name: string) {
     const res = await this.api(`/databases/${encodeURIComponent(name)}`, { method: 'DELETE' })
@@ -182,15 +192,18 @@ export function tursoFromEnv(env = process.env): PerShopDatabases {
 /** Why making a shop database failed, in words that point at the setting to fix. */
 function explainCreate(e: unknown, step: 'create' | 'tables'): string {
   const msg = (e as Error)?.message ?? String(e)
-  const status = /Turso (?:create|get) database (\d{3})/.exec(msg)?.[1]
+  const status = /Turso (?:create|get) database (?:token )?(\d{3})/.exec(msg)?.[1]
   if (step === 'create') {
-    if (status === '401' || status === '403') return 'Turso refused the API token. Check TURSO_API_TOKEN (Turso → Settings → API Tokens).'
+    // Turso's own reason (never contains the token), e.g. {"error":"token is not scoped to group default"}
+    const said = (/\{"error":"([^"]{1,160})"/.exec(msg)?.[1] ?? '').trim()
+    if (/scoped to group/i.test(said)) return `Turso says: ${said}. Set TURSO_GROUP to the group your API token is allowed for (and where the platform database is), or make an API token for that group.`
+    if (status === '401' || status === '403') return `Turso refused the API token${said ? ` (${said})` : ''}. Check TURSO_API_TOKEN (Turso → Settings → API Tokens): it must exist, not be expired, and be allowed for the group in TURSO_GROUP.`
     if (status === '404') return 'Turso can’t find the organisation or group. Check TURSO_ORG and TURSO_GROUP.'
     if (status) return `Turso answered ${status}: ${msg.replace(/^.*?\d{3}:\s*/, '').slice(0, 160)}`
     if (/fetch failed|ENOTFOUND|ECONN|timeout|aborted/i.test(msg)) return 'Can’t reach the Turso API (api.turso.tech). Try again in a minute.'
     return msg.slice(0, 160)
   }
-  if (e instanceof SqlError && e.kind === 'auth') return 'The new database refused TURSO_AUTH_TOKEN. It must be a group token (Turso → Groups → your group → Create Token), not a database token.'
+  if (e instanceof SqlError && e.kind === 'auth') return 'The new database refused its access token. Check that TURSO_API_TOKEN may create tokens (organisation-wide or for this group).'
   if (e instanceof SqlError && (e.kind === 'gone' || e.kind === 'network')) return 'The new database isn’t reachable yet. Try again in a minute.'
   return `Creating its tables failed: ${msg.slice(0, 160)}`
 }

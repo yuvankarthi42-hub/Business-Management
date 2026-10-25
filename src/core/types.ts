@@ -69,6 +69,31 @@ export interface BillingSettings {
   /** Credit notes (returns): CN-1001, CN-1002… */
   creditNotePrefix?: string
   nextCreditNoteNumber?: number
+  /**
+   * Customer discount below MRP (textile / supermarket). On (default): items sell at their selling price and the
+   * bill shows "You saved". Off: everything sells at MRP — the selling prices are kept for when it is turned on again.
+   */
+  mrpDiscounts?: boolean
+}
+
+/** Price sticker / label printing (Settings → Price stickers). */
+export type StickerSize = '50x38' | '50x25' | '38x25' | 'a4'
+export interface StickerSettings {
+  size: StickerSize
+  /** QR code (phone-style 2D scanners) or barcode (1D laser scanners). Both hold the item's code. */
+  code: 'qr' | 'barcode'
+  showShop: boolean
+  showName: boolean
+  /** Design no. / SKU. */
+  showDesign: boolean
+  /** Fabric, colour and size. */
+  showDetails: boolean
+  /** auto: MRP, discount and offer price when discounts are on; MRP only when off or no discount. mrp: always MRP only. */
+  priceMode: 'auto' | 'mrp'
+  /** Short line at the bottom, e.g. "No exchange after 7 days". */
+  footer: string
+  /** Stickers per item when printing (stock-in prints one per piece). */
+  copies: number
 }
 
 /** Customer self-ordering via QR code. */
@@ -84,6 +109,8 @@ export interface Business {
   category: BusinessCategory
   subType: string
   logoEmoji: string
+  /** Uploaded shop logo (Settings → Business profile). Unset = the Kadai Kalanjiyam logo is shown. */
+  logoUrl?: string | null
   address: string
   phone: string
   email: string
@@ -97,6 +124,12 @@ export interface Business {
   modules: ModuleConfig
   billing: BillingSettings
   qr?: QrSettings
+  /** Price sticker layout. Unset = defaults (core/stickers.ts). */
+  stickers?: StickerSettings
+  /** GST state of the shop (01–38) when it has no GSTIN; with a GSTIN its first two digits are used. */
+  stateCode?: string
+  /** Loyalty points rules (Settings → Loyalty points). Unset = off. */
+  loyalty?: LoyaltySettings
   onboarded: boolean
   createdAt: ISODate
   // ---- Set by the product admin (customer account) ----
@@ -153,6 +186,8 @@ export interface WaMessage {
   body: string
   attachment: string | null
   status: 'sent' | 'delivered' | 'read' | 'failed'
+  /** Receipts are simulated from the message's age (no real Meta yet): see core/waReceipts.ts. */
+  simulated?: boolean
   error?: string
   createdAt: ISODate
   createdBy: ID
@@ -196,7 +231,7 @@ export interface BranchPrinter {
 // ---------- Users / roles ----------
 
 export type Permission =
-  | 'dashboard.view' | 'billing.create' | 'billing.discount' | 'orders.view' | 'orders.cancel'
+  | 'dashboard.view' | 'billing.create' | 'billing.discount' | 'billing.price' | 'orders.view' | 'orders.cancel'
   | 'products.manage' | 'inventory.manage' | 'customers.manage' | 'payments.view' | 'payments.collect'
   | 'expenses.manage' | 'reports.view' | 'reports.profit' | 'tables.manage' | 'kitchen.view'
   | 'settings.manage' | 'users.manage'
@@ -230,6 +265,8 @@ export interface User extends Audit {
   lastLoginAt?: ISODate | null
   /** Salary and commission (Staff → Payroll). */
   pay?: StaffPay
+  /** false = works here but doesn't use the app (cleaner, helper): attendance and salary only, never signs in. */
+  canLogin?: boolean
 }
 
 export interface StaffPay {
@@ -252,6 +289,8 @@ export interface Category {
   /** Small copy (320 px) for chips and lists. */
   thumbUrl?: string | null
   sort: number
+  /** Default HSN / SAC for items in this category (an item's own code wins). */
+  hsn?: string | null
 }
 
 export interface Variant {
@@ -305,6 +344,18 @@ export interface Product extends Audit {
   isVeg: boolean
   sendToKitchen: boolean
   active: boolean
+  /** Textile shops: design no., fabric, colour and size (printed on the price sticker). */
+  details?: ProductDetails | null
+  /** HSN (goods) / SAC (services) code. Empty = the category's code, if any. */
+  hsn?: string | null
+}
+
+export interface ProductDetails {
+  /** Design no. shared by every size / colour of one design. */
+  design?: string
+  fabric?: string
+  colour?: string
+  size?: string
 }
 
 // ---------- Customers ----------
@@ -322,6 +373,12 @@ export interface Customer extends Audit {
   marketingOptIn?: boolean
   /** Bills for this customer use the wholesale / contractor price list. */
   priceTier?: PriceTier
+  /** GST number of a business customer: bills become B2B tax invoices. */
+  gstin?: string | null
+  /** GST state (01–38) — place of supply. From the GSTIN when given. Empty = shop's state. */
+  stateCode?: string | null
+  /** Loyalty points available. */
+  pointsBalance?: number
 }
 
 export type PriceTier = 'retail' | 'wholesale'
@@ -350,6 +407,14 @@ export interface OrderItem {
   kotQty: number
   /** Priced from the wholesale / contractor list. */
   priceTier?: PriceTier
+  /** Printed MRP per unit, when it is above the price charged (receipt: "You saved"). */
+  mrp?: number
+  /** HSN / SAC code at billing (item's, else its category's). */
+  hsn?: string
+  /** Price per unit changed at the counter (price change or line discount) — needs "Change item price at billing". */
+  priceOverride?: number
+  /** The catalogue price before that change (shown as "was …"). */
+  listPrice?: number
 }
 
 export type OrderStatus = 'open' | 'completed' | 'cancelled'
@@ -383,7 +448,126 @@ export interface Order extends Scoped, Audit {
   fulfilment?: 'new' | 'packing' | 'ready' | 'delivered'
   /** Contact details entered by the customer (QR takeaway / delivery). */
   guest?: { name: string; phone: string; address: string } | null
+  /** Staff member who sold it (textile counters). Commission goes to them; unset = the person who made the bill. */
+  salespersonId?: ID | null
+  /** B2B tax invoice: the customer's GSTIN at billing. */
+  customerGstin?: string | null
+  /** Customer's GST state at billing, when it differs from the shop's. */
+  placeOfSupply?: string | null
+  /** Other-state customer: IGST instead of CGST + SGST. */
+  igst?: boolean
+  /** Loyalty: points used on this bill and their value (already inside `discount`). */
+  pointsRedeemed?: number
+  pointsValue?: number
+  pointsEarned?: number
+  /** Customer's points after this bill. */
+  pointsBalance?: number | null
 }
+
+// ---------- Loyalty points ----------
+
+export interface LoyaltySettings {
+  enabled: boolean
+  /** ₹ spent for 1 point (100 = 1 point per ₹100). */
+  spendPerPoint: number
+  /** ₹ value of 1 point when used. */
+  pointValue: number
+  /** Points needed before they can be used. */
+  minRedeem: number
+  /** Most of a bill (%) that points can pay. */
+  maxBillPct: number
+  /** Points expire this many months after they're earned. 0 = never. */
+  expiryMonths: number
+  /** Items already sold below MRP also earn points. */
+  earnOnDiscounted: boolean
+}
+
+export type PointsKind = 'earn' | 'redeem' | 'return' | 'cancel' | 'expire' | 'adjust'
+export interface PointsEntry {
+  id: ID
+  customerId: ID
+  orderId: ID | null
+  /** Bill / credit-note number for the history list. */
+  ref: string
+  kind: PointsKind
+  points: number
+  balanceAfter: number
+  expiresOn: string | null
+  note: string
+  createdAt: ISODate
+}
+
+// ---------- Suppliers & purchases ----------
+
+export interface Supplier {
+  id: ID
+  businessId: ID
+  name: string
+  phone: string
+  gstin: string
+  stateCode: string | null
+  address: string
+  notes: string
+  /** Owed before using the app (+) or advance paid (−). */
+  openingBalance: number
+  active: boolean
+  /** Read-only from the API: what the shop owes now (opening + purchases − payments). */
+  balance?: number
+  purchases?: number
+  lastPurchaseOn?: string | null
+}
+
+export interface PurchaseLine {
+  id?: ID
+  productId: ID
+  name: string
+  unit: string
+  hsn: string
+  qty: number
+  /** Per unit, before GST. */
+  cost: number
+  taxRate: number
+  taxable: number
+  tax: number
+  batchNo?: string
+  expiry?: string
+}
+
+export interface Purchase extends Scoped, Audit {
+  id: ID
+  number: string
+  supplierId: ID | null
+  supplierName: string
+  supplierBillNo: string
+  date: string // YYYY-MM-DD
+  lines: PurchaseLine[]
+  taxable: number
+  tax: number
+  igst: boolean
+  roundOff: number
+  total: number
+  paid: number
+  balance: number
+  status: 'final' | 'void'
+  note: string
+  voidReason: string | null
+}
+
+export interface SupplierPayment {
+  id: ID
+  supplierId: ID
+  purchaseId: ID | null
+  date: string
+  method: Exclude<PaymentMethod, 'credit' | 'credit_note'>
+  amount: number
+  reference: string
+  note: string
+  voided: boolean
+  createdAt: ISODate
+}
+
+/** One row of a supplier's statement. */
+export interface SupplierLedgerRow { date: string; kind: 'opening' | 'purchase' | 'payment' | 'void'; ref: string; debit: number; credit: number; balance: number; id: ID | null }
 
 export type PaymentKind = 'sale' | 'due_collection' | 'refund'
 
@@ -562,6 +746,8 @@ export interface Expense extends Scoped, Audit {
   method: PaymentMethod
   notes: string
   voided: boolean
+  /** Added by the app for a supplier payment (void it from the supplier's statement). */
+  supplierPaymentId?: ID | null
 }
 
 // ---------- Inventory ----------
@@ -605,7 +791,7 @@ export interface AuditLog {
 
 // ---------- Product admin (platform) ----------
 
-/** People who run BillPoodum itself and manage customer accounts. */
+/** People who run Kadai Kalanjiyam itself and manage customer accounts. */
 export interface PlatformAdmin {
   id: ID
   name: string
@@ -656,7 +842,7 @@ export interface PlatformSettings {
   features?: FeatureFlags
   /** Renewal reminders sent to customers before their subscription ends. */
   reminders?: ReminderSettings
-  /** BillPoodum's own WhatsApp Business number — sends renewal reminders to shop owners. */
+  /** Kadai Kalanjiyam's own WhatsApp Business number — sends renewal reminders to shop owners. */
   whatsapp?: PlatformWhatsApp
 }
 

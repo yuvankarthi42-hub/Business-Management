@@ -1,10 +1,11 @@
 import clsx from 'clsx'
 import { ArrowRightLeft, ChefHat, Combine, ReceiptText, Users, UtensilsCrossed, XCircle } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { useSaveOnce } from '@/features/billKey'
 import { useApp, useData, useNow } from '@/app/AppContext'
 import { Badge, Button, Chips, Drawer, EmptyState, Input, Modal, PageHeader, SearchInput, Segmented, useAction, useToast } from '@/components/ui'
 import type { DiningTable, KitchenTicket, Order, Product } from '@/core/types'
-import { api } from '@/data'
+import { api, withRequestId } from '@/data'
 import { fmtTime, minutesSince, money } from '@/lib/format'
 import { useCart } from '@/features/cart'
 import { ProductGrid, useCatalog } from '@/features/Catalog'
@@ -113,14 +114,20 @@ function TableOrderDrawer({ tableId, tables, running, onClose }: { tableId: stri
     const r = await api.orders.save(draft(), { sendToKitchen: kitchen })
     toast(r.kot ? `${r.kot.number} sent to kitchen` : 'Order saved')
   })
+  // Saved and paid once, even if Pay is tapped twice or the connection drops after the server saved it.
+  const { once } = useSaveOnce()
   const settle = async (pays: Parameters<typeof api.orders.settle>[1]) => {
-    let id = ''
-    const ok = await run(async () => {
-      const saved = await api.orders.save(draft())
-      id = (await api.orders.settle(saved.order.id, pays, { customerId })).id
+    const d = draft()
+    const r = await once({ d, pays, customerId }, async (key) => {
+      let id = ''
+      const ok = await run(async () => {
+        const saved = await api.orders.save(d)
+        id = (await withRequestId(`${key}s`, () => api.orders.settle(saved.order.id, pays, { customerId }))).id
+      })
+      if (ok) setSuccess(id)
+      return ok
     })
-    if (ok) setSuccess(id)
-    return ok
+    return r ?? false
   }
   const pendingKot = cart.items.some((i) => i.qty > i.kotQty)
   const freeTables = tables.filter((x) => x.id !== tableId && !x.mergedInto && !running.some((o) => o.tableId === x.id))

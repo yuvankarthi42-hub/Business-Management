@@ -80,7 +80,8 @@ function colSql(c, present) {
 
 // ---------- indexes: the planned query paths + every foreign key ----------
 const PLANNED = {
-  orders: [['business_id', 'branch_id', 'status', 'created_at'], ['business_id', 'billed_at'], ['business_id', 'customer_id', 'status'], ['business_id', 'table_id', 'status']],
+  orders: [['business_id', 'branch_id', 'status', 'created_at'], ['business_id', 'billed_at'], ['business_id', 'customer_id', 'status'], ['business_id', 'table_id', 'status'], ['business_id', 'order_number']],
+  push_subscriptions: [['business_id', 'expires_at']],
   order_items: [['order_id', 'sort_order'], ['product_id']],
   payments: [['business_id', 'branch_id', 'created_at'], ['order_id'], ['business_id', 'customer_id']],
   stock_movements: [['business_id', 'product_id', 'created_at'], ['business_id', 'branch_id', 'created_at']],

@@ -6,6 +6,7 @@
 //  • After a write: apply what the server returned (e.g. new stock levels) and drop the reads it changed.
 import { auth, rpc, type Effects, type TokenKind } from './http'
 import { invalidatesFor, readPolicy } from './policy'
+import { patchCached, type LiveRecords } from './livePatch'
 
 interface Entry { at: number; ttl: number; tags: string[]; value?: unknown; pending?: Promise<unknown> }
 const entries = new Map<string, Entry>()
@@ -23,7 +24,18 @@ export function notify() { version++; for (const l of listeners) l() }
  */
 let ttlScale = 1
 export const setTtlScale = (n: number) => { ttlScale = n }
-const ttlOf = (ms: number) => Math.min(ms * ttlScale, Math.max(ms, 30 * 60_000))
+/**
+ * Live stream connected (live.ts): reads that other devices' events keep up to date — orders, kitchen, QR,
+ * tables, payments, returns — are trusted for up to 30 min. Everything else (reports, stock in the product list…)
+ * keeps the normal times, because no event refreshes it.
+ */
+let liveBoost = false
+export const setLiveBoost = (on: boolean) => { liveBoost = on }
+const LIVE_KEPT = new Set(['orders', 'kitchen', 'qr', 'tables', 'payments', 'returns'])
+const ttlOf = (e: { ttl: number; tags: string[] }) => {
+  const scale = liveBoost && e.tags.length > 0 && e.tags.every((t) => LIVE_KEPT.has(t)) ? Math.max(ttlScale, 120) : ttlScale
+  return Math.min(e.ttl * scale, Math.max(e.ttl, 30 * 60_000))
+}
 
 const keyOf = (name: string, args: unknown[]) => `${name}|${auth.branch ?? ''}|${JSON.stringify(args)}`
 
@@ -34,7 +46,7 @@ export async function cachedRead<T>(name: string, args: unknown[], token: TokenK
   const key = keyOf(name, args)
   const e = entries.get(key)
   if (e?.pending) return e.pending as Promise<T>
-  if (e && 'value' in e && Date.now() - e.at < ttlOf(e.ttl)) return structuredClone(e.value) as T
+  if (e && 'value' in e && Date.now() - e.at < ttlOf(e)) return structuredClone(e.value) as T
   const entry: Entry = { at: Date.now(), ttl: pol.ttl, tags: pol.tags }
   const p = rpc<T>(name, args, token).then((r) => { entry.value = r.data; entry.at = Date.now(); delete entry.pending; return structuredClone(r.data) as T })
   entry.pending = p
@@ -55,6 +67,24 @@ export function invalidate(tags: string[] | 'all') {
   for (const [k, e] of entries) if (tags === 'all' || e.tags.some((t) => tags.includes(t))) entries.delete(k)
 }
 export function clearAll() { entries.clear(); notify() }
+
+/**
+ * Another device's change, from the live stream: the reads it affects are dropped (re-read when shown), except
+ * lists that can take the changed records in place (livePatch.ts) — those update without asking the server.
+ */
+export function applyLive(tags: string[] | 'all', rec?: LiveRecords) {
+  // Changed orders / tickets (e.g. a customer's QR order) also concern the order, QR and kitchen lists.
+  if (rec && tags !== 'all') tags = [...new Set([...tags, 'orders', 'qr', 'kitchen'])]
+  for (const [k, e] of entries) {
+    if (tags !== 'all' && !e.tags.some((t) => tags.includes(t))) continue
+    if (rec && tags !== 'all' && 'value' in e && !e.pending) {
+      const [name, branch, args] = [k.slice(0, k.indexOf('|')), k.split('|')[1] ?? '', k.slice(k.indexOf('|', k.indexOf('|') + 1) + 1)]
+      const v = patchCached(name, branch, args, e.value, rec)
+      if (v !== undefined) { e.value = v; e.at = Date.now(); continue } // up to date again
+    }
+    entries.delete(k)
+  }
+}
 
 /** Stock changed by a confirmed bill / return / adjustment: patch the cached product lists in place. */
 function applyEffects(fx?: Effects) {
