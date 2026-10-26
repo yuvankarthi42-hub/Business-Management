@@ -265,9 +265,13 @@ update, upload the previous files again. The data stays as it is.
 1. Turso dashboard → the shop's database (`shop-<id>-…`, see the platform table `shop_databases.db_url`) → **Restore / branch
    from a point in time** → pick a time just before the problem. This creates a **new** database with a new URL.
 2. Create a token for the new database (Turso → database → Create token, full access).
-3. Point the shop at it — platform database (Turso shell, platform database):
-   `UPDATE shop_databases SET db_url = '<new libsql url>', db_token = '<new token>' WHERE business_id = <shop id>;`
-   Never paste tokens in chat or email.
+3. Encrypt the new token the way the API stores it (same `SECRETS_KEY` as the api function), on your computer:
+   ```bash
+   SECRETS_KEY='<SECRETS_KEY>' node backend/scripts/encrypt-secret.mjs '<new token>'
+   ```
+   It prints `v1:…`. Then point the shop at the new database — Turso shell, **platform** database:
+   `UPDATE shop_databases SET db_url = '<new libsql url>', db_token = '<the v1:… value>' WHERE business_id = <shop id>;`
+   Never paste tokens or the SECRETS_KEY in chat or email.
 4. Restart the `api` function (Catalyst console → Functions → api → redeploy the same zip): warm instances keep the old
    connection open until they restart.
 5. Open the shop in the app and check the latest bills. Keep the old database for a few days, then delete it.

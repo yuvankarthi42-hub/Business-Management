@@ -4,7 +4,7 @@ import { subscriptionState, DEACTIVATED_MESSAGE } from '@/core/subscription'
 import { ALL_BRANCHES, type Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
 import { checkPassword, hashPassword } from '../core/passwords'
-import { define, publicRead, publicWrite, userRead, userWrite } from '../core/registry'
+import { define, handler, publicRead, publicWrite, userRead, userWrite } from '../core/registry'
 import { signToken } from '../core/tokens'
 import { loadBusiness } from '../domain/business'
 import { findLogin } from '../domain/directory'
@@ -88,6 +88,18 @@ define('auth', {
   signup: publicRead(async () => { throw new ApiError('New accounts are created by the product admin. Please contact us to get your username and password.') }),
 
   me: userRead(async (c) => meFor(c)),
+  /**
+   * App start-up in one call (instead of four): the signed-in user, their support tickets, pending QR orders (when the
+   * screen shows them) and the change-feed position. Each part is exactly what its own action returns.
+   */
+  boot: userRead(async (c) => {
+    const run = (name: string, ...args: unknown[]) => handler(name)!.run(c, ...args)
+    const qrOn = !!c.business.modules.qrOrdering && c.can('tables.manage')
+    const [me, support, qrPending, feed] = await Promise.all([
+      meFor(c), run('support.mine'), qrOn ? run('qr.pending') : Promise.resolve(null), run('sync.changes', null),
+    ])
+    return { me, support, qrPending, feed }
+  }),
 
   /** Check the branch is allowed. The app then sends it with every request (x-branch). */
   switchBranch: userRead(async (c, branchId: string) => {

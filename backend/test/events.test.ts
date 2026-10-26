@@ -172,7 +172,7 @@ test('hub rules: branch filter, rights, replay buffer, publish secret', async ()
   } finally { http.close(); h2.stop() }
 })
 
-test('fewer database reads: QR menu from the cache until it changes; sign-in check from the cache; revoked access at once', async () => {
+test('fewer database reads: QR menu from the cache until it changes; sign-in check one cheap read; revoked access at once', async () => {
   const s = await withShop()
   try {
     await s.call('business.update', { billing: { taxEnabled: false }, modules: { billing: true, qrOrdering: true, products: true }, qr: { orderTypes: ['takeaway'], autoAccept: false, baseUrl: '' } })
@@ -191,17 +191,15 @@ test('fewer database reads: QR menu from the cache until it changes; sign-in che
     s.setToken(null)
     assert.equal((await s.call<{ products: { price: number }[] }>('public.menu', s.businessId, null, null)).products[0].price, 25)
 
-    // Signed-in calls: the shop's sign-in check (epoch) comes from the cache, not the database, every time.
+    // Signed-in calls: the sign-in check is one row in the shop's database (practically free on Turso) — the same
+    // small cost on every call, and never a paid cache request.
     s.setToken(owner)
     await s.call('roles.list')
     const n0 = q.n
-    await s.call('auth.me'); await s.call('auth.me')
-    const perCall = (q.n - n0) / 2
-    s.env.shared!.del(`ep:${s.businessId}`)
-    const n1 = q.n
     await s.call('auth.me')
-    // Turso: the epoch is in the shop database, so a missing cached value costs a read (Data Store: always the cache).
-    if (PER_SHOP) assert.ok(q.n - n1 > perCall, 'without the cached value it costs a database read')
+    const one = q.n - n0
+    await s.call('auth.me')
+    if (PER_SHOP) assert.equal(q.n - n0 - one, one, 'each signed-in call costs the same small read')
 
     // Taking a user's login away still works at once (the cached value is replaced on every change).
     const roles = await s.call<{ id: string; name: string }[]>('roles.list')

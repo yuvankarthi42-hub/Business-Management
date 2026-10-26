@@ -6,9 +6,13 @@
 import { invalidate, notify, setTtlScale } from './cache'
 import { auth, rpc } from './http'
 import { invalidatesFor } from './policy'
+import { feedInterval } from './feedTiming'
 import { startLive } from './live'
 
-const INTERVAL = 30_000
+const BASE = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '')
+/** The app's route: "#/kitchen" (Slate) or "/kitchen" (under the app's base path). */
+const currentPath = () => (typeof location === 'undefined' ? '' : location.hash.startsWith('#/') ? location.hash.slice(1) : location.pathname.slice(BASE.length) || '/')
+const intervalNow = () => feedInterval(currentPath())
 const IDLE_AFTER = 5 * 60_000
 
 interface Feed { supported: boolean; latest?: number; changes?: string[]; reset?: boolean; epoch?: string | null }
@@ -52,6 +56,12 @@ export function setLive(on: boolean) { live = on; if (!on) lastUse = Date.now() 
 /** Change ids seen in live events keep the feed position current, so a catch-up returns only what was missed. */
 export function noteChangeId(id: number) { if (since !== null && id > since) since = id }
 export const feedPosition = () => since
+/** The start-up call already told us where the feed is: no separate first read. */
+export function setFeedStart(f: { supported?: boolean; latest?: number; epoch?: string | null } | null | undefined) {
+  if (!f) return
+  if (f.supported === false) { off = true; return }
+  if (since === null && typeof f.latest === 'number') { since = f.latest; epoch = f.epoch ?? epoch; token = auth.user; setTtlScale(4) }
+}
 /** One catch-up read (never two at once). */
 export async function catchUp() { if (!running) await poll() }
 
@@ -65,6 +75,6 @@ export function startSync() {
   document.addEventListener('visibilitychange', () => { if (!live && visible() && Date.now() - lastPoll > 5000) { lastUse = Date.now(); void poll() } })
   setInterval(() => {
     if (live || running || off || !visible() || Date.now() - lastUse > IDLE_AFTER) return
-    if (Date.now() - lastPoll >= INTERVAL) void poll()
+    if (Date.now() - lastPoll >= intervalNow()) void poll()
   }, 5000)
 }

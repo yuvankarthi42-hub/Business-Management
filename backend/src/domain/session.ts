@@ -22,7 +22,7 @@ export async function bumpEpoch(c: Ctx, businessId: string | 'global') {
   // Open screens of that shop re-check the sign-in (sent after the request is saved).
   if (businessId !== 'global') c.emit({ kind: 'session', shop: String(businessId), branch: null })
   // Subscription / account / settings changes also change what the QR menu may show.
-  if (businessId !== 'global') await bumpMenu(c, String(businessId)).catch(() => {})
+  if (businessId !== 'global') c.afterCommit(() => bumpMenu(c, String(businessId)))
 }
 
 export async function featureFlags(db: Db): Promise<FeatureFlags> {
@@ -58,19 +58,11 @@ export async function loadSession(c: Ctx, claims: UserClaims, branchHeader: stri
   c.epoch = await c.epochs.get(c, claims.bid)
   const key = `sess:${claims.bid}:${claims.uid}:${claims.tv}:${c.epoch}`
   let data: Cached | null = null
-  // This instance's memory first, then the cache every instance shares (Turso: a cold instance doesn't reload
-  // every session from the database), then the database. The key includes the epoch, so a change is never missed.
-  const shared = c.shared !== c.kv ? c.shared : null
-  let hit = await c.kv.get(key)
-  if (!hit && shared) { hit = await shared.get(key); if (hit) await c.kv.set(key, hit, 6) }
+  const hit = await c.kv.get(key)
   if (hit) { try { data = JSON.parse(hit) } catch { data = null } }
   if (!data) {
     data = await loadFresh(c, claims)
-    if (data) {
-      const json = JSON.stringify(data)
-      await c.kv.set(key, json, 6)
-      if (shared && json.length <= 60_000) await shared.set(key, json, 6)
-    }
+    if (data) await c.kv.set(key, JSON.stringify(data), 6)
   }
   if (!data || data.tokenVersion !== claims.tv) return null
   if (!data.user.active && !claims.sup) return null

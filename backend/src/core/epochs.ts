@@ -21,7 +21,6 @@ export class KvEpochs implements Epochs {
 }
 
 const GLOBAL_TTL_MS = 30_000
-const SHOP_TTL_MS = 60_000
 
 export class DbEpochs implements Epochs {
   private global: { value: string; at: number } | null = null
@@ -31,21 +30,11 @@ export class DbEpochs implements Epochs {
     this.global = { value: v.v ?? '0', at: Date.now() }
     return this.global.value
   }
-  /**
-   * The shop's epoch is read on every signed-in request. It is kept in the shared cache (Catalyst Cache) for up
-   * to 60 s, so most requests need no database read. A change deletes the cached value right away and again once
-   * the change is committed (so a request running at the same time can't put back the old one for long).
-   */
+  /** One row in the shop's database (practically free on Turso), read on every signed-in request. */
   async get(c: Ctx, bid: string) {
-    const key = `ep:${bid}`
-    const hit = await c.shared.get(key)
-    const m = hit ? /^(\d+)\|(\d+)$/.exec(hit) : null
-    if (m && Date.now() - Number(m[2]) < SHOP_TTL_MS) return `${m[1]}.${await this.globalEpoch(c)}`
     const db = await c.shopDb(bid)
     const [rows, g] = await Promise.all([db.sql!('SELECT "epoch" FROM "sync_epochs" WHERE "business_id" = ?', [Number(bid)]), this.globalEpoch(c)])
-    const e = Number(rows[0]?.epoch ?? 0)
-    await c.shared.set(key, `${e}|${Date.now()}`, 1)
-    return `${e}.${g}`
+    return `${rows[0]?.epoch ?? 0}.${g}`
   }
   async bump(c: Ctx, bid: string) {
     if (bid === 'global') {
@@ -55,7 +44,5 @@ export class DbEpochs implements Epochs {
     }
     const db = await c.shopDb(bid)
     await db.sql!('INSERT INTO "sync_epochs" ("business_id", "epoch") VALUES (?, 1) ON CONFLICT ("business_id") DO UPDATE SET "epoch" = "epoch" + 1, "updated_at" = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\')', [Number(bid)])
-    await c.shared.del(`ep:${bid}`)
-    c.afterCommit(() => c.shared.del(`ep:${bid}`))
   }
 }

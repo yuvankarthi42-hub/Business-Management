@@ -8,6 +8,7 @@ import { Ctx, type Env } from '../src/core/context'
 import { DbEpochs, KvEpochs } from '../src/core/epochs'
 import { LocalFiles } from '../src/core/files'
 import { MemoryKv } from '../src/core/kv'
+import { DbKv } from '../src/core/dbKv'
 import { PerShopDatabases, SingleDatabases } from '../src/db/databases'
 import { startFakeTurso } from './fakeTurso'
 import { LocalProvisioner, localDatabases } from '../src/db/local'
@@ -32,7 +33,9 @@ export const PER_SHOP = TEST_DB !== 'memory'
 export async function testEnv(): Promise<Env & { prov: LocalProvisioner | null; stop: () => void; hub?: Hub }> {
   const env = await baseEnv()
   const hub = new Hub()
-  return { ...env, shared: new MemoryKv(), push: new FakePush(), events: new LocalSink(hub), hub, stop: () => { hub.stop(); env.stop() } }
+  // One database per shop (Turso setups): the shared cache is the kv_cache table, as in production.
+  const shared = PER_SHOP ? new DbKv(() => env.dbs.platform()) : new MemoryKv()
+  return { ...env, shared, push: new FakePush(), events: new LocalSink(hub), hub, stop: () => { hub.stop(); env.stop() } }
 }
 
 async function baseEnv(): Promise<Env & { prov: LocalProvisioner | null; stop: () => void }> {

@@ -63,6 +63,18 @@ export async function confirmedWrite<T>(name: string, args: unknown[], token: To
   return r.data
 }
 
+/** Is there a fresh copy of this read? */
+export function hasFresh(name: string, args: unknown[]) {
+  const e = entries.get(keyOf(name, args))
+  return !!e && 'value' in e && Date.now() - e.at < ttlOf(e)
+}
+/** Put a value the server already sent (start-up call) into the cache, as if it had been read on its own. */
+export function seed(name: string, args: unknown[], value: unknown) {
+  const pol = readPolicy(name)
+  if (!pol) return
+  entries.set(keyOf(name, args), { at: Date.now(), ttl: pol.ttl, tags: pol.tags, value })
+}
+
 export function invalidate(tags: string[] | 'all') {
   for (const [k, e] of entries) if (tags === 'all' || e.tags.some((t) => tags.includes(t))) entries.delete(k)
 }

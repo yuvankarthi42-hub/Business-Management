@@ -1,6 +1,8 @@
 // Which actions are reads (cached) and what each write changes. When a new feature is added:
 //  • a new read  → add it to READS with its tags (otherwise it is simply not cached — still correct);
 //  • a new write → add the tags it changes to WRITES (otherwise its namespace's reads are refreshed).
+// Lists that rarely change (branches, roles, staff, specials, suppliers) are kept longer: a save on this device and
+// the change feed from other devices still refresh them at once.
 const S = 1000, M = 60 * S
 
 /** How long a cached read is trusted. Short for things other counters change all day. */
@@ -8,12 +10,12 @@ const LIVE = 15 * S, SHORT = M, NORMAL = 5 * M, LONG = 10 * M
 
 const READS: Record<string, { tags: string[]; ttl: number }> = {
   'auth.me': { tags: ['me'], ttl: NORMAL },
-  'branches.list': { tags: ['branches'], ttl: NORMAL },
-  'roles.list': { tags: ['roles'], ttl: NORMAL },
-  'users.list': { tags: ['users'], ttl: NORMAL },
+  'branches.list': { tags: ['branches'], ttl: LONG },
+  'roles.list': { tags: ['roles'], ttl: LONG },
+  'users.list': { tags: ['users'], ttl: LONG },
   'categories.list': { tags: ['catalog'], ttl: LONG },
   'products.list': { tags: ['catalog'], ttl: LONG }, // stock in it is patched after every bill (effects)
-  'specials.list': { tags: ['specials'], ttl: NORMAL },
+  'specials.list': { tags: ['specials'], ttl: LONG },
   'customers.list': { tags: ['customers'], ttl: NORMAL },
   'customers.one': { tags: ['customers'], ttl: NORMAL },
   'customers.history': { tags: ['customers', 'orders'], ttl: SHORT },
@@ -23,7 +25,7 @@ const READS: Record<string, { tags: string[]; ttl: number }> = {
   'orders.board': { tags: ['orders'], ttl: LIVE },
   'payments.list': { tags: ['payments'], ttl: SHORT },
   'kitchen.list': { tags: ['kitchen', 'orders'], ttl: 10 * S },
-  'tables.list': { tags: ['tables'], ttl: SHORT },
+  'tables.list': { tags: ['tables'], ttl: NORMAL },
   'expenses.list': { tags: ['expenses'], ttl: NORMAL },
   'inventory.movements': { tags: ['stock'], ttl: SHORT },
   'inventory.batches': { tags: ['stock'], ttl: SHORT },
@@ -33,7 +35,7 @@ const READS: Record<string, { tags: string[]; ttl: number }> = {
   'reports.receivables': { tags: ['reports', 'customers'], ttl: SHORT },
   'reports.gst': { tags: ['reports', 'purchases'], ttl: SHORT },
   'customers.points': { tags: ['customers', 'points'], ttl: SHORT },
-  'suppliers.list': { tags: ['suppliers', 'purchases'], ttl: NORMAL },
+  'suppliers.list': { tags: ['suppliers', 'purchases'], ttl: LONG },
   'suppliers.ledger': { tags: ['suppliers', 'purchases'], ttl: SHORT },
   'purchases.list': { tags: ['purchases'], ttl: SHORT },
   'purchases.get': { tags: ['purchases'], ttl: SHORT },
@@ -41,7 +43,7 @@ const READS: Record<string, { tags: string[]; ttl: number }> = {
   'returns.forOrder': { tags: ['returns', 'orders'], ttl: SHORT },
   'returns.list': { tags: ['returns'], ttl: SHORT },
   'returns.creditNote': { tags: ['returns'], ttl: 10 * S },
-  'staff.list': { tags: ['staff', 'users'], ttl: NORMAL },
+  'staff.list': { tags: ['staff', 'users'], ttl: LONG },
   'staff.day': { tags: ['staff'], ttl: SHORT },
   'staff.month': { tags: ['staff'], ttl: SHORT },
   'support.mine': { tags: ['support'], ttl: SHORT },

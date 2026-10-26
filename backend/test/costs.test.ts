@@ -49,9 +49,11 @@ test('reports: a finished range comes from the cache until the past changes; tod
     const q = countQueries(s.env as never)
     const yFrom = new Date(Date.now() - 3 * 86_400_000).toISOString(), yTo = new Date(Date.now() - 2 * 86_400_000).toISOString()
     await s.call('reports.summary', yFrom, yTo)
+    // Any signed-in call reads one row in the shop's database first (the sign-in check).
+    const base = 1
     const n0 = q.n
     await s.call('reports.summary', yFrom, yTo)
-    counted(() => assert.equal(q.n, n0, 'finished range: no database read the second time'))
+    counted(() => assert.equal(q.n - n0, base, 'finished range: no report read the second time (only the sign-in check)'))
     // Today's new sale doesn't touch a finished range (still cached) — but it shows in today's report at once.
     const now0 = new Date(); now0.setHours(0, 0, 0, 0)
     const today = () => s.call<{ orderCount?: number; totalSales?: number; sales?: number }>('reports.summary', new Date(Date.now() - 3600_000).toISOString(), new Date(Date.now() + 60_000).toISOString())
@@ -60,18 +62,18 @@ test('reports: a finished range comes from the cache until the past changes; tod
     assert.notEqual(JSON.stringify(await today()), before, 'today is always worked out fresh')
     const n1 = q.n
     await s.call('reports.summary', yFrom, yTo)
-    counted(() => assert.equal(q.n, n1, 'a new sale today keeps the finished range cached'))
+    counted(() => assert.equal(q.n - n1, base, 'a new sale today keeps the finished range cached'))
     // A return rewrites the past: the cached copy is dropped.
     await s.call('returns.create', { orderId: o.id, lines: [{ orderItemId: o.items[0].id, qty: 1, restock: true }], reason: 'other', settle: 'refund', refundMethod: 'cash' })
     const n2 = q.n
     await s.call('reports.summary', yFrom, yTo)
-    counted(() => assert.ok(q.n > n2, 'after a return the finished range is read again'))
+    counted(() => assert.ok(q.n - n2 > base, 'after a return the finished range is read again'))
     // Billing screen quick picks: last 7 finished days, cached.
     const top = await s.call<unknown[]>('reports.topProducts', 7, 10)
     assert.ok(Array.isArray(top))
     const n3 = q.n
     await s.call('reports.topProducts', 7, 10)
-    counted(() => assert.equal(q.n, n3))
+    counted(() => assert.equal(q.n - n3, base))
   } finally { s.close() }
 })
 
@@ -129,5 +131,23 @@ test('QR menu: every table of a branch shares one cached copy; kitchen list has 
     const placed = await s.call<{ orderId: string; number: string }>('public.placeOrder', s.businessId, { type: 'takeaway', tableId: null, items: [{ productId: tea.id, variantId: null, addOnIds: [], qty: 1, notes: '' }], guest: { name: 'Anu', phone: '9811122233', address: '' }, notes: '' })
     assert.equal((await s.call<{ orderId: string }>('public.track', s.businessId, placed.number.replace(/\D/g, ''))).orderId, placed.orderId)
     await assert.rejects(s.call('public.track', '999999', '1'), /Shop not found/)
+  } finally { s.close() }
+})
+
+test('app start-up in one call (auth.boot) returns exactly what the separate reads return', async () => {
+  const s = await withShop()
+  try {
+    await s.call('business.update', { modules: { billing: true, qrOrdering: true, tables: true, products: true }, qr: { orderTypes: ['takeaway'], autoAccept: false, baseUrl: '' } })
+    const boot = await s.call<{ me: unknown; support: unknown; qrPending: unknown; feed: { supported: boolean } }>('auth.boot')
+    assert.deepEqual(boot.me, await s.call('auth.me'))
+    assert.deepEqual(boot.support, await s.call('support.mine'))
+    assert.deepEqual(boot.qrPending, await s.call('qr.pending'))
+    const feed = await s.call<{ supported: boolean; latest?: number }>('sync.changes', null)
+    assert.equal(boot.feed.supported, feed.supported)
+    // A role without QR rights gets no QR list in it.
+    const roles = await s.call<{ id: string; name: string }[]>('roles.list')
+    await s.call('users.save', { name: 'Kumar', phone: '9800000990', roleId: roles.find((r) => r.name === 'Kitchen Staff')!.id, password: 'kumar123' })
+    s.setToken((await s.call<{ token: string }>('auth.login', '9800000990', 'kumar123')).token)
+    assert.equal((await s.call<{ qrPending: unknown }>('auth.boot')).qrPending, null)
   } finally { s.close() }
 })

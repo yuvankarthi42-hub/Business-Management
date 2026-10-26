@@ -37,3 +37,9 @@ test('WhatsApp ticks move on the screen (simulated receipts) without asking the 
   assert.equal(shownStatus({ status: 'sent', createdAt: at(60000) }, t), 'sent')
   assert.equal(shownStatus({ status: 'failed', simulated: true, createdAt: at(60000) }, t), 'failed')
 })
+
+test('change feed timing: urgent screens every 30 s, the rest every 60 s', async () => {
+  const { feedInterval } = await import('../../src/data/remote/feedTiming')
+  for (const p of ['/kitchen', '/qr-orders', '/tables', '/billing', '/billing?cn=CN-1', '/m/order', '/customer-orders']) assert.equal(feedInterval(p), 30_000, p)
+  for (const p of ['/dashboard', '/reports', '/products', '/settings/profile', '/', '/orders', '/kitchenware']) assert.equal(feedInterval(p), 60_000, p)
+})

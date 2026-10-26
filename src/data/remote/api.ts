@@ -6,10 +6,10 @@ import { modulesFor } from '@/core/config'
 import type { ImportItem } from '@/core/productImport'
 import { APP_VERSION, type Api, type ExportBundle } from '../api'
 import { compressImage, ensureStoredImage, LOGO_IMAGE } from '../media'
-import { cachedRead, clearAll, confirmedWrite, invalidate, notify } from './cache'
+import { cachedRead, clearAll, confirmedWrite, invalidate, notify, hasFresh, seed } from './cache'
 import { ApiError, auth, rpc, setSignedOutHandler, type TokenKind } from './http'
 import { isRead } from './policy'
-import { startSync } from './sync'
+import { setFeedStart, startSync } from './sync'
 import { restartLive, stopLive } from './live'
 
 /** Reads that must never be cached (big one-off downloads). */
@@ -77,9 +77,31 @@ export function createRemoteApi(shape: Api): Api {
   a.auth.demoLogin = notAvailable('Demo login') as Api['auth']['demoLogin']
   a.auth.demoUsers = (() => []) as unknown as Api['auth']['demoUsers']
   a.auth.logout = (async () => { stopLive(); auth.user = null; auth.branch = null; clearAll() }) as Api['auth']['logout']
+  // App start-up: one call for the user, support tickets, pending QR orders and the change-feed position (it fills
+  // the same cache entries those reads use). An older server without it: the separate reads, as before.
+  let booting: Promise<void> | null = null
+  const boot = () => (booting ??= (async () => {
+    try {
+      const r = (await rpc<{ me: unknown; support: unknown; qrPending: unknown | null; feed: { supported?: boolean; latest?: number; epoch?: string | null } }>('auth.boot', [], 'user')).data
+      seed('auth.me', [], r.me)
+      seed('support.mine', [], r.support)
+      if (r.qrPending !== null) seed('qr.pending', [], r.qrPending)
+      setFeedStart(r.feed)
+    } catch (e) {
+      if ((e as ApiError).status === 401 || (e as ApiError).code === 'DEACTIVATED') throw e
+      /* older server (no auth.boot) or a hiccup: the reads below fetch on their own */
+    } finally { booting = null }
+  })())
+  // Reads that the start-up call also returns: if it is on its way, wait for it instead of asking separately.
+  for (const [ns, m, name] of [['qr', 'pending', 'qr.pending'], ['support', 'mine', 'support.mine']] as const) {
+    (out[ns] as Record<string, unknown>)[m] = async () => { if (booting) await booting.catch(() => {}); return cachedRead(name, [], 'user') }
+  }
   a.auth.me = (async () => {
     if (!auth.user) return null
-    try { return await cachedRead('auth.me', [], 'user') } catch (e) { if ((e as ApiError).status === 401 || (e as ApiError).code === 'DEACTIVATED') { auth.user = null; return null } throw e }
+    try {
+      if (!hasFresh('auth.me', [])) await boot()
+      return await cachedRead('auth.me', [], 'user')
+    } catch (e) { if ((e as ApiError).status === 401 || (e as ApiError).code === 'DEACTIVATED') { auth.user = null; return null } throw e }
   }) as Api['auth']['me']
   a.auth.switchBranch = (async (branchId: string) => {
     await rpc('auth.switchBranch', [branchId], 'user')
