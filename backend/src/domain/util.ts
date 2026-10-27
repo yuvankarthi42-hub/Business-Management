@@ -1,5 +1,6 @@
 // Small helpers shared by every module: units, enum codes, settings rows, number series, audit log.
 import { r2 } from '@/core/pricing'
+import type { ModuleKey } from '@/core/types'
 import * as E from '../../../server/catalyst/enums'
 import type { Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
@@ -103,6 +104,16 @@ export async function nextNumber(db: Db, businessId: string, branchId: string | 
     if (await db.updateIfVersion('sequences', row.ROWID, Number(row.row_version), { next_value: n + 1 })) return { prefix: str(row.prefix), number: n, text: `${str(row.prefix)}${n}` }
   }
   throw new ApiError('Busy — please try again', 409, 'CONFLICT')
+}
+
+// ---------- modules ----------
+/**
+ * Is this module switched on for the shop of this request? (Settings → Modules.) Used to skip a module's database
+ * work while it is off. No shop known (should not happen) → true, i.e. the work runs as before.
+ */
+export function moduleOn(c: Ctx, key: ModuleKey) {
+  const b = c.session?.business
+  return !b || !!b.modules?.[key]
 }
 
 // ---------- audit ----------

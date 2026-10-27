@@ -17,7 +17,7 @@ import {
 } from '../domain/orders'
 import { movePoints, pointsFrom } from '../domain/points'
 import { moveStock, stockProduct } from '../domain/stock'
-import { audit, bizDay, bizDayStart, code, E, fromMinor, isId, keyPart, own, readSequence, str, toMinor } from '../domain/util'
+import { audit, bizDay, bizDayStart, code, moduleOn, E, fromMinor, isId, keyPart, own, readSequence, str, toMinor } from '../domain/util'
 import { cleanPhone } from './business'
 import { buildView, markPushOn, rateLimit, trackedView } from '../domain/tracking'
 import { cachedPublic, rememberTableBranch, tableBranch } from '../domain/menuCache'
@@ -127,7 +127,7 @@ define('orders', {
   running: userRead(async (c) => loadOrders(c, { ...inScope(c), status: E.OrderStatus.open }, { orderBy: [['CREATEDTIME', 'ASC']] })),
   get: userRead(async (c, id: string) => {
     const { order } = await loadOrder(c, id)
-    const [pays, kots] = await Promise.all([c.db.select('payments', { where: { business_id: c.businessId, order_id: order.id } }), c.db.select('kitchen_tickets', { where: { business_id: c.businessId, order_id: order.id } })])
+    const [pays, kots] = await Promise.all([c.db.select('payments', { where: { business_id: c.businessId, order_id: order.id } }), moduleOn(c, 'kitchen') ? c.db.select('kitchen_tickets', { where: { business_id: c.businessId, order_id: order.id } }) : []])
     return { order, payments: pays.map(paymentFrom), kots: await kotsFrom(c, kots) }
   }),
 
@@ -219,7 +219,7 @@ define('orders', {
     if (pays.length) await c.db.updateMany('payments', pays.map((p) => ({ ROWID: p.ROWID, is_voided: true, voided_at: c.now.toISOString(), void_reason: reason.trim().slice(0, 255) })))
     // Paid with a credit note: the customer gets that credit back (never more than the note was worth).
     for (const p of pays) if (p.return_id) await restoreCreditNote(c, str(p.return_id), fromMinor(p.amount_minor))
-    if (wasBilled) {
+    if (wasBilled && moduleOn(c, 'inventory')) {
       const prows = await selectIn(c, 'products', 'ROWID', order.items.map((i) => i.productId), { business_id: c.businessId })
       for (const i of order.items) { const p = prows.find((x) => x.ROWID === i.productId); if (p) await moveStock(c, stockProduct(p), str(row.branch_id), i.qty, 'return', { note: `Cancelled — ${order.invoiceNumber}`, refType: 'order', refId: row.ROWID }) }
     }
@@ -444,11 +444,13 @@ export interface PublicOrderInput {
 async function buildMenu(c: Ctx, businessId: string, branchId?: string | null, tableId?: string | null) {
   const { branch } = await guestSession(c, businessId, branchId, tableId)
   const b = c.business
-  const [products, cats, tables, specials] = await Promise.all([
-    loadProducts(c, { activeOnly: true, branches: [branch.ROWID], withExpiry: false }), loadCategories(c),
-    c.db.select('dining_tables', { where: { business_id: b.id, branch_id: branch.ROWID, is_active: true } }), specialsFor(c, b.id, bizDay(c)),
+  // QR ordering off: the page only says so (CustomerMenu) — no catalogue, table or specials reads.
+  const on = !!b.modules.qrOrdering
+  const [products, cats, tables, specials] = !on ? [[], [], [], []] as never : await Promise.all([
+    loadProducts(c, { activeOnly: true, branches: [branch.ROWID], withExpiry: false, withStock: !!b.modules.inventory }), loadCategories(c),
+    b.modules.tables ? c.db.select('dining_tables', { where: { business_id: b.id, branch_id: branch.ROWID, is_active: true } }) : [], b.modules.specials ? specialsFor(c, b.id, bizDay(c)) : [],
   ])
-  const sp = applySpecials(products.filter((p) => !(p.trackStock && p.stock <= 0)), specials)
+  const sp = applySpecials(b.modules.inventory ? products.filter((p) => !(p.trackStock && p.stock <= 0)) : products, specials)
   return {
     business: { id: b.id, name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, address: b.address, phone: b.phone, defaultCountry: b.defaultCountry ?? 'IN', currencySymbol: b.currencySymbol, billing: b.billing, modules: b.modules, terminology: b.terminology, qr: qrSettings(b) },
     categories: cats, products: sp.products.map(forCustomers), specials: sp.specials.map(forCustomers),
@@ -463,7 +465,8 @@ async function buildMenu(c: Ctx, businessId: string, branchId?: string | null, t
 async function buildSpecials(c: Ctx, businessId: string) {
   await guestSession(c, businessId)
   const b = c.business
-  const sp = applySpecials(await loadProducts(c, { activeOnly: true, withExpiry: false }), await specialsFor(c, b.id, bizDay(c)))
+  // Specials off: an empty board, without reading the catalogue.
+  const sp = b.modules.specials ? applySpecials(await loadProducts(c, { activeOnly: true, withExpiry: false }), await specialsFor(c, b.id, bizDay(c))) : applySpecials([], [])
   return { business: { name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, currencySymbol: b.currencySymbol, qr: qrSettings(b), qrOn: b.modules.qrOrdering }, items: sp.specials.map((p) => ({ product: forCustomers(p), ...sp.info.get(p.id)! })) }
 }
 
@@ -498,8 +501,10 @@ define('public', {
     const items = input.items.map((i) => ({ id: '', productId: String(i.productId), name: '', variantId: i.variantId ?? null, variantName: null, addOns: (i.addOnIds ?? []).map((id) => ({ id: String(id), name: '', price: 0 })), qty: Math.min(50, Math.max(1, Math.round(Number(i.qty)))), unit: '', unitPrice: 0, taxRate: 0, notes: String(i.notes ?? '').slice(0, 120), kotQty: 0 }))
     // Re-priced from the catalogue; stock checked in this branch.
     const priced = await priceItems(c, items, new Map(), b.id, [branch.ROWID])
-    const stockRows = await selectIn(c, 'branch_stock', 'product_id', priced.map((p) => p.productId), { branch_id: branch.ROWID })
-    const prods = await selectIn(c, 'products', 'ROWID', priced.map((p) => p.productId), { business_id: b.id })
+    // Stock is checked only with Inventory on (otherwise stock isn't kept — no reads).
+    const stocked = !!b.modules.inventory
+    const stockRows = stocked ? await selectIn(c, 'branch_stock', 'product_id', priced.map((p) => p.productId), { branch_id: branch.ROWID }) : []
+    const prods = stocked ? await selectIn(c, 'products', 'ROWID', priced.map((p) => p.productId), { business_id: b.id }) : []
     for (const p of priced) {
       const pr = prods.find((x) => x.ROWID === p.productId)
       const have = Number(stockRows.find((s) => s.product_id === p.productId)?.qty_milli ?? 0) / 1000

@@ -49,8 +49,9 @@ test('reports: a finished range comes from the cache until the past changes; tod
     const q = countQueries(s.env as never)
     const yFrom = new Date(Date.now() - 3 * 86_400_000).toISOString(), yTo = new Date(Date.now() - 2 * 86_400_000).toISOString()
     await s.call('reports.summary', yFrom, yTo)
-    // Any signed-in call reads one row in the shop's database first (the sign-in check).
-    const base = 1
+    // Any signed-in call reads one row in the shop's database first (the sign-in check), and one more after it:
+    // the newest change number that rides on every answer (so screens skip their timed change checks).
+    const base = 2
     const n0 = q.n
     await s.call('reports.summary', yFrom, yTo)
     counted(() => assert.equal(q.n - n0, base, 'finished range: no report read the second time (only the sign-in check)'))
@@ -89,7 +90,7 @@ test('customers: totals from the cache between changes; a bill updates them; one
     const l1 = await s.call<C[]>('customers.list')
     const n0 = q.n
     const l2 = await s.call<C[]>('customers.list')
-    counted(() => assert.ok(q.n - n0 < 4, 'totals not re-added up (only the customer rows are read)'))
+    counted(() => assert.ok(q.n - n0 < 5, 'totals not re-added up (only the customer rows are read)'))
     assert.deepEqual(l2.find((x) => x.id === cu.id)!.stats, l1.find((x) => x.id === cu.id)!.stats)
     await s.call('orders.checkout', draft([line(tea, 2)], { customerId: cu.id }), [{ method: 'cash', amount: 40 }])
     const l3 = await s.call<C[]>('customers.list')

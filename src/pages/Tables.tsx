@@ -34,11 +34,11 @@ const STYLE: Record<TableState, { card: string; icon: string; text: string; labe
 }
 
 export default function Tables() {
-  const { t } = useApp()
+  const { t, mod } = useApp()
   const now = useNow(30000)
   const { data: tables = [] } = useData(() => api.tables.list())
   const { data: running = [] } = useData(() => api.orders.running())
-  const { data: kots = [] } = useData(() => api.kitchen.list())
+  const { data: kots = [] } = useData(() => (mod('kitchen') ? api.kitchen.list() : Promise.resolve([])), [mod('kitchen')])
   const floors = useMemo(() => [...new Set(tables.map((x) => x.floor))], [tables])
   const [floor, setFloor] = useState('all')
   const [filter, setFilter] = useState<'all' | TableState>('all')

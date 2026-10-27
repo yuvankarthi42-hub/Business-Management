@@ -407,12 +407,12 @@ export function useReceiptPrinter() {
 }
 
 export function BillSuccessModal({ orderId, onClose, onNew }: { orderId: string | null; onClose: () => void; onNew: () => void }) {
-  const { me } = useApp()
+  const { me, mod } = useApp()
   const toast = useToast()
   const { data } = useData(() => (orderId ? api.orders.get(orderId) : Promise.resolve(null)), [orderId])
   const { data: customers } = useData(() => api.customers.list())
   const { data: users = [] } = useData(() => api.users.list())
-  const { data: tables = [] } = useData(() => api.tables.list())
+  const { data: tables = [] } = useData(() => (mod('tables') ? api.tables.list() : Promise.resolve([])), [mod('tables')])
   const { print, portal } = usePrint()
   const rp = useReceiptPrinter()
   const autoDone = useRef<string | null>(null)

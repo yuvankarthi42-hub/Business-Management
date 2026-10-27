@@ -5,7 +5,7 @@ import type { Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
 import type { Row } from '../db/types'
 import { DuplicateError } from '../db/types'
-import { code, E, fromMilli, str, toMilli } from './util'
+import { code, E, fromMilli, moduleOn, str, toMilli } from './util'
 
 export interface BatchInput { batchNo?: string; expiry?: string }
 export interface StockProduct { id: string; trackStock: boolean; trackBatches: boolean }
@@ -70,10 +70,11 @@ async function moveBatches(c: Ctx, p: StockProduct, branchId: string, qtyMilli: 
 
 /**
  * One stock change: batches → branch stock → movement row. `qty` is signed (+ in, − out), in the
- * product's unit. Products that don't track stock are ignored (like the app).
+ * product's unit. Products that don't track stock are ignored (like the app), and so is everything while the
+ * Inventory module is off (stock isn't shown or used then — no stock rows are written).
  */
 export async function moveStock(c: Ctx, p: StockProduct, branchId: string, qty: number, reason: Reason, opts: { note?: string; refType?: keyof typeof refTypes; refId?: string | null; batch?: BatchInput } = {}) {
-  if (!p.trackStock || qty === 0) return { balance: null as number | null, batches: [] as { batchId: string; qtyMilli: number }[] }
+  if (!p.trackStock || qty === 0 || !moduleOn(c, 'inventory')) return { balance: null as number | null, batches: [] as { batchId: string; qtyMilli: number }[] }
   const milli = toMilli(qty)
   const batches = await moveBatches(c, p, branchId, milli, opts.batch)
   const balanceMilli = await bumpBranchStock(c, p.id, branchId, milli)
@@ -115,6 +116,7 @@ RETURNING "qty_milli"`
  */
 export async function moveStockMany(c: Ctx, moves: StockMove[]) {
   const out: { balance: number | null; batches: { batchId: string; qtyMilli: number }[] }[] = moves.map(() => ({ balance: null, batches: [] }))
+  if (!moduleOn(c, 'inventory')) return out
   const fast = c.db.sqlMany ? moves.map((m, i) => ({ m, i })).filter(({ m }) => m.p.trackStock && !m.p.trackBatches && m.qty !== 0) : []
   const fastIdx = new Set(fast.map((x) => x.i))
   for (const [i, m] of moves.entries()) if (!fastIdx.has(i)) out[i] = await moveStock(c, m.p, m.branchId, m.qty, m.reason, m.opts)

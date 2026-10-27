@@ -64,6 +64,10 @@ export const deviceId = (() => {
 })()
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+/** The change-feed note on signed-in answers (sync.ts listens). */
+let onFeed: (note: { latest: number; epoch?: string | null; own?: number | null }) => void = () => {}
+export const setFeedListener = (fn: typeof onFeed) => { onFeed = fn }
+
 /** Called after the server says the token is no longer valid (password changed, login turned off…). */
 let onSignedOut: (kind: 'user' | 'admin') => void = () => {}
 export const setSignedOutHandler = (fn: typeof onSignedOut) => { onSignedOut = fn }
@@ -116,12 +120,13 @@ async function rpcOnce<T>(name: string, args: unknown[], token: TokenKind, id: s
     // The request may or may not have reached the server, so never claim either way.
     throw new ApiError('Connection problem — this may not have been saved. Please check and try again.', 'OFFLINE')
   }
-  let body: { data?: T; effects?: Effects; error?: { message: string; code: string } }
+  let body: { data?: T; effects?: Effects; error?: { message: string; code: string }; feed?: { latest: number; epoch?: string | null; own?: number | null } }
   try { body = await res.json() } catch { throw new ApiError('The server did not answer properly. Please try again.', 'BAD_RESPONSE', res.status) }
   if (body.error || !res.ok) {
     const e = new ApiError(body.error?.message ?? 'Something went wrong', body.error?.code, res.status)
     if (res.status === 401 && t) { if (token === 'user') auth.user = null; else auth.admin = null; onSignedOut(token as 'user' | 'admin') }
     throw e
   }
+  if (token === 'user' && body.feed && typeof body.feed === 'object') { try { onFeed(body.feed) } catch { /* never breaks the call */ } }
   return { data: body.data as T, effects: body.effects }
 }

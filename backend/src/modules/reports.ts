@@ -12,7 +12,7 @@ import { define, userRead } from '../core/registry'
 import type { Row, Where } from '../db/types'
 import { loadProducts, wholesaleList } from '../domain/catalog'
 import { customerFrom, loadOrders, paymentFrom, selectIn } from '../domain/orders'
-import { bizDay, bizDayStart, E, fromMilli, fromMinor, nameOf, str, strOrNull } from '../domain/util'
+import { bizDay, bizDayStart, E, moduleOn, fromMilli, fromMinor, nameOf, str, strOrNull } from '../domain/util'
 import { categoryNames, expenseFrom } from './ops'
 
 /** The app's `Summary` (src/data/api.ts). */
@@ -244,9 +244,10 @@ define('reports', {
     const [data, open, kots, products, stock] = await Promise.all([
       loadRange(c, f, t, scope),
       c.db.aggregate('orders', { where: { ...where, status: E.OrderStatus.open }, groupBy: ['branch_id', 'qr_status'], fns: { n: ['COUNT', 'ROWID'] } }),
-      c.db.select('kitchen_tickets', { where: { ...where, status: { in: [E.KotStatus.new, E.KotStatus.preparing] }, CREATEDTIME: { lt: late } }, orderBy: [['CREATEDTIME', 'ASC']], limit: 500 }),
-      c.db.select('products', { where: { business_id: c.businessId, is_active: true, track_stock: true } }),
-      c.db.select('branch_stock', { where }),
+      // Late KOTs only with the kitchen on; low stock only with inventory on (no reads otherwise).
+      moduleOn(c, 'kitchen') ? c.db.select('kitchen_tickets', { where: { ...where, status: { in: [E.KotStatus.new, E.KotStatus.preparing] }, CREATEDTIME: { lt: late } }, orderBy: [['CREATEDTIME', 'ASC']], limit: 500 }) : [],
+      moduleOn(c, 'inventory') ? c.db.select('products', { where: { business_id: c.businessId, is_active: true, track_stock: true } }) : [],
+      moduleOn(c, 'inventory') ? c.db.select('branch_stock', { where }) : [],
     ])
     const qty = new Map(stock.map((s) => [`${str(s.branch_id)}:${str(s.product_id)}`, fromMilli(s.qty_milli)]))
     return branches.map((b) => ({

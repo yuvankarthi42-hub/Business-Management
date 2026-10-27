@@ -24,6 +24,7 @@ import { addMonths, branchLimitMessage, dateInputToEnd, DEACTIVATED_MESSAGE, end
 import { ownerOf } from './seedPlatform'
 import { compressImage, ensureStoredImage, LOGO_IMAGE } from './media'
 import { orderNumberCandidates, TRACK_WINDOW_MS, type TrackStage, type TrackView } from '@/core/tracking'
+import { moduleOffError, moduleOffRead, READ_MODULE, WRITE_MODULE } from '@/core/moduleGuards'
 import type { WaMessageQuery } from '@/core/waReceipts'
 
 /** What a customer's phone may see of a product: no cost or wholesale prices. */
@@ -305,6 +306,8 @@ function moveStock(d: DB, productId: string, type: StockMovementType, qty: numbe
   const s = ctx()
   const p = d.products.find((x) => x.id === productId)
   if (!p || !p.trackStock || qty === 0) return
+  // Inventory off: stock isn't kept (same as the server).
+  if (!d.businesses.find((x) => x.id === p.businessId)?.modules.inventory) return
   const b = branchId ?? writeBranch(d)
   moveBatches(d, p, b, qty, batch, s.userId)
   p.stockByBranch ??= {}
@@ -563,6 +566,8 @@ function branchAccess(d: DB, businessId: string, ids: string[]) {
 // ---------- Specials & QR helpers ----------
 
 function specialsFor(d: DB, businessId: string, date = dateKey()) {
+  // Daily specials off: none apply anywhere (billing, QR menu, TV board) — same as the server.
+  if (!d.businesses.find((x) => x.id === businessId)?.modules.specials) return []
   return d.specials.filter((x) => x.businessId === businessId && x.date === date)
 }
 
@@ -2246,15 +2251,17 @@ export const api = {
       // A table QR identifies its branch through the table.
       const tableBranchId = tableId ? d.tables.find((t) => t.id === tableId && t.businessId === businessId)?.branchId : null
       const br = publicBranch(d, businessId, tableBranchId ?? branchId)
-      const products = d.products.filter((p) => p.businessId === businessId && p.active && !(p.trackStock && stockIn(p, [br.id]) <= 0))
-      const sp = applySpecials(products, specialsFor(d, businessId))
+      // QR ordering off: the page only says so — no catalogue or tables (same as the server).
+      const on = !!b.modules.qrOrdering
+      const products = !on ? [] : d.products.filter((p) => p.businessId === businessId && p.active && !(b.modules.inventory && p.trackStock && stockIn(p, [br.id]) <= 0))
+      const sp = applySpecials(products, on ? specialsFor(d, businessId) : [])
       return clone({
         business: { id: b.id, name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, address: b.address, phone: b.phone, defaultCountry: b.defaultCountry ?? 'IN', currencySymbol: b.currencySymbol, billing: b.billing, modules: b.modules, terminology: b.terminology, qr: qrSettings(b) },
-        categories: d.categories.filter((c) => c.businessId === businessId).sort((a, x) => a.sort - x.sort),
+        categories: !on ? [] : d.categories.filter((c) => c.businessId === businessId).sort((a, x) => a.sort - x.sort),
         products: sp.products.map(forCustomers),
         specials: sp.specials.map(forCustomers),
         specialInfo: [...sp.info.entries()].map(([productId, v]) => ({ productId, tag: v.special.tag, originalPrice: v.originalPrice, specialPrice: v.special.specialPrice })),
-        tables: d.tables.filter((t) => t.businessId === businessId && t.branchId === br.id).map((t) => ({ id: t.id, label: t.label })),
+        tables: !on || !b.modules.tables ? [] : d.tables.filter((t) => t.businessId === businessId && t.branchId === br.id).map((t) => ({ id: t.id, label: t.label })),
         branch: { id: br.id, name: br.name, address: br.address, phone: br.phone ?? '' },
         branchCount: d.branches.filter((x) => x.businessId === businessId).length,
       })
@@ -2281,7 +2288,7 @@ export const api = {
         const items = input.items.map((i) => {
           const p = catalogue.find((x) => x.id === i.productId)
           if (!p) throw new ApiError('An item in your cart is no longer available')
-          if (p.trackStock && stockIn(p, [br.id]) < i.qty) throw new ApiError(`${p.name} is out of stock`)
+          if (b.modules.inventory && p.trackStock && stockIn(p, [br.id]) < i.qty) throw new ApiError(`${p.name} is out of stock`)
           const qty = Math.min(50, Math.max(1, Math.round(i.qty)))
           const variant = p.variants.find((v) => v.id === i.variantId) ?? (p.variants[0] ?? null)
           return makeItem(p, b.billing, { variant, addOns: p.addOns.filter((a) => i.addOnIds.includes(a.id)), qty, notes: i.notes.slice(0, 120) })
@@ -2403,13 +2410,14 @@ export const api = {
       const d = getDB()
       const sc = scope(d)
       const late = Date.now() - 20 * 60000
+      const b0 = biz(d)
       return clone(mine(d.branches).filter((b) => sc.has(b.id)).map((b) => ({
         branch: b,
         summary: summarize(d, from, to, new Set([b.id])),
         running: mine(d.orders).filter((o) => o.branchId === b.id && o.status === 'open').length,
         pendingQr: mine(d.orders).filter((o) => o.branchId === b.id && o.status === 'open' && o.qrStatus === 'pending').length,
-        lateKots: mine(d.kots).filter((k) => k.branchId === b.id && (k.status === 'new' || k.status === 'preparing') && new Date(k.createdAt).getTime() < late).map((k) => ({ number: k.number, minutes: Math.floor((Date.now() - new Date(k.createdAt).getTime()) / 60000) })),
-        lowStock: mine(d.products).filter((p) => p.active && p.trackStock && stockIn(p, [b.id]) <= p.lowStockAt).map((p) => ({ name: p.name, stock: stockIn(p, [b.id]), unit: p.unit })),
+        lateKots: !b0.modules.kitchen ? [] : mine(d.kots).filter((k) => k.branchId === b.id && (k.status === 'new' || k.status === 'preparing') && new Date(k.createdAt).getTime() < late).map((k) => ({ number: k.number, minutes: Math.floor((Date.now() - new Date(k.createdAt).getTime()) / 60000) })),
+        lowStock: !b0.modules.inventory ? [] : mine(d.products).filter((p) => p.active && p.trackStock && stockIn(p, [b.id]) <= p.lowStockAt).map((p) => ({ name: p.name, stock: stockIn(p, [b.id]), unit: p.unit })),
       })))
     },
     async receivables() {
@@ -3117,6 +3125,38 @@ export const api = {
       })
     },
   },
+}
+
+// A module switched off in Settings → Modules: its actions make no new entries — the same rules as the server
+// (core/moduleGuards.ts). Screens hide these actions already; this stops a direct call too.
+for (const action of Object.keys(WRITE_MODULE)) {
+  const [ns, m] = action.split('.')
+  const group = (api as unknown as Record<string, Record<string, unknown>>)[ns]
+  const fn = group?.[m]
+  if (typeof fn !== 'function') continue
+  group[m] = async (...args: unknown[]) => {
+    let modules: Business['modules'] | undefined
+    try { modules = biz(getDB())?.modules } catch { /* not signed in: the action itself says so */ }
+    const off = modules ? moduleOffError(action, modules) : null
+    if (off) throw new ApiError(off)
+    return (fn as (...a: unknown[]) => unknown).apply(group, args)
+  }
+}
+
+// …and its reads return nothing (lists empty, the rest refused) — the same as the server.
+for (const action of Object.keys(READ_MODULE)) {
+  const [ns, m] = action.split('.')
+  const group = (api as unknown as Record<string, Record<string, unknown>>)[ns]
+  const fn = group?.[m]
+  if (typeof fn !== 'function') continue
+  group[m] = async (...args: unknown[]) => {
+    let modules: Business['modules'] | undefined
+    try { modules = biz(getDB())?.modules } catch { /* not signed in: the action itself says so */ }
+    const off = modules ? moduleOffRead(action, modules) : null
+    if (off && 'error' in off) throw new ApiError(off.error)
+    if (off) return []
+    return (fn as (...a: unknown[]) => unknown).apply(group, args)
+  }
 }
 
 export type Api = typeof api

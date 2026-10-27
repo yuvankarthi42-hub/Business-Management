@@ -10,7 +10,7 @@ import { DuplicateError, type Row } from '../db/types'
 import { clientUuid, loadOrder, selectIn } from '../domain/orders'
 import { movePoints } from '../domain/points'
 import { moveStock, stockProduct } from '../domain/stock'
-import { audit, code, E, fromMilli, fromMinor, nameOf, nameOrNull, nextNumber, str, strOrNull, toMilli, toMinor } from '../domain/util'
+import { audit, code, E, moduleOn, fromMilli, fromMinor, nameOf, nameOrNull, nextNumber, str, strOrNull, toMilli, toMinor } from '../domain/util'
 
 export interface ReturnInput {
   orderId: string
@@ -159,7 +159,7 @@ define('returns', {
     }
 
     const restock = lines.filter((l) => l.restock)
-    if (restock.length) {
+    if (restock.length && moduleOn(c, 'inventory')) {
       const prows = await selectIn(c, 'products', 'ROWID', restock.map((l) => l.it.productId), { business_id: c.businessId })
       for (const l of restock) {
         const p = prows.find((x) => x.ROWID === l.it.productId)

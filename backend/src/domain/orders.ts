@@ -16,7 +16,7 @@ import { DEFAULT_SEQ } from './business'
 import { loadProducts, wholesaleList } from './catalog'
 import { movePoints } from './points'
 import { moveStockMany, stockProduct } from './stock'
-import { audit, bizDay, code, codeOrNull, E, fromMilli, fromMinor, isId, nameOf, nameOrNull, nextNumber, str, strOrNull, toBp, toMilli, toMinor } from './util'
+import { audit, bizDay, code, moduleOn, codeOrNull, E, fromMilli, fromMinor, isId, nameOf, nameOrNull, nextNumber, str, strOrNull, toBp, toMilli, toMinor } from './util'
 
 export interface OrderDraft {
   id?: string
@@ -145,7 +145,8 @@ export async function priceItems(c: Ctx, items: OrderItem[], previous: Map<strin
   const ids = [...new Set(items.map((i) => i.productId))]
   if (ids.some((id) => !isId(id))) throw new ApiError('An item on this bill was not found')
   const products = await loadProducts(c, { ids, withExpiry: false, withStock: false, branches: branchIds })
-  const specials = (await c.db.select('daily_specials', { where: { business_id: businessId, special_date: bizDay(c) } })).map((r) => ({ id: r.ROWID, businessId, date: str(r.special_date), productId: str(r.product_id), specialPrice: r.offer_price_minor == null ? null : fromMinor(r.offer_price_minor), tag: str(r.tag), sort: Number(r.sort_order ?? 0) }))
+  // Specials off: no special prices on bills (and no read of today's specials).
+  const specials = !moduleOn(c, 'specials') ? [] : (await c.db.select('daily_specials', { where: { business_id: businessId, special_date: bizDay(c) } })).map((r) => ({ id: r.ROWID, businessId, date: str(r.special_date), productId: str(r.product_id), specialPrice: r.offer_price_minor == null ? null : fromMinor(r.offer_price_minor), tag: str(r.tag), sort: Number(r.sort_order ?? 0) }))
   const priced = applySpecials(products, specials).products
   const billing = c.business.billing
   // HSN: the item's own code, else its category's (snapshot on the bill line).
@@ -382,8 +383,8 @@ export async function settle(c: Ctx, orderId: string, pays: PaymentInput[]) {
     await c.db.update('orders', row.ROWID, { status: E.OrderStatus.open, invoice_number: null, invoice_key: null, billed_at: null, paid_minor: toMinor(order.paid), balance_minor: toMinor(order.total - order.paid) })
     throw e
   }
-  // Stock out, first-expiry-first-out for batch items.
-  const prows = await selectIn(c, 'products', 'ROWID', order.items.map((i) => i.productId), { business_id: c.businessId })
+  // Stock out, first-expiry-first-out for batch items (Inventory on only).
+  const prows = !moduleOn(c, 'inventory') ? [] : await selectIn(c, 'products', 'ROWID', order.items.map((i) => i.productId), { business_id: c.businessId })
   const sold = order.items.map((i) => ({ i, p: prows.find((x) => x.ROWID === i.productId) })).filter((x): x is { i: OrderItem; p: Row } => !!x.p)
   const moved = await moveStockMany(c, sold.map(({ i, p }) => ({ p: stockProduct(p), branchId: str(row.branch_id), qty: -i.qty, reason: 'sale' as const, opts: { note: `Sold — ${num.text}`, refType: 'order' as const, refId: row.ROWID } })))
   const used = sold.flatMap(({ i }, k) => moved[k].batches.map((b) => ({ business_id: c.businessId, order_item_id: i.id, batch_id: b.batchId, qty_milli: b.qtyMilli })))

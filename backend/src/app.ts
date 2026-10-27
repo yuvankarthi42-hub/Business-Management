@@ -12,10 +12,12 @@ import { loadAdmin } from './modules/admin/auth'
 import './modules'
 import { checkSchema } from './modules/admin/schema'
 import { touchActivity } from './domain/directory'
+import { moduleOffError, moduleOffRead } from '@/core/moduleGuards'
 import { afterOrderWrite } from './domain/tracking'
 import { bumpMenu } from './domain/menuCache'
 import { bumpReports } from './domain/reportCache'
 import { bumpCustomerStats } from './domain/statsCache'
+import { moduleOn } from './domain/util'
 import { flushEvents, orderIdsFor, recordsFor } from './events/publish'
 import type { HubEvent } from './events/hub'
 import { ALL_BRANCHES } from './core/context'
@@ -28,7 +30,13 @@ const TODAY_ONLY = /^(orders\.(save|checkout|sendToKitchen|setFulfilment|transfe
 
 /** Actions that change what a QR menu / TV board shows (its cached copy is refreshed). */
 const MENU_WRITES = /^(products|categories|specials|tables|branches|business|stock|purchases|returns)\./
-const menuChanged = (name: string, c: Ctx) => MENU_WRITES.test(name) || !!c.effects.stock?.length
+/** Settings writes (they may switch QR ordering or specials on) always refresh the public copies. */
+const SETTINGS_WRITES = /^(business|branches)\./
+/** Something public to refresh: the QR menu (QR ordering) or the TV board (specials). Neither on → no cache work. */
+const publicCopies = (name: string, c: Ctx) => SETTINGS_WRITES.test(name) || moduleOn(c, 'qrOrdering') || moduleOn(c, 'specials')
+const menuChanged = (name: string, c: Ctx) => (MENU_WRITES.test(name) || !!c.effects.stock?.length) && publicCopies(name, c)
+/** Order tracking (QR customers' tracking screen, "Notify me") exists only with QR ordering on. */
+const tracks = (name: string, c: Ctx) => TRACKING_WRITES.test(name) && moduleOn(c, 'qrOrdering')
 
 /** After a saved write: tell open screens (event hub). Only when the hub is set up; never fails the request. */
 async function sendEvents(c: Ctx, h: Handler, name: string, args: unknown[], data: unknown) {
@@ -41,7 +49,7 @@ async function sendEvents(c: Ctx, h: Handler, name: string, args: unknown[], dat
     const records = screens ? await recordsFor(c, name, args, data).catch((e) => { console.error(`[${name}] event records`, e); return undefined }) : undefined
     list.push({ kind: 'change', shop, branch: records?.orders[0]?.branchId ?? branch, name, origin: c.origin, cid: c.changeId, ...(records ? { records } : {}) })
     // Customers following these orders (tracking page): "your order changed" (no data — they ask the cache).
-    if (TRACKING_WRITES.test(name)) {
+    if (tracks(name, c)) {
       if (records) for (const o of records.orders) list.push({ kind: 'order', shop, branch: o.branchId, orderId: o.id })
       else if (await c.shared.get(`trk:open:${shop}`)) {
         for (const id of await orderIdsFor(c, name, args, data).catch(() => [] as string[])) list.push({ kind: 'order', shop, branch: null, orderId: id })
@@ -50,6 +58,20 @@ async function sendEvents(c: Ctx, h: Handler, name: string, args: unknown[], dat
     if (menuChanged(name, c)) list.push({ kind: 'menu', shop, branch: null })
   }
   await flushEvents(c, list)
+}
+
+/**
+ * The shop's newest change-feed number (one row read), sent with every signed-in answer. A busy counter then knows
+ * nothing changed on other devices without asking the change feed on its timer (src/data/remote/sync.ts).
+ * `own` = the change this request made, so the counter doesn't mistake its own bill for another device's.
+ * One database per shop only (the Catalyst Data Store has no change feed).
+ */
+async function feedNote(c: Ctx, h: Handler, name: string) {
+  if (h.access !== 'user' || !c.hasShop || !c.dbs.perShop || name === 'sync.changes' || !c.session) return null
+  try {
+    const [r] = await c.db.sql!('SELECT "id" FROM "change_log" ORDER BY "id" DESC LIMIT 1')
+    return { latest: Number(r?.id ?? 0), epoch: c.epoch, own: c.changeId }
+  } catch { return null }
 }
 
 /** Actions that can change what a customer's tracking screen shows. */
@@ -129,6 +151,14 @@ export function createApp(envFor: (req: Request) => Env) {
         if (h.write) c.assertWritable({ readOnlyOk: h.readOnlyOk })
         else if (c.session.business.status === 'deactivated' && !c.session.support) throw new ApiError('This account has been deactivated. Please contact the product admin.', 403, 'DEACTIVATED')
         if (h.perm) c.requirePerm(h.perm)
+        // A module switched off in Settings → Modules: its actions make no new entries (core/moduleGuards.ts).
+        if (h.write) { const off = moduleOffError(name, c.session.business.modules); if (off) throw new ApiError(off, 403, 'MODULE_OFF') }
+        // …and its reads touch no database: lists answer empty, the rest are refused.
+        else {
+          const off = moduleOffRead(name, c.session.business.modules)
+          if (off && 'error' in off) throw new ApiError(off.error, 403, 'MODULE_OFF')
+          if (off) { await c.finish(true); res.json({ data: off.empty }); return }
+        }
       } else if (h.access === 'admin') {
         if (!claims || claims.t !== 'a') throw new ApiError('Product admin sign-in required', 401, 'UNAUTHORIZED')
         c.admin = await loadAdmin(c, claims as unknown as AdminClaims)
@@ -150,7 +180,7 @@ export function createApp(envFor: (req: Request) => Env) {
         // Writes without a transaction still tell the other devices (one extra small write).
         await c.logChange().catch((e) => console.error(`[${name}] change feed`, e))
         // Customers' tracking screens: their cached status is stale now; send "Notify me" pushes.
-        if (TRACKING_WRITES.test(name)) await afterOrderWrite(c).catch((e) => console.error(`[${name}] tracking`, e))
+        if (tracks(name, c)) await afterOrderWrite(c).catch((e) => console.error(`[${name}] tracking`, e))
         // Customers' cached totals: bills, payments, returns, points and customer edits change them.
         if (CUSTOMER_WRITES.test(name) && c.shopId) await bumpCustomerStats(c, c.shopId).catch((e) => console.error(`[${name}] stats cache`, e))
         // Cached reports of finished days: anything but today's new sales may change them.
@@ -160,7 +190,8 @@ export function createApp(envFor: (req: Request) => Env) {
         if (c.session) await touchActivity(c)
       }
       if (c.events) await sendEvents(c, h, name, args, data)
-      res.json({ data: data === undefined ? null : data, ...(Object.keys(c.effects).length ? { effects: c.effects } : {}) })
+      const feed = await feedNote(c, h, name)
+      res.json({ data: data === undefined ? null : data, ...(Object.keys(c.effects).length ? { effects: c.effects } : {}), ...(feed ? { feed } : {}) })
     } catch (e) {
       if (e instanceof ApiError) { res.status(e.status).json({ error: { message: e.message, code: e.code } }); return }
       if (e instanceof DuplicateError) { res.status(409).json({ error: { message: 'This already exists — it may have been saved on another device. Refresh and check.', code: 'DUPLICATE' } }); return }

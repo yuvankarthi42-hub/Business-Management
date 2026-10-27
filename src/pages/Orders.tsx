@@ -27,7 +27,7 @@ export default function Orders() {
 }
 
 function OrdersList({ toggle }: { toggle?: React.ReactNode }) {
-  const { t, me } = useApp()
+  const { t, me, mod } = useApp()
   const showBranch = !!me?.isAll
   const branchName = (id: string) => me?.branches.find((b) => b.id === id)?.name ?? '—'
   const [range, setRange] = useState<RangeKey>('today')
@@ -38,7 +38,7 @@ function OrdersList({ toggle }: { toggle?: React.ReactNode }) {
   const r = rangeFor(range)
   const { data: orders } = useData(() => api.orders.list({ from: r.from, to: r.to, status }), [range, status])
   const { data: customers = [] } = useData(() => api.customers.list())
-  const { data: tables = [] } = useData(() => api.tables.list())
+  const { data: tables = [] } = useData(() => (mod('tables') ? api.tables.list() : Promise.resolve([])), [mod('tables')])
   const cname = (id: string | null) => customers.find((c) => c.id === id)?.name
   const list = useMemo(() => (orders ?? []).filter((o) => {
     if (type !== 'all' && o.type !== type) return false
@@ -91,7 +91,7 @@ function OrdersList({ toggle }: { toggle?: React.ReactNode }) {
 }
 
 export function OrderDetail({ id, onClose }: { id: string; onClose: () => void }) {
-  const { me, t, can } = useApp()
+  const { me, t, can, mod } = useApp()
   const run = useAction()
   const { data } = useData(() => api.orders.get(id), [id])
   const { once } = useSaveOnce() // collect once, even after a dropped connection
@@ -99,7 +99,7 @@ export function OrderDetail({ id, onClose }: { id: string; onClose: () => void }
   const billCustomerId = data?.order.customerId ?? null
   const { data: oneCustomer = null } = useData(() => (billCustomerId ? api.customers.one(billCustomerId) : Promise.resolve(null)), [billCustomerId])
   const { data: users = [] } = useData(() => api.users.list().catch(() => []))
-  const { data: tables = [] } = useData(() => api.tables.list())
+  const { data: tables = [] } = useData(() => (mod('tables') ? api.tables.list() : Promise.resolve([])), [mod('tables')])
   const [cancel, setCancel] = useState(false)
   const [pay, setPay] = useState(false)
   const [returning, setReturning] = useState(false)

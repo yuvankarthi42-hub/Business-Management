@@ -4,7 +4,7 @@
 import type { Ctx } from '../core/context'
 import type { KitchenTicket, Order } from '@/core/types'
 import { kotsFrom, loadOrder } from '../domain/orders'
-import { str } from '../domain/util'
+import { moduleOn, str } from '../domain/util'
 import type { Hub, HubEvent } from './hub'
 
 export interface EventSink { publish(events: HubEvent[]): Promise<void> }
@@ -53,7 +53,7 @@ export async function recordsFor(c: Ctx, name: string, args: unknown[], data: un
     orders = [(await loadOrder(c, str(k.order_id), { inScope: false })).order]
   } else return undefined
   if (!orders.length) return undefined
-  const rows = await c.db.select('kitchen_tickets', { where: { business_id: c.businessId, order_id: { in: orders.map((o) => o.id) } } })
+  const rows = !moduleOn(c, 'kitchen') ? [] : await c.db.select('kitchen_tickets', { where: { business_id: c.businessId, order_id: { in: orders.map((o) => o.id) } } })
   const out = { orders, kots: await kotsFrom(c, rows) }
   return JSON.stringify(out).length <= MAX_RECORDS_BYTES ? out : undefined
 }

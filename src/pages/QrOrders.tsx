@@ -34,8 +34,9 @@ export default function QrOrders() {
 }
 
 function InboxView({ pending }: { pending: Order[] }) {
+  const { mod } = useApp()
   const { data: recent = [] } = useData(() => api.qr.recent())
-  const { data: tables = [] } = useData(() => api.tables.list())
+  const { data: tables = [] } = useData(() => (mod('tables') ? api.tables.list() : Promise.resolve([])), [mod('tables')])
   const done = recent.filter((o) => o.qrStatus !== 'pending')
   const label = (o: Order) => (o.tableId ? `Table ${tables.find((t) => t.id === o.tableId)?.label ?? ''}` : ORDER_TYPE_LABEL[o.type])
   return (
@@ -120,8 +121,8 @@ function PendingCard({ o, label }: { o: Order; label: string }) {
 }
 
 function CodesView() {
-  const { me, t } = useApp()
-  const { data: tables = [] } = useData(() => api.tables.list())
+  const { me, t, mod } = useApp()
+  const { data: tables = [] } = useData(() => (mod('tables') ? api.tables.list() : Promise.resolve([])), [mod('tables')])
   const qr = qrSettings(me!.business)
   const multi = me!.branches.length > 1
   const base = `${qr.baseUrl.replace(/\/$/, '')}/q/${me!.business.id}`
