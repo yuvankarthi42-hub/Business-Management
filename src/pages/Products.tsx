@@ -12,10 +12,13 @@ import { HsnInput } from '@/features/gst/GstFields'
 import { ProductImportModal } from '@/features/ProductImport'
 import type { AddOn, Product, Variant } from '@/core/types'
 import { api } from '@/data'
-import { CategoryLabel, ImagePicker, PhotoDrop, Thumb } from '@/components/Thumb'
+import { CategoryLabel, PhotoDrop, Thumb } from '@/components/Thumb'
 import { money, uid } from '@/lib/format'
 import { priceLabel, tintFor } from '@/features/Catalog'
 import { wholesaleLabel, wholesaleOn } from '@/core/orderItem'
+import { Pager, usePage } from '@/components/Pager'
+import { CategoryPicturePicker } from '@/components/EmojiPicker'
+import { categoryEmojisFor } from '@/core/categoryEmojis'
 
 export default function Products() {
   const { t, mod, me } = useApp()
@@ -45,6 +48,7 @@ export default function Products() {
   const printable = list.filter((p) => p.active)
   const catName = (id: string | null) => categories.find((c) => c.id === id)?.name ?? '—'
 
+  const pg = usePage(list, [cat, q])
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader title={t('product', true)} subtitle={`${products?.filter((p) => p.active).length ?? 0} active ${t('product', true).toLowerCase()}`}
@@ -69,10 +73,10 @@ export default function Products() {
         {products && !list.length ? <EmptyState icon={PackageSearch} title={`No ${t('product', true).toLowerCase()}`}
           description={textile && !products.length ? 'Add a design once with all its colours and sizes — each piece gets a QR price sticker.' : undefined}
           action={textile ? <Button icon={Layers} onClick={() => setDesigning(true)}>Add design</Button> : <Button icon={Plus} onClick={() => setEditing({})}>Add {t('product')}</Button>} /> : (
-          <Table>
+          <Table footer={<Pager p={pg} />}>
             <thead><tr><Th>{t('product')}</Th><Th>{t('category')}</Th><Th className="text-right">Price</Th>{mod('inventory') && <Th className="text-right">Stock</Th>}<Th>Status</Th><Th /></tr></thead>
             <tbody>
-              {list.map((p) => (
+              {pg.rows.map((p) => (
                 <tr key={p.id} className="hover:bg-slate-50">
                   <Td>
                     <div className="flex items-center gap-3">
@@ -362,7 +366,10 @@ function CategoryModal({ onClose }: { onClose: () => void }) {
   const { data: categories = [] } = useData(() => api.categories.list())
   const { data: products = [] } = useData(() => api.products.list())
   const { me } = useApp()
-  const blank = { id: undefined as string | undefined, name: '', emoji: '🍽️', imageUrl: null as string | null | undefined, hsn: '' as string | null | undefined }
+  // Emoji choices for this business type; the first is the default for a new category.
+  const emojis = useMemo(() => categoryEmojisFor(me?.business), [me?.business])
+  const [hint, setHint] = useState(emojis[0]?.label ?? '')
+  const blank = { id: undefined as string | undefined, name: '', emoji: emojis[0]?.emoji ?? '🍽️', imageUrl: null as string | null | undefined, hsn: '' as string | null | undefined }
   const [form, setForm] = useState(blank)
   const editing = !!form.id
   return (
@@ -373,21 +380,20 @@ function CategoryModal({ onClose }: { onClose: () => void }) {
       >
         <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{editing ? `Edit ${t('category').toLowerCase()}` : `New ${t('category').toLowerCase()}`}</p>
         <div className="flex items-start gap-3">
-          <ImagePicker compact imageUrl={form.imageUrl} emoji={form.emoji} onChange={(v) => setForm((x) => ({ ...x, ...v }))} />
+          <CategoryPicturePicker emoji={form.emoji} imageUrl={form.imageUrl} options={emojis} typeLabel={me?.business.subType}
+            onChange={(v, label) => { setForm((x) => ({ ...x, ...v })); if (label) setHint(label) }} />
           <div className="min-w-0 flex-1 space-y-2">
             <div className="flex gap-2">
-              <Input value={form.emoji} onChange={(e) => setForm({ ...form, emoji: e.target.value })} className="w-14 text-center" maxLength={4} aria-label="Emoji" />
-              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Biryani & Rice" required />
+              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={hint || 'Category name'} required />
               {me?.business.billing.taxEnabled && <Input value={form.hsn ?? ''} onChange={(e) => setForm({ ...form, hsn: e.target.value.replace(/\D/g, '').slice(0, 8) })} className="w-28 font-mono" placeholder="HSN" aria-label="HSN / SAC code for the category" title="HSN / SAC code — used for items in this category that have none" />}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button type="submit" size="sm" icon={editing ? undefined : Plus}>{editing ? 'Save' : 'Add'}</Button>
-              {form.imageUrl && <Button type="button" size="sm" variant="ghost" icon={Trash2} className="!text-red-600" onClick={() => setForm({ ...form, imageUrl: null })}>Remove photo</Button>}
               {editing && <Button type="button" size="sm" variant="ghost" onClick={() => setForm(blank)}>Cancel</Button>}
               {editing && !products.some((p) => p.categoryId === form.id) && (
                 <Button type="button" size="sm" variant="ghost" icon={Trash2} className="!text-red-600" onClick={async () => { if (await run(() => api.categories.remove(form.id!), `${t('category')} deleted`)) setForm(blank) }}>Delete</Button>
               )}
-              <span className="text-[11px] text-slate-400">Tap the square to add a photo</span>
+              <span className="text-[11px] text-slate-400">Tap the square for a photo or emoji</span>
             </div>
           </div>
         </div>
@@ -412,7 +418,7 @@ function CategoryModal({ onClose }: { onClose: () => void }) {
 
 const UNIT_LABEL: Record<string, string> = {
   pc: 'Piece', plate: 'Plate', kg: 'Kg', g: 'Gram', ltr: 'Litre', ml: 'ml', cup: 'Cup', glass: 'Glass', bowl: 'Bowl', box: 'Box',
-  pack: 'Pack', dozen: 'Dozen', bottle: 'Bottle', scoop: 'Scoop', half: 'Half', full: 'Full', service: 'Service', hr: 'Hour',
+  pack: 'Pack', dozen: 'Dozen', bunch: 'Bunch', bottle: 'Bottle', scoop: 'Scoop', half: 'Half', full: 'Full', service: 'Service', hr: 'Hour',
   mtr: 'Metre', ft: 'Feet', coil: 'Coil', roll: 'Roll', set: 'Set', bag: 'Bag', pair: 'Pair', jar: 'Jar',
 }
 

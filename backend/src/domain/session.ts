@@ -3,6 +3,7 @@
 // roles, branches, business settings, subscription or features calls bumpEpoch(), which makes every cached
 // copy for that business stale at once.
 import { featuresFor, type FeatureFlags } from '@/core/features'
+import { cleanPlanPrice, plansFrom, type PlanPrice, type PlanPrices } from '@/core/plans'
 import type { Branch, Business, Role, User } from '@/core/types'
 import { ALL_BRANCHES, type Ctx, type Session, type SupportClaim } from '../core/context'
 import type { Db } from '../db/types'
@@ -77,6 +78,11 @@ export async function loadSession(c: Ctx, claims: UserClaims, branchHeader: stri
   }
 }
 
-export async function pricePerBranch(db: Db) {
-  return (await getPlatformSetting<{ pricePerBranchMonth?: number }>(db, 'pricing', {})).pricePerBranchMonth ?? 499
+/** Admin → Pricing: the price list of each business type, and the customers with their own price. */
+export interface Pricing { plans: PlanPrices; custom: Record<string, PlanPrice> }
+export async function loadPricing(db: Db): Promise<Pricing> {
+  const s = await getPlatformSetting<{ plans?: Record<string, unknown>; custom?: Record<string, unknown> }>(db, 'pricing', {})
+  const custom: Record<string, PlanPrice> = {}
+  for (const [id, v] of Object.entries(s.custom ?? {})) { const p = cleanPlanPrice(v); if (p && /^\d+$/.test(id)) custom[id] = p }
+  return { plans: plansFrom(s.plans), custom }
 }

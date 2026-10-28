@@ -16,6 +16,7 @@ import { gstinState, isInterState, shopStateOf, stateLabel } from '@/core/gst'
 import { loyaltyOf } from '@/core/loyalty'
 import { CustomerPoints } from '@/features/loyalty/Points'
 import { useWhatsApp } from '@/features/whatsapp/useWhatsApp'
+import { Pager, usePage } from '@/components/Pager'
 
 export default function Customers() {
   const { t, me } = useApp()
@@ -34,6 +35,7 @@ export default function Customers() {
   const receivable = customers?.reduce((a, c) => a + c.stats.outstanding, 0) ?? 0
   const pointsOn = !!me && (loyaltyOf(me.business).enabled || !!customers?.some((c) => c.pointsBalance))
 
+  const pg = usePage(list, [q, filter])
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader title={t('customer', true)} actions={<>
@@ -51,10 +53,10 @@ export default function Customers() {
           <Segmented value={filter} onChange={setFilter} options={[{ value: 'all', label: 'All' }, { value: 'due', label: 'Outstanding', count: dueCount }]} />
         </div>
         {customers && !list.length ? <EmptyState icon={Users} title={`No ${t('customer', true).toLowerCase()} found`} /> : (
-          <Table>
+          <Table footer={<Pager p={pg} />}>
             <thead><tr><Th>{t('customer')}</Th><Th className="hidden sm:table-cell">Phone</Th><Th className="text-right">Purchases</Th><Th className="hidden text-right md:table-cell">{t('order', true)}</Th><Th className="hidden lg:table-cell">Last visit</Th>{pointsOn && <Th className="text-right">Points</Th>}<Th className="text-right">Outstanding</Th></tr></thead>
             <tbody>
-              {list.map((c) => (
+              {pg.rows.map((c) => (
                 <tr key={c.id} onClick={() => setOpen(c.id)} className="cursor-pointer hover:bg-slate-50">
                   <Td><div className="flex items-center gap-2.5"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-50 text-sm font-semibold text-brand-700">{c.name[0]}</span><span className="font-medium text-slate-900">{c.name}</span>{c.priceTier === 'wholesale' && me && wholesaleOn(me.business.billing) && <Badge tone="violet">{wholesaleLabel(me.business.billing)}</Badge>}{c.gstin && <Badge tone="blue">B2B</Badge>}{c.marketingOptIn === false && <span title="Doesn’t want offers"><BellOff className="h-3.5 w-3.5 text-slate-400" /></span>}</div></Td>
                   <Td className="hidden whitespace-nowrap text-slate-500 tabular sm:table-cell">{formatPhone(c.phone) || '—'}</Td>

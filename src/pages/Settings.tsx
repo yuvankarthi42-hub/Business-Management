@@ -19,6 +19,7 @@ import { IntegrationsSettings } from '@/features/whatsapp/Integrations'
 import { ExportButtons } from '@/features/ExportData'
 import { ShopLogoUpload } from '@/features/ShopLogoUpload'
 import { COUNTRIES, formatPhone } from '@/core/phone'
+import { LoadOlder, Pager, useOlder, usePage } from '@/components/Pager'
 
 type Section = 'profile' | 'billing' | 'loyalty' | 'stickers' | 'printer' | 'integrations' | 'terms' | 'modules' | 'branches' | 'staff' | 'tables' | 'data'
 
@@ -431,7 +432,11 @@ function TableSettingsInner() {
 
 function DataSettings() {
   const run = useAction()
-  const { data: logs = [] } = useData(() => api.audit.list(100))
+  const { data: newest } = useData(() => api.audit.list(100))
+  // The newest 100 first; "Load older" brings the next 100.
+  const older = useOlder(newest, 100, (l) => l.at, (before) => api.audit.list(100, before))
+  const logs = older.rows
+  const pg = usePage(logs)
   const [confirm, setConfirm] = useState(false)
   const { can } = useApp()
   return (
@@ -444,9 +449,9 @@ function DataSettings() {
       )}
       <Section title="Audit log" subtitle="Every financial change is recorded — nothing is hard-deleted">
         {!logs.length ? <p className="text-sm text-slate-500">No changes recorded in this session yet. Create a bill, cancel an order or edit settings to see entries.</p> : (
-          <Table>
+          <Table footer={<Pager p={pg} more={older.canMore ? <LoadOlder o={older} /> : undefined} />}>
             <thead><tr><Th>When</Th><Th>User</Th><Th>Action</Th><Th>Detail</Th></tr></thead>
-            <tbody>{logs.map((l) => <tr key={l.id}><Td className="whitespace-nowrap text-slate-500">{fmtDateTime(l.at)}</Td><Td>{l.userName}</Td><Td><Badge>{l.entity}.{l.action}</Badge></Td><Td className="max-w-xs truncate text-slate-600">{l.detail}</Td></tr>)}</tbody>
+            <tbody>{pg.rows.map((l) => <tr key={l.id}><Td className="whitespace-nowrap text-slate-500">{fmtDateTime(l.at)}</Td><Td>{l.userName}</Td><Td><Badge>{l.entity}.{l.action}</Badge></Td><Td className="max-w-xs truncate text-slate-600">{l.detail}</Td></tr>)}</tbody>
           </Table>
         )}
       </Section>

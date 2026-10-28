@@ -9,6 +9,7 @@ import { formatPhone } from '@/core/phone'
 import { api, type Validity } from '@/data'
 import { BranchUsage } from './Customers'
 import { ExportButtons } from '@/features/ExportData'
+import { cleanPlanPrice, monthlyValue, PLAN_LABEL, planAmount, type PlanPrice, type PlanPrices } from '@/core/plans'
 import { CredentialCard, fmtDate, fmtDateTime, randomPassword, rupees, StateBadge, useAdminCan, ValidityPicker, validityText } from './shared'
 
 type Detail = Awaited<ReturnType<typeof api.admin.customer>>
@@ -71,12 +72,14 @@ export default function AdminCustomerDetail() {
             <Row k="Started">{fmtDate(c.startAt)}</Row>
             <Row k="Valid until"><b>{fmtDate(c.endAt)}</b></Row>
             <Row k="Remaining"><span className={clsx(c.state === 'expired' ? 'text-red-700' : c.state === 'expiring' ? 'text-amber-700' : '')}>{validityText(c.state, c.daysLeft, c.endAt)}</span></Row>
-            <Row k="Price">{rupees(c.monthlyPrice)} / month <span className="text-slate-400">({c.maxBranches} × {rupees(platform.pricePerBranchMonth)})</span></Row>
+            <Row k="Price">{rupees(c.monthlyPrice)} / month <span className="text-slate-400">· {c.customPrice ? 'own price' : PLAN_LABEL[c.plan].name}</span></Row>
           </dl>
         </Card>
 
-        <BranchCard c={c} price={platform.pricePerBranchMonth} editable={can('customers.branches')} />
+        <BranchCard c={c} editable={can('customers.branches')} />
       </div>
+
+      <PriceCard c={c} plans={platform.plans!} editable={can('pricing.manage')} />
 
       <FeaturesCard c={c} editable={can('features.manage')} />
       {can('customers.edit') && (
@@ -121,7 +124,7 @@ export default function AdminCustomerDetail() {
 
       {modal === 'edit' && <EditModal c={c} onClose={close} />}
       {modal === 'password' && <PasswordModal c={c} onClose={close} />}
-      {modal === 'renew' && <RenewModal c={c} price={platform.pricePerBranchMonth} onClose={close} />}
+      {modal === 'renew' && <RenewModal c={c} onClose={close} />}
       {modal === 'status' && <StatusModal c={c} onClose={close} />}
       {modal === 'support' && <SupportModal c={c} onClose={close} />}
       {modal === 'delete' && <DeleteModal c={c} onClose={close} onDeleted={() => nav('/admin', { replace: true })} />}
@@ -136,7 +139,7 @@ const Notice = ({ tone, children }: { tone: 'red' | 'slate'; children: ReactNode
   <div className={clsx('mb-4 rounded-xl px-4 py-3 text-sm', tone === 'red' ? 'bg-red-50 text-red-800' : 'bg-slate-100 text-slate-700')}>{children}</div>
 )
 
-function BranchCard({ c, price, editable }: { c: Detail; price: number; editable: boolean }) {
+function BranchCard({ c, editable }: { c: Detail; editable: boolean }) {
   const run = useAction()
   const [max, setMax] = useState(c.maxBranches)
   const dirty = max !== c.maxBranches
@@ -151,7 +154,7 @@ function BranchCard({ c, price, editable }: { c: Detail; price: number; editable
           <button type="button" aria-label="More branches" disabled={max >= 100} onClick={() => setMax(max + 1)} className="rounded-lg border border-slate-200 p-1.5 disabled:opacity-40"><Plus className="h-4 w-4" /></button>
         </div>}
       </div>
-      <p className="mt-2 text-xs text-slate-500">Allowed branches. Can’t go below the {c.branchesUsed} already created. Price {rupees(max * price)}/month.</p>
+      <p className="mt-2 text-xs text-slate-500">Allowed branches. Can’t go below the {c.branchesUsed} already created. Price {rupees(monthlyValue(c.price, max))}/month.</p>
       {dirty && (
         <div className="mt-3 flex gap-2">
           <Button size="sm" onClick={() => run(() => api.admin.setBranchLimit(c.id, max), `Branch limit set to ${max}`)}>Save limit</Button>
@@ -213,7 +216,47 @@ function PasswordModal({ c, onClose }: { c: Detail; onClose: () => void }) {
   )
 }
 
-function RenewModal({ c, price, onClose }: { c: Detail; price: number; onClose: () => void }) {
+/** This customer's price: their business type's, or one set for this customer only (from the next payment). */
+function PriceCard({ c, plans, editable }: { c: Detail; plans: PlanPrices; editable: boolean }) {
+  const run = useAction()
+  const typePrice = plans[c.plan]
+  const [edit, setEdit] = useState(false)
+  const [d, setD] = useState({ month: String(c.price.month), year: String(c.price.year), extraBranch: String(c.price.extraBranch) })
+  const p = cleanPlanPrice({ month: Number(d.month), year: Number(d.year), extraBranch: Number(d.extraBranch) })
+  const num = (v: string) => v.replace(/[^\d]/g, '').slice(0, 7)
+  const line = (x: PlanPrice) => `${rupees(x.month)}/month · ${rupees(x.year)}/year · extra branch ${rupees(x.extraBranch)}/month`
+  return (
+    <Card className="mt-4 p-5">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-semibold">Price {c.customPrice && <Badge tone="blue">Own price</Badge>}</h2>
+        {editable && !edit && <div className="flex gap-2">
+          <Button size="sm" variant="secondary" onClick={() => { setD({ month: String(c.price.month), year: String(c.price.year), extraBranch: String(c.price.extraBranch) }); setEdit(true) }}>{c.customPrice ? 'Change own price' : 'Set own price'}</Button>
+          {c.customPrice && <Button size="sm" variant="ghost" onClick={() => run(() => api.admin.setCustomPrice(c.id, null), `${PLAN_LABEL[c.plan].name} price again`)}>Use business type price</Button>}
+        </div>}
+      </div>
+      <p className="text-sm text-slate-700">{line(c.price)}</p>
+      <p className="mt-1 text-xs text-slate-500">
+        {c.customPrice ? `Only for this customer. Their business type (${PLAN_LABEL[c.plan].name}) is ${line(typePrice)}.` : `${PLAN_LABEL[c.plan].name} price (Admin → Pricing).`} Applies from the next renewal or extension — past payments keep their price.
+      </p>
+      {edit && (
+        <form className="mt-3 rounded-xl border border-slate-200 bg-slate-50/60 p-3" onSubmit={async (e) => { e.preventDefault(); if (p && await run(() => api.admin.setCustomPrice(c.id, p), 'Own price saved')) setEdit(false) }}>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field required label="Monthly (₹)"><Input inputMode="numeric" value={d.month} onChange={(e) => setD({ ...d, month: num(e.target.value) })} /></Field>
+            <Field required label="Yearly (₹)"><Input inputMode="numeric" value={d.year} onChange={(e) => setD({ ...d, year: num(e.target.value) })} /></Field>
+            <Field required label="Extra branch / month (₹)"><Input inputMode="numeric" value={d.extraBranch} onChange={(e) => setD({ ...d, extraBranch: num(e.target.value) })} /></Field>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+            {p && <span className="mr-auto text-xs text-slate-500">{c.maxBranches} branch{c.maxBranches === 1 ? '' : 'es'}: {rupees(monthlyValue(p, c.maxBranches))}/month · {rupees(planAmount(p, c.maxBranches, 12, '', ''))}/year</span>}
+            <Button type="button" variant="ghost" size="sm" onClick={() => setEdit(false)}>Cancel</Button>
+            <Button type="submit" size="sm" disabled={!p}>Save own price</Button>
+          </div>
+        </form>
+      )}
+    </Card>
+  )
+}
+
+function RenewModal({ c, onClose }: { c: Detail; onClose: () => void }) {
   const run = useAction()
   const [v, setV] = useState<Validity>({ months: 1 })
   const [note, setNote] = useState('')
@@ -223,7 +266,7 @@ function RenewModal({ c, price, onClose }: { c: Detail; price: number; onClose: 
     <Modal open onClose={onClose} title={expired ? 'Renew subscription' : 'Extend subscription'}
       subtitle={expired ? 'Starts today. The account becomes fully usable again right away.' : `Added after the current end date (${fmtDate(c.endAt)}).`}>
       <form className="space-y-4" onSubmit={async (e) => { e.preventDefault(); if (await run(() => api.admin.renew(c.id, v, note), expired ? 'Subscription renewed' : 'Subscription extended')) onClose() }}>
-        <ValidityPicker value={v} onChange={setV} from={from} branches={c.maxBranches} pricePerBranch={price} />
+        <ValidityPicker value={v} onChange={setV} from={from} branches={c.maxBranches} price={c.price} priceLabel={c.customPrice ? 'Own price' : PLAN_LABEL[c.plan].name} />
         <Field label="Note (optional)"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Paid ₹2,994 by UPI" /></Field>
         <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={onClose}>Cancel</Button><Button type="submit" icon={CalendarPlus} disabled={'endDate' in v && !v.endDate}>{expired ? 'Renew' : 'Extend'}</Button></div>
       </form>

@@ -7,7 +7,7 @@ import { define, userRead, userWrite } from '../core/registry'
 import { DuplicateError, type Row, type Where } from '../db/types'
 import { loadProducts, canSeeCost } from '../domain/catalog'
 import { moveStock, stockOf, stockProduct, writeOffBatch, type BatchInput } from '../domain/stock'
-import { audit, bizDay, code, E, fromMilli, fromMinor, isId, nameOf, nameOrNull, own, str, strOrNull, toMilli, toMinor } from '../domain/util'
+import { audit, bizDay, code, E, fromMilli, fromMinor, isId, nameOf, nameOrNull, own, selectOlder, str, strOrNull, toMilli, toMinor } from '../domain/util'
 
 const inScope = (c: Ctx): Where => ({ business_id: c.businessId, branch_id: { in: c.scope() } })
 const isoArg = (v: unknown, what = 'Choose a date range') => { const d = new Date(String(v)); if (v == null || Number.isNaN(d.getTime())) throw new ApiError(what); return d.toISOString() }
@@ -82,10 +82,14 @@ const cleanCategory = (k: unknown): ExpenseCategory => {
   return k as ExpenseCategory
 }
 
+/** Stock history rows per answer. */
+export const MOVES_PAGE = 3000
+
 define('inventory', {
-  movements: userRead(async (c, productId?: string) => {
+  /** Newest 3,000; `before` (the last one the screen has) → the next older ones ("Load older"). */
+  movements: userRead(async (c, productId?: string | null, before?: unknown) => {
     if (productId && !isId(productId)) return []
-    const rows = await c.db.select('stock_movements', { where: { ...inScope(c), ...(productId ? { product_id: productId } : {}) }, orderBy: [['CREATEDTIME', 'DESC'], ['ROWID', 'DESC']], limit: 3000 })
+    const rows = await selectOlder(c, 'stock_movements', { ...inScope(c), ...(productId ? { product_id: productId } : {}) }, before, MOVES_PAGE)
     return rows.map(movementFrom)
   }),
 

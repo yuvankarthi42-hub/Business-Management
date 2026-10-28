@@ -3,12 +3,14 @@ import { ChevronRight, Plus, Users, Wand2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useData } from '@/app/AppContext'
-import { Button, Card, Chips, EmptyState, Field, Input, Modal, SearchInput, Table, Td, Th, useAction } from '@/components/ui'
+import { Button, Card, Chips, EmptyState, Field, Input, Modal, SearchInput, Select, Table, Td, Th, useAction } from '@/components/ui'
 import { PhoneInput } from '@/components/PhoneInput'
 import { formatPhone, isValidPhone, phoneMatches } from '@/core/phone'
 import type { SubState } from '@/core/subscription'
 import { api, type Validity } from '@/data'
 import { CredentialCard, fmtDate, randomPassword, rupees, StateBadge, useAdminCan, ValidityPicker, validityText } from './shared'
+import { Pager, usePage } from '@/components/Pager'
+import { PLAN_KEYS, PLAN_LABEL, type PlanKey, type PlanPrices } from '@/core/plans'
 
 type Filter = 'all' | SubState
 
@@ -30,6 +32,7 @@ export default function AdminCustomers() {
   }, [rows, q, filter])
   const monthly = rows.filter((r) => r.state !== 'deactivated' && r.state !== 'expired').reduce((a, r) => a + r.monthlyPrice, 0)
 
+  const pg = usePage(list, [q, filter])
   return (
     <div>
       <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
@@ -46,7 +49,7 @@ export default function AdminCustomers() {
         <Stat label="Expiring in 7 days" value={count('expiring')} tone="text-amber-700" />
         <Stat label="Expired (read-only)" value={count('expired')} tone="text-red-700" />
         <Stat label="Deactivated" value={count('deactivated')} tone="text-slate-500" />
-        <Stat label="Monthly value" value={rupees(monthly)} hint={platform ? `${rupees(platform.pricePerBranchMonth)} per branch` : undefined} />
+        <Stat label="Monthly value" value={rupees(monthly)} hint="Prices by business type" />
       </div>
 
       <Card>
@@ -61,10 +64,10 @@ export default function AdminCustomers() {
           ]} />
         </div>
         {!list.length ? <EmptyState icon={Users} title={rows.length ? 'No customer matches' : 'No customers yet'} action={!rows.length && can('customers.create') ? <Button icon={Plus} onClick={() => setCreating(true)}>New customer</Button> : undefined} /> : (
-          <Table>
+          <Table footer={<Pager p={pg} />}>
             <thead><tr><Th>Customer</Th><Th>Owner / username</Th><Th>Status</Th><Th>Validity</Th><Th>Branches</Th><Th>Registered</Th><Th /></tr></thead>
             <tbody>
-              {list.map((r) => (
+              {pg.rows.map((r) => (
                 <tr key={r.id} className="cursor-pointer hover:bg-slate-50" onClick={() => nav(`/admin/customers/${r.id}`)}>
                   <Td>
                     <p className="font-medium text-slate-900">{r.name}</p>
@@ -86,7 +89,7 @@ export default function AdminCustomers() {
         )}
       </Card>
 
-      {creating && platform && <CreateCustomerModal pricePerBranch={platform.pricePerBranchMonth} onClose={() => setCreating(false)} onCreated={(c) => { setCreating(false); setCreated(c) }} />}
+      {creating && platform?.plans && <CreateCustomerModal plans={platform.plans} onClose={() => setCreating(false)} onCreated={(c) => { setCreating(false); setCreated(c) }} />}
       {created && (
         <Modal open onClose={() => setCreated(null)} size="sm" title="Customer created" subtitle="Send these login details to the customer. They sign in and finish the shop setup.">
           <CredentialCard phone={created.phone} username={created.username} password={created.password} businessName={created.businessName} />
@@ -120,10 +123,12 @@ export function BranchUsage({ used, max }: { used: number; max: number }) {
   )
 }
 
-function CreateCustomerModal({ pricePerBranch, onClose, onCreated }: { pricePerBranch: number; onClose: () => void; onCreated: (c: { id: string; username: string; password: string; businessName: string; phone: string }) => void }) {
+function CreateCustomerModal({ plans, onClose, onCreated }: { plans: PlanPrices; onClose: () => void; onCreated: (c: { id: string; username: string; password: string; businessName: string; phone: string }) => void }) {
   const run = useAction()
   const [f, setF] = useState({ businessName: '', ownerName: '', username: '', password: randomPassword(), phone: '', email: '', maxBranches: 1, note: '' })
   const [validity, setValidity] = useState<Validity>({ months: 1 })
+  // The price list the shop starts on (the owner can still pick the exact type at set-up).
+  const [plan, setPlan] = useState<PlanKey>('food')
   const [touchedUser, setTouchedUser] = useState(false)
   const suggest = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 20)
   const set = (patch: Partial<typeof f>) => setF((x) => ({ ...x, ...patch }))
@@ -134,7 +139,7 @@ function CreateCustomerModal({ pricePerBranch, onClose, onCreated }: { pricePerB
       <form className="space-y-5" onSubmit={async (e) => {
         e.preventDefault()
         let res: { id: string; username: string } | null = null
-        const ok = await run(async () => { res = await api.admin.createCustomer({ ...f, validity }) })
+        const ok = await run(async () => { res = await api.admin.createCustomer({ ...f, validity, plan }) })
         if (ok && res) onCreated({ ...(res as { id: string; username: string }), password: f.password, businessName: f.businessName.trim(), phone: f.phone })
       }}>
         <section className="grid gap-4 sm:grid-cols-2">
@@ -163,11 +168,17 @@ function CreateCustomerModal({ pricePerBranch, onClose, onCreated }: { pricePerB
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm font-semibold">Subscription</p>
             <label className="flex items-center gap-2 text-sm">
+              <span className="text-slate-600">Business type</span>
+              <Select value={plan} onChange={(e) => setPlan(e.target.value as PlanKey)} className="h-9 w-56" aria-label="Business type (price)">
+                {PLAN_KEYS.map((k) => <option key={k} value={k}>{PLAN_LABEL[k].name}</option>)}
+              </Select>
+            </label>
+            <label className="flex items-center gap-2 text-sm">
               <span className="text-slate-600">Branches allowed</span>
               <Input type="number" min={1} max={100} value={f.maxBranches} onChange={(e) => set({ maxBranches: Math.max(1, Math.min(100, Number(e.target.value) || 1)) })} className="w-20 text-center" aria-label="Branches allowed" />
             </label>
           </div>
-          <ValidityPicker value={validity} onChange={setValidity} from={new Date()} branches={f.maxBranches} pricePerBranch={pricePerBranch} />
+          <ValidityPicker value={validity} onChange={setValidity} from={new Date()} branches={f.maxBranches} price={plans[plan]} priceLabel={PLAN_LABEL[plan].name} />
         </section>
 
         <Field label="Note (only admins see this)"><Input value={f.note} onChange={(e) => set({ note: e.target.value })} placeholder="e.g. Paid by UPI, ref 4521" /></Field>

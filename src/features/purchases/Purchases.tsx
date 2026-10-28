@@ -15,6 +15,8 @@ import { api } from '@/data'
 import { fmtDate, money } from '@/lib/format'
 import { GstinInput, StateSelect } from '../gst/GstFields'
 import { LabelPrintModal } from '../Labels'
+import { Pager, usePage } from '@/components/Pager'
+import { NewItemPanel } from './NewItem'
 
 const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)
 
@@ -29,6 +31,7 @@ export function PurchasesView() {
   const list = useMemo(() => (purchases ?? []).filter((p) => { const s = q.trim().toLowerCase(); return !s || p.number.toLowerCase().includes(s) || p.supplierName.toLowerCase().includes(s) || p.supplierBillNo.toLowerCase().includes(s) }), [purchases, q])
   const month = today().slice(0, 7)
   const thisMonth = (purchases ?? []).filter((p) => p.status === 'final' && p.date.startsWith(month))
+  const pg = usePage(list, [q])
   return (
     <>
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -45,10 +48,10 @@ export function PurchasesView() {
         {purchases && !list.length ? (
           <EmptyState icon={Truck} title="No purchase bills yet" description="Enter a supplier’s bill: stock goes up, cost prices update and the GST is kept for your GST return." action={<Button icon={Plus} onClick={() => setCreating(true)}>New purchase bill</Button>} />
         ) : (
-          <Table>
+          <Table footer={<Pager p={pg} />}>
             <thead><tr><Th>Purchase</Th><Th>Supplier</Th><Th className="hidden sm:table-cell">Date</Th><Th className="text-right">Total</Th><Th className="hidden text-right md:table-cell">GST</Th><Th className="text-right">Unpaid</Th></tr></thead>
             <tbody>
-              {list.map((p) => (
+              {pg.rows.map((p) => (
                 <tr key={p.id} onClick={() => setOpen(p)} className="cursor-pointer hover:bg-slate-50">
                   <Td><p className="font-medium">{p.number}{p.status === 'void' && <Badge tone="red" className="ml-2">Voided</Badge>}</p><p className="text-xs text-slate-500">{p.supplierBillNo ? `Bill ${p.supplierBillNo} · ` : ''}{p.lines.length} item{p.lines.length === 1 ? '' : 's'}</p></Td>
                   <Td>{p.supplierName}{p.igst && <Badge tone="violet" className="ml-1.5">IGST</Badge>}</Td>
@@ -75,7 +78,7 @@ const Mini = ({ k, v, tone }: { k: string; v: string; tone?: 'amber' }) => (
 interface Row { key: string; productId: string; qty: string; cost: string; taxRate: number; hsn: string; batchNo: string; expiry: string }
 
 export function NewPurchaseModal({ onClose, supplierId: preset }: { onClose: () => void; supplierId?: string }) {
-  const { me } = useApp()
+  const { me, can } = useApp()
   const run = useAction()
   const b = me!.business
   const { data: suppliers = [] } = useData(() => api.suppliers.list())
@@ -93,7 +96,11 @@ export function NewPurchaseModal({ onClose, supplierId: preset }: { onClose: () 
   const [saved, setSaved] = useState<Purchase | null>(null)
   const [printing, setPrinting] = useState(false)
   const rateOf = (p: Product) => b.billing.taxRates.find((r) => r.id === (p.taxRateId ?? b.billing.defaultTaxRateId))?.rate ?? 0
-  const byId = (id: string) => products.find((p) => p.id === id)
+  // Items made on this bill ("+ Add as a new item") until the product list refreshes.
+  const [made, setMade] = useState<Product[]>([])
+  const [newItem, setNewItem] = useState<string | null>(null)
+  const canAddItem = can('products.manage')
+  const byId = (id: string) => products.find((p) => p.id === id) ?? made.find((p) => p.id === id)
   const matches = useMemo(() => {
     const s = q.trim().toLowerCase()
     if (!s) return []
@@ -161,18 +168,29 @@ export function NewPurchaseModal({ onClose, supplierId: preset }: { onClose: () 
         <div>
           <div className="relative">
             <SearchInput autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Add item — name, barcode or code (scan works)"
-              onKeyDown={(e) => { if (e.key === 'Enter' && matches[0]) { e.preventDefault(); add(matches[0]) } }} />
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return
+                e.preventDefault()
+                if (matches[0]) add(matches[0])
+                else if (q.trim() && canAddItem) { setNewItem(q.trim()); setQ('') } // a code that isn't in the products yet
+              }} />
             <ScanLine className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-300" />
-            {!!matches.length && (
+            {(!!matches.length || (!!q.trim() && canAddItem)) && (
               <div className="absolute inset-x-0 top-full z-10 mt-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
                 {matches.map((p) => (
                   <button key={p.id} type="button" onClick={() => add(p)} className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-slate-50">
                     <span className="min-w-0 truncate font-medium">{p.name}</span><span className="shrink-0 text-xs text-slate-500">cost {money(p.costPrice)} · stock {p.stock}</span>
                   </button>
                 ))}
+                {!!q.trim() && canAddItem && (
+                  <button type="button" onClick={() => { setNewItem(q.trim()); setQ('') }} className="flex w-full items-center gap-2 border-t border-slate-100 px-3 py-2 text-left text-sm font-medium text-brand-700 hover:bg-brand-50">
+                    <Plus className="h-4 w-4" /><span className="min-w-0 truncate">Add “{q.trim()}” as a new item</span>
+                  </button>
+                )}
               </div>
             )}
           </div>
+          {newItem !== null && <NewItemPanel key={newItem} typed={newItem} onCancel={() => setNewItem(null)} onSaved={(p) => { setMade((m) => [...m, p]); add(p); setNewItem(null) }} />}
           <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
             <table className="w-full min-w-[720px] text-sm">
               <thead className="bg-slate-50 text-xs text-slate-500">
@@ -290,6 +308,7 @@ export function SuppliersView() {
   const [open, setOpen] = useState<string | null>(null)
   const list = useMemo(() => (suppliers ?? []).filter((s) => !q || s.name.toLowerCase().includes(q.toLowerCase()) || s.phone.includes(q) || s.gstin.includes(q.toUpperCase())), [suppliers, q])
   const owed = (suppliers ?? []).reduce((a, s) => a + Math.max(0, s.balance ?? 0), 0)
+  const pg = usePage(list, [q])
   return (
     <>
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-3">
@@ -302,10 +321,10 @@ export function SuppliersView() {
           <Button icon={Plus} write onClick={() => setEdit({})}>Add supplier</Button>
         </div>
         {suppliers && !list.length ? <EmptyState icon={Users} title="No suppliers yet" description="Add the people and companies you buy stock from." action={<Button icon={Plus} onClick={() => setEdit({})}>Add supplier</Button>} /> : (
-          <Table>
+          <Table footer={<Pager p={pg} />}>
             <thead><tr><Th>Supplier</Th><Th className="hidden sm:table-cell">GSTIN</Th><Th className="hidden text-right md:table-cell">Bills</Th><Th className="hidden md:table-cell">Last purchase</Th><Th className="text-right">You owe</Th></tr></thead>
             <tbody>
-              {list.map((s) => (
+              {pg.rows.map((s) => (
                 <tr key={s.id} onClick={() => setOpen(s.id)} className="cursor-pointer hover:bg-slate-50">
                   <Td><p className="font-medium">{s.name}{!s.active && <Badge className="ml-2">Inactive</Badge>}</p><p className="text-xs text-slate-500">{s.phone || '—'}{s.stateCode ? ` · ${stateLabel(s.stateCode)}` : ''}</p></Td>
                   <Td className="hidden font-mono text-xs text-slate-500 sm:table-cell">{s.gstin || '—'}</Td>

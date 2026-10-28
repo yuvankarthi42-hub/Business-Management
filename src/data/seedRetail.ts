@@ -14,6 +14,8 @@ interface ItemDef {
   variants?: [string, number][]; addOns?: [string, number][]; nonVeg?: boolean; kitchen?: boolean; noStock?: boolean
   // textile shops
   mrp?: number; details?: ProductDetails
+  /** Labour / service charge (no stock), e.g. fitting at a spare-parts shop. */
+  service?: boolean
 }
 interface ShopSpec {
   id: string; name: string; subType: string; category?: 'retail' | 'food'; orderTypes?: OrderType[]
@@ -30,6 +32,10 @@ interface ShopSpec {
   sellers?: { id: string; name: string; phone: string; salary: number; commissionPct: number }[]
   /** In-store codes (20…) on every item, for QR price stickers. */
   inStoreCodes?: boolean
+  /** Shelf / MRP prices already include GST. */
+  taxInclusive?: boolean
+  /** Modules switched on for this demo shop. */
+  modules?: Partial<Business['modules']>
 }
 
 /** EAN-13 with a valid check digit, e.g. 890 + 4-digit company + 5-digit item. */
@@ -165,9 +171,10 @@ function buildShop(d: DB, spec: ShopSpec) {
   const biz: Business = newBusiness({ id: spec.id, name: spec.name, category, subType: spec.subType, phone: spec.phone, createdAt: start.toISOString() })
   Object.assign(biz, { logoEmoji: spec.emoji, address: spec.address, email: spec.email, gstin: spec.gstin })
   biz.modules = { ...biz.modules, orders: true, inventory: true, customers: true, employees: true, ...(food ? { kitchen: true, mobileOrders: true, specials: true, qrOrdering: true, tables: false } : {}) }
-  if (spec.id === 'biz_freshmart' || spec.inStoreCodes) biz.billing.taxMode = 'inclusive' // shelf / MRP prices already include GST
+  if (spec.id === 'biz_freshmart' || spec.inStoreCodes || spec.taxInclusive) biz.billing.taxMode = 'inclusive' // shelf / MRP prices already include GST
   if (spec.inStoreCodes) biz.modules.customerOrders = false
   if (spec.id === 'biz_murugan_hw') biz.modules.mobileOrders = true // salesmen take orders on the shop floor
+  Object.assign(biz.modules, spec.modules ?? {})
   Object.assign(biz.billing, { invoicePrefix: spec.invoicePrefix, defaultTaxRateId: spec.defaultTax, receiptFooter: spec.footer, orderTypes: spec.orderTypes ?? ['counter', 'delivery'], paymentMethods: ['cash', 'upi', 'card', 'credit'] })
   d.businesses.push(biz)
 
@@ -189,7 +196,7 @@ function buildShop(d: DB, spec: ShopSpec) {
 
   const products: Product[] = spec.items.map((it, i) => ({
     id: `prd_${spec.id.slice(4)}_${String(i + 1).padStart(3, '0')}`, businessId: spec.id, name: it.name, categoryId: `cat_${spec.id}_${it.cat}`,
-    kind: 'goods', emoji: it.emoji, imageUrl: null, sku: `${spec.invoicePrefix.replace('-', '')}${String(i + 1).padStart(3, '0')}`,
+    kind: it.service ? 'service' : 'goods', emoji: it.emoji, imageUrl: null, sku: `${spec.invoicePrefix.replace('-', '')}${String(i + 1).padStart(3, '0')}`,
     barcode: spec.inStoreCodes ? ean13(`20${String(i + 1).padStart(10, '0')}`) : it.barcode ? ean13(`${spec.ean}${String(10000 + i * 37).slice(-5)}`) : '',
     unit: it.unit, price: it.variants?.[0]?.[1] ?? it.price, costPrice: it.cost,
     mrp: it.mrp ?? (spec.id === 'biz_freshmart' && it.barcode ? (i % 3 === 0 ? it.price : Math.ceil((it.price * 1.08) / 5) * 5) : null),
@@ -197,7 +204,7 @@ function buildShop(d: DB, spec: ShopSpec) {
     variants: (it.variants ?? []).map(([n, pr], j) => ({ id: `v_${spec.id.slice(4)}_${i}_${j}`, name: n, price: pr })),
     addOns: (it.addOns ?? []).map(([n, pr], j) => ({ id: `ao_${spec.id.slice(4)}_${i}_${j}`, name: n, price: pr })),
     taxRateId: `tax_${it.tax}`,
-    trackStock: !it.noStock, stock: 0, stockByBranch: {}, lowStockAt: it.low ?? 10, isVeg: !it.nonVeg, sendToKitchen: !!it.kitchen, active: true, ...at(start),
+    trackStock: !it.noStock && !it.service, stock: 0, stockByBranch: {}, lowStockAt: it.low ?? 10, isVeg: !it.nonVeg, sendToKitchen: !!it.kitchen, active: true, ...at(start),
   }))
   d.products.push(...products)
   const pool = products.flatMap((p, i) => Array.from({ length: spec.items[i].pop ?? 2 }, () => ({ p, def: spec.items[i] })))
@@ -396,6 +403,116 @@ const TEXTILE: ShopSpec = {
     { notes: 'Showroom electricity', category: 'electricity', min: 4200, max: 5200, every: 30 },
   ],
 }
+
+const VEGETABLES: ShopSpec = {
+  id: 'biz_annai_veg', name: 'Annai Fresh Vegetables & Fruits', subType: 'Vegetables & Fruits', emoji: '🥬',
+  address: '12, Market Road, Koyambedu, Chennai 600107', phone: '+91 98765 55550', email: 'annaifresh@gmail.com', gstin: '',
+  invoicePrefix: 'VG-', defaultTax: 'tax_0', footer: 'Fresh every morning · Thank you!', seed: 3131, ean: '8906000',
+  categories: [['leafy', 'Leafy Greens', '🥬'], ['veg', 'Vegetables', '🥕'], ['onion', 'Potato & Onion', '🥔'], ['gourd', 'Gourds', '🥒'],
+    ['fruit', 'Fruits', '🍎'], ['banana', 'Banana', '🍌'], ['herbs', 'Herbs & Leaves', '🌿']],
+  items: [
+    { name: 'Tomato', cat: 'veg', price: 32, cost: 24, unit: 'kg', tax: 0, emoji: '🍅', pop: 10, low: 15, qty: [0.5, 1, 1, 2] },
+    { name: 'Onion (Big)', cat: 'onion', price: 38, cost: 30, unit: 'kg', tax: 0, emoji: '🧅', pop: 10, low: 25, qty: [0.5, 1, 1, 2, 5] },
+    { name: 'Small Onion (Sambar)', cat: 'onion', price: 70, cost: 56, unit: 'kg', tax: 0, emoji: '🧅', pop: 6, low: 10, qty: [0.25, 0.5, 1] },
+    { name: 'Potato', cat: 'onion', price: 34, cost: 27, unit: 'kg', tax: 0, emoji: '🥔', pop: 8, low: 25, qty: [0.5, 1, 2] },
+    { name: 'Carrot', cat: 'veg', price: 60, cost: 46, unit: 'kg', tax: 0, emoji: '🥕', pop: 5, low: 8, qty: [0.25, 0.5, 1] },
+    { name: 'Beans', cat: 'veg', price: 80, cost: 62, unit: 'kg', tax: 0, emoji: '🫛', pop: 4, low: 6, qty: [0.25, 0.5, 1] },
+    { name: 'Brinjal', cat: 'veg', price: 40, cost: 30, unit: 'kg', tax: 0, emoji: '🍆', pop: 5, low: 8, qty: [0.25, 0.5, 1] },
+    { name: 'Ladies Finger', cat: 'veg', price: 50, cost: 38, unit: 'kg', tax: 0, emoji: '🫑', pop: 4, low: 6, qty: [0.25, 0.5] },
+    { name: 'Green Chilli', cat: 'veg', price: 60, cost: 44, unit: 'kg', tax: 0, emoji: '🌶️', pop: 6, low: 3, qty: [0.1, 0.25] },
+    { name: 'Ginger', cat: 'veg', price: 120, cost: 92, unit: 'kg', tax: 0, emoji: '🫚', pop: 4, low: 3, qty: [0.1, 0.25] },
+    { name: 'Cabbage', cat: 'veg', price: 30, cost: 22, unit: 'kg', tax: 0, emoji: '🥬', pop: 3, low: 8, qty: [0.5, 1] },
+    { name: 'Bottle Gourd', cat: 'gourd', price: 35, cost: 25, unit: 'pc', tax: 0, emoji: '🥒', pop: 2, low: 6 },
+    { name: 'Bitter Gourd', cat: 'gourd', price: 60, cost: 45, unit: 'kg', tax: 0, emoji: '🥒', pop: 2, low: 4, qty: [0.25, 0.5] },
+    { name: 'Snake Gourd', cat: 'gourd', price: 40, cost: 30, unit: 'kg', tax: 0, emoji: '🥒', pop: 2, low: 4, qty: [0.5, 1] },
+    { name: 'Spinach (Keerai)', cat: 'leafy', price: 15, cost: 9, unit: 'bunch', tax: 0, emoji: '🥬', pop: 5, low: 15, qty: [1, 1, 2] },
+    { name: 'Coriander Leaves', cat: 'herbs', price: 10, cost: 6, unit: 'bunch', tax: 0, emoji: '🌿', pop: 7, low: 20, qty: [1, 1, 2] },
+    { name: 'Curry Leaves', cat: 'herbs', price: 5, cost: 3, unit: 'bunch', tax: 0, emoji: '🌿', pop: 6, low: 20, qty: [1, 2] },
+    { name: 'Mint Leaves', cat: 'herbs', price: 10, cost: 6, unit: 'bunch', tax: 0, emoji: '🌱', pop: 3, low: 10 },
+    { name: 'Coconut', cat: 'veg', price: 35, cost: 26, unit: 'pc', tax: 0, emoji: '🥥', pop: 5, low: 15, qty: [1, 1, 2] },
+    { name: 'Lemon', cat: 'fruit', price: 5, cost: 3, unit: 'pc', tax: 0, emoji: '🍋', pop: 5, low: 30, qty: [2, 4, 5, 10] },
+    { name: 'Apple (Shimla)', cat: 'fruit', price: 180, cost: 140, unit: 'kg', tax: 0, emoji: '🍎', pop: 3, low: 6, qty: [0.5, 1] },
+    { name: 'Orange', cat: 'fruit', price: 90, cost: 68, unit: 'kg', tax: 0, emoji: '🍊', pop: 3, low: 6, qty: [0.5, 1] },
+    { name: 'Pomegranate', cat: 'fruit', price: 160, cost: 125, unit: 'kg', tax: 0, emoji: '🍎', pop: 2, low: 4, qty: [0.5, 1] },
+    { name: 'Grapes (Black)', cat: 'fruit', price: 100, cost: 76, unit: 'kg', tax: 0, emoji: '🍇', pop: 2, low: 4, qty: [0.5, 1] },
+    { name: 'Watermelon', cat: 'fruit', price: 25, cost: 17, unit: 'kg', tax: 0, emoji: '🍉', pop: 2, low: 20, qty: [2, 3, 4] },
+    { name: 'Banana (Robusta)', cat: 'banana', price: 50, cost: 38, unit: 'dozen', tax: 0, emoji: '🍌', pop: 5, low: 8, qty: [0.5, 1] },
+    { name: 'Banana (Poovan)', cat: 'banana', price: 60, cost: 45, unit: 'dozen', tax: 0, emoji: '🍌', pop: 3, low: 6, qty: [0.5, 1] },
+    { name: 'Banana Leaf', cat: 'banana', price: 5, cost: 3, unit: 'pc', tax: 0, emoji: '🍃', pop: 2, low: 30, qty: [5, 10, 20] },
+  ],
+  users: [
+    { id: 'usr_veg_owner', name: 'Selvi Rajan', phone: '9876555551', role: 'Owner' },
+    { id: 'usr_veg_cash', name: 'Mani', phone: '9876555552', role: 'Cashier' },
+  ],
+  customers: [{ name: 'Hotel Saravana (daily supply)', credit: true, notes: 'Pays weekly — Saturday' }, { name: 'Kalyani Mess', credit: true, notes: 'Daily 6 am order' },
+    { name: 'Uma' }, { name: 'Ramesh' }, { name: 'Jaya' }, { name: 'Sundar' }],
+  perDay: [40, 60], linesPerBill: [2, 6], deliveryShare: 0.06, creditShare: 0.08,
+  expenses: [
+    { notes: 'Koyambedu market — morning stock', category: 'purchase', min: 6000, max: 11000, every: 1 },
+    { notes: 'Load auto — market to shop', category: 'transport', min: 250, max: 400, every: 1 },
+    { notes: 'Shop electricity', category: 'electricity', min: 900, max: 1300, every: 30 },
+  ],
+}
+
+const AUTO_PARTS: ShopSpec = {
+  id: 'biz_balaji_auto', name: 'Sri Balaji Auto Spares & Service', subType: 'Auto Spare Parts', emoji: '🏍️',
+  address: '27, Velachery Main Road, Velachery, Chennai 600042', phone: '+91 98765 66660', email: 'balajiauto@gmail.com', gstin: '33BLJAU4321C1Z5',
+  invoicePrefix: 'AS-', defaultTax: 'tax_18', footer: 'Genuine parts · Warranty as per company · Thank you!', seed: 7272, ean: '8907000',
+  taxInclusive: true, modules: { customerOrders: true, mobileOrders: true },
+  categories: [['oil', 'Engine Oil & Lubes', '🛢️', '2710'], ['battery', 'Batteries', '🔋', '8507'], ['tyre', 'Tyres & Tubes', '🛞', '4011'], ['brake', 'Brakes', '🛑', '8714'],
+    ['chain', 'Chain & Sprocket', '⛓️', '8714'], ['elec', 'Lights & Electricals', '💡', '8512'], ['filter', 'Filters & Plugs', '🔧', '8421'], ['acc', 'Helmets & Accessories', '🪖', '6506'], ['labour', 'Labour & Service', '🛠️', '9987']],
+  items: [
+    { name: 'Engine Oil 20W-40 (1 L)', cat: 'oil', price: 420, cost: 345, unit: 'bottle', tax: 18, emoji: '🛢️', barcode: true, pop: 8, low: 12, mrp: 450 },
+    { name: 'Engine Oil 10W-30 Scooter (800 ml)', cat: 'oil', price: 360, cost: 290, unit: 'bottle', tax: 18, emoji: '🛢️', barcode: true, pop: 6, low: 10, mrp: 380 },
+    { name: 'Gear Oil (Car) 1 L', cat: 'oil', price: 520, cost: 420, unit: 'bottle', tax: 18, emoji: '🛢️', barcode: true, pop: 2, low: 4, mrp: 550 },
+    { name: 'Brake Fluid DOT 3 (250 ml)', cat: 'oil', price: 160, cost: 118, unit: 'bottle', tax: 18, emoji: '🧴', barcode: true, pop: 3, mrp: 175 },
+    { name: 'Coolant 1 L', cat: 'oil', price: 290, cost: 220, unit: 'bottle', tax: 18, emoji: '🧴', barcode: true, pop: 2, mrp: 310 },
+    { name: 'Bike Battery 12V 5Ah', cat: 'battery', price: 1650, cost: 1320, unit: 'pc', tax: 18, emoji: '🔋', barcode: true, pop: 2, low: 4, mrp: 1790 },
+    { name: 'Scooter Battery 12V 4Ah', cat: 'battery', price: 1450, cost: 1150, unit: 'pc', tax: 18, emoji: '🔋', barcode: true, pop: 2, low: 4, mrp: 1590 },
+    { name: 'Car Battery 35Ah', cat: 'battery', price: 4900, cost: 4050, unit: 'pc', tax: 18, emoji: '🔋', barcode: true, pop: 1, low: 2, mrp: 5400 },
+    { name: 'Bike Tyre 2.75-18 (Rear)', cat: 'tyre', price: 1850, cost: 1520, unit: 'pc', tax: 18, emoji: '🛞', barcode: true, pop: 2, low: 4, mrp: 1990 },
+    { name: 'Scooter Tyre 90/100-10', cat: 'tyre', price: 1550, cost: 1260, unit: 'pc', tax: 18, emoji: '🛞', barcode: true, pop: 2, low: 4, mrp: 1690 },
+    { name: 'Tube 2.75-18', cat: 'tyre', price: 320, cost: 240, unit: 'pc', tax: 18, emoji: '⭕', barcode: true, pop: 3, mrp: 350 },
+    { name: 'Brake Shoe (Bike)', cat: 'brake', price: 220, cost: 150, unit: 'set', tax: 18, emoji: '🛑', barcode: true, pop: 5, mrp: 240 },
+    { name: 'Disc Brake Pad (Front)', cat: 'brake', price: 380, cost: 270, unit: 'set', tax: 18, emoji: '🛑', barcode: true, pop: 3, mrp: 420 },
+    { name: 'Clutch Cable', cat: 'brake', price: 180, cost: 120, unit: 'pc', tax: 18, emoji: '〰️', barcode: true, pop: 3, mrp: 199 },
+    { name: 'Chain Sprocket Kit (Splendor)', cat: 'chain', price: 1150, cost: 880, unit: 'set', tax: 18, emoji: '⛓️', barcode: true, pop: 2, low: 3, mrp: 1250 },
+    { name: 'Chain Lube Spray', cat: 'chain', price: 280, cost: 205, unit: 'pc', tax: 18, emoji: '🧴', barcode: true, pop: 2, mrp: 299 },
+    { name: 'Headlight Bulb 12V 35W', cat: 'elec', price: 140, cost: 92, unit: 'pc', tax: 18, emoji: '💡', barcode: true, pop: 4, mrp: 150 },
+    { name: 'LED Indicator (pair)', cat: 'elec', price: 350, cost: 240, unit: 'pair', tax: 18, emoji: '🟠', barcode: true, pop: 2, mrp: 399 },
+    { name: 'Horn 12V', cat: 'elec', price: 320, cost: 230, unit: 'pc', tax: 18, emoji: '📯', barcode: true, pop: 2, mrp: 350 },
+    { name: 'Spark Plug', cat: 'filter', price: 130, cost: 88, unit: 'pc', tax: 18, emoji: '⚡', barcode: true, pop: 6, mrp: 140 },
+    { name: 'Air Filter (Bike)', cat: 'filter', price: 190, cost: 130, unit: 'pc', tax: 18, emoji: '🌀', barcode: true, pop: 4, mrp: 210 },
+    { name: 'Oil Filter (Car)', cat: 'filter', price: 290, cost: 205, unit: 'pc', tax: 18, emoji: '🔧', barcode: true, pop: 2, mrp: 320 },
+    { name: 'Half-face Helmet (ISI)', cat: 'acc', price: 950, cost: 690, unit: 'pc', tax: 18, emoji: '🪖', barcode: true, pop: 2, low: 4, mrp: 1100 },
+    { name: 'Seat Cover (Bike)', cat: 'acc', price: 450, cost: 300, unit: 'pc', tax: 18, emoji: '💺', barcode: true, pop: 2, mrp: 499 },
+    { name: 'Mobile Holder', cat: 'acc', price: 350, cost: 220, unit: 'pc', tax: 18, emoji: '📱', barcode: true, pop: 2, mrp: 399 },
+    { name: 'Bike General Service (labour)', cat: 'labour', price: 450, cost: 0, unit: 'service', tax: 18, emoji: '🛠️', service: true, pop: 5 },
+    { name: 'Oil Change (labour)', cat: 'labour', price: 100, cost: 0, unit: 'service', tax: 18, emoji: '🛢️', service: true, pop: 5 },
+    { name: 'Puncture Repair (tubeless)', cat: 'labour', price: 150, cost: 0, unit: 'service', tax: 18, emoji: '🛞', service: true, pop: 4 },
+    { name: 'Fitting Charge', cat: 'labour', price: 80, cost: 0, unit: 'service', tax: 18, emoji: '🔧', service: true, pop: 4 },
+    { name: 'Water Wash (Bike)', cat: 'labour', price: 120, cost: 0, unit: 'service', tax: 18, emoji: '🧽', service: true, pop: 3 },
+  ],
+  users: [
+    { id: 'usr_auto_owner', name: 'Balaji R', phone: '9876566661', role: 'Owner' },
+    { id: 'usr_auto_cash', name: 'Vignesh', phone: '9876566662', role: 'Cashier' },
+  ],
+  customers: [{ name: 'Speed Two Wheelers (Mechanic)', credit: true, notes: 'Mechanic — 15 days credit' }, { name: 'Ravi Car Care', credit: true, notes: 'Garage — pays monthly' },
+    { name: 'Arun' }, { name: 'Deepak' }, { name: 'Sathish' }, { name: 'Prakash' }],
+  perDay: [12, 20], linesPerBill: [1, 4], deliveryShare: 0, creditShare: 0.18,
+  expenses: [
+    { notes: 'Distributor — oils and filters', category: 'purchase', min: 15000, max: 28000, every: 5 },
+    { notes: 'Parts pickup — courier', category: 'transport', min: 150, max: 350, every: 2 },
+    { notes: 'Shop electricity', category: 'electricity', min: 2200, max: 2800, every: 30 },
+  ],
+}
+
+/** Vegetable shop and vehicle spare-parts shop demos. */
+export function addVegAutoDemos(d: DB) {
+  buildShop(d, VEGETABLES)
+  buildShop(d, AUTO_PARTS)
+}
+export const VEG_AUTO_DEMO_IDS = [VEGETABLES.id, AUTO_PARTS.id]
 
 /** Silk & saree demo shop (QR price stickers, MRP + discount, salespeople). */
 export function addTextileDemo(d: DB) {

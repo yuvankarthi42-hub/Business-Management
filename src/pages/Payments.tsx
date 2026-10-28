@@ -8,6 +8,7 @@ import { api } from '@/data'
 import { fmtDateTime, money, rangeFor, type RangeKey } from '@/lib/format'
 import { METHOD_COLOR } from '@/lib/chart'
 import { OrderDetail } from './Orders'
+import { Pager, usePage } from '@/components/Pager'
 
 export default function Payments() {
   const { t, me } = useApp()
@@ -27,6 +28,7 @@ export default function Payments() {
   }, [pays])
   const grand = Object.values(totals).reduce((a, v) => a + (v ?? 0), 0)
 
+  const pg = usePage(list, [range, method])
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader title={t('payment', true)} subtitle={`${money(grand)} received`}
@@ -46,10 +48,10 @@ export default function Payments() {
           </Select>
         </div>
         {pays && !list.length ? <EmptyState icon={CreditCard} title="No payments in this period" /> : (
-          <Table>
+          <Table footer={<Pager p={pg} />}>
             <thead><tr><Th>Time</Th>{showBranch && <Th>Branch</Th>}<Th>{t('invoice')}</Th><Th className="hidden sm:table-cell">{t('customer')}</Th><Th>Method</Th><Th className="hidden md:table-cell">Type</Th><Th className="text-right">Amount</Th></tr></thead>
             <tbody>
-              {list.slice(0, 300).map((p) => {
+              {pg.rows.map((p) => {
                 const o = orders.find((x) => x.id === p.orderId)
                 return (
                   <tr key={p.id} onClick={() => p.orderId && setOpen(p.orderId)} className="cursor-pointer hover:bg-slate-50">

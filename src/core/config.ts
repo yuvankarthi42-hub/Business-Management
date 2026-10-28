@@ -101,10 +101,10 @@ export const TEMPLATES: BusinessTemplate[] = [
   },
   {
     key: 'retail', category: 'retail', name: 'Retail', emoji: '🛒', examples: 'Grocery, Supermarket, Fancy Store',
-    subTypes: ['Grocery / Maligai', 'Supermarket', 'Fancy Store', 'Electronics', 'Hardware', 'Stationery'],
+    subTypes: ['Grocery / Maligai', 'Supermarket', 'Vegetables & Fruits', 'Fancy Store', 'Electronics', 'Hardware', 'Auto Spare Parts', 'Stationery'],
     terms: {},
     orderTypes: ['counter', 'delivery'],
-    units: ['pc', 'kg', 'g', 'ltr', 'ml', 'pack', 'box', 'dozen', 'mtr', 'ft', 'coil', 'roll', 'set', 'bag', 'pair'],
+    units: ['pc', 'kg', 'g', 'ltr', 'ml', 'pack', 'box', 'dozen', 'bunch', 'mtr', 'ft', 'coil', 'roll', 'set', 'bag', 'pair'],
   },
   {
     // Shown as its own type; saved as a retail business with one of these sub-types (see isTextile).
@@ -116,7 +116,7 @@ export const TEMPLATES: BusinessTemplate[] = [
   },
   {
     key: 'service', category: 'service', name: 'Service', emoji: '✂️', examples: 'Salon, Laundry, Repair',
-    subTypes: ['Salon', 'Laundry', 'Repair', 'Spa', 'Other Services'],
+    subTypes: ['Salon', 'Laundry', 'Repair', 'Vehicle Service / Garage', 'Spa', 'Other Services'],
     terms: {
       product: { singular: 'Service', plural: 'Services' },
       customer: { singular: 'Client', plural: 'Clients' },
@@ -208,11 +208,41 @@ export function isHardware(b: Pick<Business, 'category' | 'subType'>) {
   return b.category === 'retail' && /hardware|electric/i.test(b.subType)
 }
 
+/** Vehicle spare parts and accessories shops (two-wheeler / car): scan-first billing like hardware. */
+export function isAutoParts(b: Pick<Business, 'category' | 'subType'>) {
+  return b.category === 'retail' && /auto|spare|motor|vehicle|tyre|tire/i.test(b.subType)
+}
+
+/** Vegetable and fruit shops: loose items sold by weight, tile billing. */
+export function isVegetableShop(b: Pick<Business, 'category' | 'subType'>) {
+  return b.category === 'retail' && /vegetable|fruit|greens|sabzi|kaikari|kai kari/i.test(b.subType)
+}
+
+/** Two-wheeler / car service garages (service business): labour + parts on one bill. */
+export function isGarage(b: Pick<Business, 'category' | 'subType'>) {
+  return b.category === 'service' && /garage|vehicle|bike|car\b|auto|mechanic|workshop/i.test(b.subType)
+}
+
+/**
+ * Billing defaults when the owner picks a business type at set-up (server and demo app use the same):
+ * the GST rate new items get, whether prices include GST, and modules switched on for that kind of shop.
+ */
+export function setupDefaultsFor(b: Pick<Business, 'category' | 'subType'>) {
+  const parts = isHardware(b) || isAutoParts(b)
+  return {
+    taxRate: parts || isGarage(b) ? 18 : isTextile(b) ? 5 : b.category === 'retail' ? 0 : 5,
+    // MRP / shelf / sticker prices already include GST.
+    taxMode: (isSupermarket(b) || isTextile(b) || isAutoParts(b) ? 'inclusive' : 'exclusive') as 'inclusive' | 'exclusive',
+    // Parts counters take orders on the shop floor and track them in Customer Orders.
+    modules: (parts ? { mobileOrders: true, customerOrders: true } : {}) as Partial<Record<'mobileOrders' | 'customerOrders', boolean>>,
+  }
+}
+
 /** Silk, saree, textile and readymade garment shops: QR price stickers, MRP + discount, salesperson per bill. */
 export const isTextile = isTextileShop
 
 /** Retail shops with the scan-first billing (hold, saved orders) and the Customer Orders board. */
-export const usesRetailPos = (b: Pick<Business, 'category' | 'subType'>) => isSupermarket(b) || isHardware(b) || isTextile(b)
+export const usesRetailPos = (b: Pick<Business, 'category' | 'subType'>) => isSupermarket(b) || isHardware(b) || isAutoParts(b) || isTextile(b)
 
 /** Units sold by weight / volume: open the weight popup and allow decimal quantities. */
 export const WEIGHT_UNITS = ['kg', 'g', 'ltr', 'ml']
@@ -245,24 +275,36 @@ export function productFormFor(b: Pick<Business, 'category' | 'subType'>): Produ
   if (b.category === 'retail') {
     const hardware = /hardware|electric/.test(sub)
     const electronics = /electronic/.test(sub)
+    const auto = isAutoParts(b), veg = isVegetableShop(b)
+    if (veg) {
+      return {
+        namePlaceholder: 'Tomato', showFoodType: false, showKitchen: false, barcodeFirst: false, trackStockByDefault: true, isService: false, showMrp: false,
+        variants: { title: 'Grades / packs', hint: 'e.g. Big / Small, ½ kg pack — each with its own price', placeholder: 'Big' },
+        addOns: null,
+      }
+    }
     return {
-      namePlaceholder: hardware ? 'Modular Switch 6A' : electronics ? 'LED TV 32 inch' : /stationery/.test(sub) ? 'A4 Notebook 200 pages' : /fancy/.test(sub) ? 'Hair Clip Set' : 'Toor Dal 1 kg',
+      namePlaceholder: auto ? 'Engine Oil 20W-40 1 L' : hardware ? 'Modular Switch 6A' : electronics ? 'LED TV 32 inch' : /stationery/.test(sub) ? 'A4 Notebook 200 pages' : /fancy/.test(sub) ? 'Hair Clip Set' : 'Toor Dal 1 kg',
       showFoodType: false, showKitchen: false, barcodeFirst: true, trackStockByDefault: true, isService: false,
-      showMrp: isSupermarket(b),
+      showMrp: isSupermarket(b) || auto,
       variants: {
         title: 'Variants',
-        hint: hardware ? 'e.g. 6A / 16A, 20 mm / 25 mm — each with its own price' : electronics ? 'e.g. 32 inch / 43 inch, Black / White' : 'e.g. 500 g / 1 kg, Small / Large — each with its own price',
-        placeholder: hardware ? '16A' : electronics ? '43 inch' : '1 kg',
+        hint: auto ? 'e.g. Splendor / Activa / Pulsar, Front / Rear — each with its own price' : hardware ? 'e.g. 6A / 16A, 20 mm / 25 mm — each with its own price' : electronics ? 'e.g. 32 inch / 43 inch, Black / White' : 'e.g. 500 g / 1 kg, Small / Large — each with its own price',
+        placeholder: auto ? 'Activa' : hardware ? '16A' : electronics ? '43 inch' : '1 kg',
       },
       addOns: null,
     }
   }
   if (b.category === 'service') {
     return {
-      namePlaceholder: /laundry/.test(sub) ? 'Shirt — wash & iron' : /repair/.test(sub) ? 'Mobile screen replacement' : 'Haircut',
+      namePlaceholder: /garage|vehicle|bike|car|auto|mechanic/.test(sub) ? 'Bike general service' : /laundry/.test(sub) ? 'Shirt — wash & iron' : /repair/.test(sub) ? 'Mobile screen replacement' : 'Haircut',
       showFoodType: false, showKitchen: false, barcodeFirst: false, trackStockByDefault: false, isService: true,
-      variants: { title: 'Options', hint: 'e.g. Short / Long hair, Regular / Express — each with its own price', placeholder: 'Long hair' },
-      addOns: { title: 'Extras', hint: 'Optional extras like Hair wash, Head massage', placeholder: 'Hair wash' },
+      variants: /garage|vehicle|bike|car|auto|mechanic/.test(sub)
+        ? { title: 'Vehicle types', hint: 'e.g. Scooter / Bike / Car — each with its own labour charge', placeholder: 'Bike' }
+        : { title: 'Options', hint: 'e.g. Short / Long hair, Regular / Express — each with its own price', placeholder: 'Long hair' },
+      addOns: /garage|vehicle|bike|car|auto|mechanic/.test(sub)
+        ? { title: 'Extras', hint: 'Optional extras like Water wash, Pick-up and drop', placeholder: 'Water wash' }
+        : { title: 'Extras', hint: 'Optional extras like Hair wash, Head massage', placeholder: 'Hair wash' },
     }
   }
   return {

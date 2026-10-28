@@ -6,6 +6,7 @@ import { EXPENSE_LABEL, PAYMENT_LABEL } from '@/core/config'
 import type { Expense, ExpenseCategory, PaymentMethod } from '@/core/types'
 import { api } from '@/data'
 import { fmtDate, money, rangeFor, toDateInput, type RangeKey } from '@/lib/format'
+import { Pager, usePage } from '@/components/Pager'
 
 const ICON: Record<ExpenseCategory, string> = { purchase: '🛒', salary: '👥', rent: '🏠', electricity: '⚡', transport: '🛺', maintenance: '🔧', other: '📦' }
 
@@ -28,6 +29,7 @@ export default function Expenses() {
   }, [expenses]) // eslint-disable-line react-hooks/exhaustive-deps
   const list = (expenses ?? []).filter((e) => cat === 'all' || e.category === cat)
 
+  const pg = usePage(list, [range, cat])
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader title={t('expense', true)} subtitle={`${money(total)} spent`}
@@ -53,10 +55,10 @@ export default function Expenses() {
         <Card className="lg:col-span-2">
           {cat !== 'all' && <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2 text-sm">Showing {EXPENSE_LABEL[cat]} <button className="text-brand-600" onClick={() => setCat('all')}>Show all</button></div>}
           {expenses && !list.length ? <EmptyState icon={Wallet} title={`No ${t('expense', true).toLowerCase()} recorded`} action={<Button icon={Plus} onClick={() => setEdit({})}>Add {t('expense')}</Button>} /> : (
-            <Table>
+            <Table footer={<Pager p={pg} />}>
               <thead><tr><Th>Date</Th>{me?.isAll && <Th>Branch</Th>}<Th>Category</Th><Th className="hidden sm:table-cell">Notes</Th><Th className="hidden md:table-cell">Paid via</Th><Th className="hidden lg:table-cell">By</Th><Th className="text-right">Amount</Th><Th /></tr></thead>
               <tbody>
-                {list.map((e) => (
+                {pg.rows.map((e) => (
                   <tr key={e.id} className={e.voided ? 'opacity-50' : 'hover:bg-slate-50'}>
                     <Td className="whitespace-nowrap text-slate-500">{fmtDate(e.date)}</Td>
                     {me?.isAll && <Td><Badge>{me.branches.find((b) => b.id === e.branchId)?.name ?? '—'}</Badge></Td>}

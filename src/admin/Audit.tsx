@@ -5,6 +5,7 @@ import { useData } from '@/app/AppContext'
 import { Badge, Card, Chips, EmptyState, SearchInput, Table, Td, Th } from '@/components/ui'
 import { api } from '@/data'
 import { fmtDateTime } from './shared'
+import { Pager, usePage } from '@/components/Pager'
 
 const LABEL: Record<string, string> = { feature: 'Feature release', support_start: 'Support view', support_end: 'Support ended', admin_create: 'Admin added', admin_update: 'Admin changed', create: 'Account created', update: 'Details updated', password: 'Password reset', renew: 'Validity changed', branch_limit: 'Branch limit', activate: 'Activated', deactivate: 'Deactivated', delete: 'Deleted', settings: 'Pricing', login: 'Login' }
 const TONE: Record<string, 'blue' | 'green' | 'amber' | 'red' | 'slate' | 'violet'> = { support_start: 'violet', admin_create: 'blue', create: 'blue', renew: 'green', activate: 'green', branch_limit: 'violet', deactivate: 'amber', delete: 'red' }
@@ -15,6 +16,7 @@ export default function AdminAudit() {
   const [q, setQ] = useState('')
   const [kind, setKind] = useState('all')
   const list = useMemo(() => rows.filter((r) => (kind === 'all' || r.action === kind) && (!q || `${r.businessName} ${r.detail} ${r.adminName}`.toLowerCase().includes(q.toLowerCase()))), [rows, q, kind])
+  const pg = usePage(list, [q, kind])
   return (
     <div>
       <h1 className="text-xl font-semibold">Audit log</h1>
@@ -25,10 +27,10 @@ export default function AdminAudit() {
           <Chips value={kind} onChange={setKind} options={[{ value: 'all', label: 'All' }, ...['create', 'renew', 'branch_limit', 'password', 'deactivate', 'activate', 'delete', 'update', 'support_start', 'admin_create', 'admin_update', 'feature', 'settings'].map((k) => ({ value: k, label: LABEL[k] }))]} />
         </div>
         {!list.length ? <EmptyState icon={History} title="No admin actions yet" /> : (
-          <Table>
+          <Table footer={<Pager p={pg} />}>
             <thead><tr><Th>When</Th><Th>Action</Th><Th>Customer</Th><Th>Detail</Th><Th>By</Th></tr></thead>
             <tbody>
-              {list.map((r) => (
+              {pg.rows.map((r) => (
                 <tr key={r.id}>
                   <Td className="whitespace-nowrap text-sm text-slate-600">{fmtDateTime(r.at)}</Td>
                   <Td><Badge tone={TONE[r.action] ?? 'slate'}>{LABEL[r.action] ?? r.action}</Badge></Td>

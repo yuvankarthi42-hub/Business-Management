@@ -1,6 +1,7 @@
 import '../src/modules/admin/platform'
 import '../src/modules/export'
 import { test } from 'node:test'
+import { DEFAULT_PLANS, monthlyValue, type PlanKey, type PlanPrices } from '../../src/core/plans'
 import assert from 'node:assert/strict'
 import { withShop } from './fixtures'
 
@@ -65,7 +66,8 @@ test('admin team: create, roles, last super, deactivate', async () => {
     const { token: mgrToken } = await s.call<{ token: string }>('admin.login', 'mgr1', 'mgr12345')
     s.setToken(mgrToken)
     await assert.rejects(s.call('admin.team'), /can’t do this/)
-    await assert.rejects(s.call('admin.updateSettings', { pricePerBranchMonth: 1 }), /can’t do this/)
+    await assert.rejects(s.call('admin.updateSettings', { plans: { food: { month: 1, year: 1, extraBranch: 1 } } }), /can’t do this/)
+    await assert.rejects(s.call('admin.setCustomPrice', s.businessId, { month: 1, year: 1, extraBranch: 1 }), /can’t do this/)
 
     s.setToken(s.adminToken)
     // only super: can't demote yourself (last super), can't change own role
@@ -161,7 +163,9 @@ test('usage report, settings, audit, export', async () => {
     assert.equal(row.sales30, 100)
     assert.ok(row.lastBillAt && row.lastLoginAt)
     assert.equal(row.branches, 1)
-    assert.equal(row.monthlyPrice, 3 * 499)
+    // Price by business type: the first branch + 2 extra branches.
+    const plan = (await s.call<{ plan: PlanKey }>('admin.customer', s.businessId)).plan
+    assert.equal(row.monthlyPrice, monthlyValue(DEFAULT_PLANS[plan], 3))
     assert.equal(row.state, 'active')
     assert.equal(u.months.length, 12)
     assert.equal(u.months[11].customers, 1)
@@ -170,16 +174,16 @@ test('usage report, settings, audit, export', async () => {
     assert.equal(u.summary.billing7, 1)
     assert.equal(u.summary.inactive14, 0)
     assert.equal(u.summary.logins7, 1)
-    assert.equal(u.summary.mrr, 3 * 499)
+    assert.equal(u.summary.mrr, monthlyValue(DEFAULT_PLANS[plan], 3))
     assert.equal(u.summary.thisMonth, u.summary.last12)
 
     // settings
-    assert.equal((await s.call<{ pricePerBranchMonth: number }>('admin.settings')).pricePerBranchMonth, 499)
-    await assert.rejects(s.call('admin.updateSettings', { pricePerBranchMonth: -1 }), /valid price/)
-    await assert.rejects(s.call('admin.updateSettings', { pricePerBranchMonth: '5' }), /valid price/)
-    const set = await s.call<{ pricePerBranchMonth: number; features: Record<string, Flag> }>('admin.updateSettings', { pricePerBranchMonth: 599.4 })
-    assert.equal(set.pricePerBranchMonth, 599)
-    assert.equal((await s.call<U>('admin.usage')).summary.mrr, 3 * 599)
+    assert.deepEqual((await s.call<{ plans: PlanPrices }>('admin.settings')).plans, DEFAULT_PLANS)
+    await assert.rejects(s.call('admin.updateSettings', { plans: { [plan]: { month: -1, year: 10, extraBranch: 1 } } }), /valid prices/)
+    await assert.rejects(s.call('admin.updateSettings', { plans: { [plan]: { month: '5', year: 10, extraBranch: 1 } } }), /valid prices/)
+    const set = await s.call<{ plans: PlanPrices; features: Record<string, Flag> }>('admin.updateSettings', { plans: { [plan]: { month: 599.4, year: 5990, extraBranch: 300 } } })
+    assert.deepEqual(set.plans[plan], { month: 599, year: 5990, extraBranch: 300 })
+    assert.equal((await s.call<U>('admin.usage')).summary.mrr, 599 + 2 * 300)
 
     // export (admin)
     const bundle = await s.call<Bundle>('admin.exportCustomer', s.businessId)
@@ -226,7 +230,7 @@ test('usage report, settings, audit, export', async () => {
     const log = await s.call<{ action: string; detail: string }[]>('admin.audit', 500)
     assert.equal(log[0].action, 'export')
     assert.match(log[0].detail, /Exported \d+ rows, 1 photos/)
-    assert.ok(log.some((x) => x.action === 'settings' && x.detail === 'Price per branch / month 499 → 599'))
+    assert.ok(log.some((x) => x.action === 'settings' && /^Pricing · .+: ₹599\/month, ₹5,990\/year, extra branch ₹300\/month$/.test(x.detail)))
     assert.equal((await s.call<unknown[]>('admin.audit', 1)).length, 1)
   } finally { s.close() }
 })

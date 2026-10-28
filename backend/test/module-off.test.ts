@@ -87,7 +87,7 @@ test('QR ordering / Specials off: the public menu and TV board read no catalogue
     await assert.rejects(pub('public.placeOrder', s.businessId, { type: 'takeaway', guest: { name: 'A', phone: '9800000001' }, items: [{ productId: tea.id, qty: 1, addOnIds: [] }] }), /not available/)
 
     // A bill while QR is off: no tracking stamp in the shared cache.
-    const ver = () => s.env.shared.get(`trkv:${s.businessId}`)
+    const ver = () => s.env.shared!.get(`trkv:${s.businessId}`)
     const v0 = await ver()
     await s.call('orders.checkout', draft([line(tea)]), [{ method: 'cash', amount: 20 }])
     assert.equal(await ver(), v0, 'no tracking work while QR ordering is off')

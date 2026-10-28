@@ -12,7 +12,7 @@ import { define, userRead } from '../core/registry'
 import type { Row, Where } from '../db/types'
 import { loadProducts, wholesaleList } from '../domain/catalog'
 import { customerFrom, loadOrders, paymentFrom, selectIn } from '../domain/orders'
-import { bizDay, bizDayStart, E, moduleOn, fromMilli, fromMinor, nameOf, str, strOrNull } from '../domain/util'
+import { bizDay, bizDayStart, E, moduleOn, fromMilli, fromMinor, nameOf, selectOlder, str, strOrNull } from '../domain/util'
 import { categoryNames, expenseFrom } from './ops'
 
 /** The app's `Summary` (src/data/api.ts). */
@@ -286,9 +286,10 @@ define('reports', {
 })
 
 define('audit', {
-  list: userRead(async (c, limit = 50) => {
+  /** `before`: the last entry the screen has → the next older ones ("Load older"). */
+  list: userRead(async (c, limit = 50, before?: unknown) => {
     const n = Math.min(500, Math.max(1, Math.floor(Number(limit)) || 50))
-    const rows = await c.db.select('audit_logs', { where: { business_id: c.businessId }, orderBy: [['CREATEDTIME', 'DESC'], ['ROWID', 'DESC']], limit: n })
+    const rows = await selectOlder(c, 'audit_logs', { business_id: c.businessId }, before, n)
     const users = await selectIn(c, 'users', 'ROWID', rows.map((r) => str(r.user_id)).filter(Boolean), { business_id: c.businessId })
     const names = new Map(users.map((u: Row) => [u.ROWID, str(u.name)]))
     return rows.map((a) => ({

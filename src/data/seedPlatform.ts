@@ -1,5 +1,6 @@
 // Product admin + customer subscriptions for the demo data.
-import { addMonths, endOfDay, periodAmount } from '@/core/subscription'
+import { addMonths, endOfDay } from '@/core/subscription'
+import { planAmount, plansFrom, priceFor } from '@/core/plans'
 import type { Business } from '@/core/types'
 import type { DB } from './db'
 
@@ -9,6 +10,8 @@ const DEMO_PLANS: Record<string, { username: string; startDaysAgo: number; month
   biz_murugan_hw: { username: 'murugan', startDaysAgo: 24, months: 1 }, // expires in a few days
   biz_sweetspot: { username: 'sweetspot', startDaysAgo: 63, months: 2 }, // already expired → read-only
   biz_kanchi_silks: { username: 'kanchisilks', startDaysAgo: 15, months: 12 },
+  biz_annai_veg: { username: 'annaiveg', startDaysAgo: 10, months: 6 },
+  biz_balaji_auto: { username: 'balajiauto', startDaysAgo: 30, months: 12 },
 }
 export const DEFAULT_PRICE_PER_BRANCH = 499
 
@@ -34,7 +37,8 @@ export function seedPlatform(d: DB) {
       b.status ??= 'active'
       d.subscriptionPeriods.push({
         id: `sub_${b.id}`, businessId: b.id, kind: 'new', startAt: b.subscription.startAt, endAt, months, branches: b.maxBranches,
-        pricePerBranch: d.platform.pricePerBranchMonth, amount: periodAmount(b.maxBranches, d.platform.pricePerBranchMonth, months, b.subscription.startAt, endAt),
+        pricePerBranch: priceFor(plansFrom(d.platform.plans), d.platform.custom, b).price.month,
+        amount: planAmount(priceFor(plansFrom(d.platform.plans), d.platform.custom, b).price, b.maxBranches, months, b.subscription.startAt, endAt),
         note: 'Demo account', createdAt: b.subscription.startAt, createdBy: 'adm_1',
       })
     }

@@ -1,11 +1,12 @@
 // Helpers for the product admin modules.
 import type { AdminAuditLog, Business, SubscriptionPeriod } from '@/core/types'
-import { addMonths, dateInputToEnd, endOfDay, periodAmount, subscriptionState } from '@/core/subscription'
+import { addMonths, dateInputToEnd, endOfDay, subscriptionState } from '@/core/subscription'
+import { planAmount, priceFor } from '@/core/plans'
 import type { AdminSession, Ctx } from '../../core/context'
 import { ApiError } from '../../core/errors'
 import type { Row } from '../../db/types'
 import { loginFree } from '../../domain/directory'
-import { pricePerBranch } from '../../domain/session'
+import { loadPricing, type Pricing } from '../../domain/session'
 import { LOGO_EMOJI as LOGO } from '../../domain/business'
 import { code, E, fromMinor, nameOf, str, strOrNull, toMinor } from '../../domain/util'
 
@@ -37,11 +38,17 @@ export function periodFor(v: Validity, from: Date) {
   return { startAt: start.toISOString(), endAt, months: null as number | null }
 }
 
-export async function addPeriod(c: Ctx, a: AdminSession, businessId: string, branches: number, kind: SubscriptionPeriod['kind'], startAt: string, endAt: string, months: number | null, note: string) {
-  const price = await pricePerBranch(c.platform)
+/** This customer's price (their own, or their business type's) from a businesses row. */
+export function customerPrice(pricing: Pricing, r: Row) {
+  return priceFor(pricing.plans, pricing.custom, { id: r.ROWID, category: nameOf(E.BusinessCategory, r.category) as Business['category'], subType: str(r.sub_type) })
+}
+
+/** A paid period at this customer's price. `price_per_branch` keeps the monthly price it was charged at. */
+export async function addPeriod(c: Ctx, a: AdminSession, biz: Row, branches: number, kind: SubscriptionPeriod['kind'], startAt: string, endAt: string, months: number | null, note: string) {
+  const { price } = customerPrice(await loadPricing(c.platform), biz)
   await c.platform.insert('subscription_periods', {
-    business_id: businessId, kind: code(E.PeriodKind, kind), start_at: startAt, end_at: endAt, months, branches,
-    price_per_branch_minor: toMinor(price) ?? 0, amount_minor: toMinor(periodAmount(branches, price, months, startAt, endAt)) ?? 0,
+    business_id: biz.ROWID, kind: code(E.PeriodKind, kind), start_at: startAt, end_at: endAt, months, branches,
+    price_per_branch_minor: toMinor(price.month) ?? 0, amount_minor: toMinor(planAmount(price, branches, months, startAt, endAt)) ?? 0,
     note: note.trim().slice(0, 255), admin_id: a.id,
   })
 }

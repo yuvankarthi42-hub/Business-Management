@@ -1,4 +1,5 @@
 import type { FeatureFlags } from './features'
+import type { PlanPrice, PlanPrices } from './plans'
 import type { WaLang, WaTemplateKind } from './whatsapp'
 // Common core domain. Every entity uses generic names (Product, Customer, Order...)
 // and the UI maps them to business-specific words via terminology config.
@@ -836,8 +837,14 @@ export interface AdminAuditLog {
 }
 
 export interface PlatformSettings {
-  /** Price per branch per month (₹). Customer price = branches × months × this. */
-  pricePerBranchMonth: number
+  /** The old single price per branch per month (before price lists by business type). Not used for new periods. */
+  pricePerBranchMonth?: number
+  /** Price list of each business type (Admin → Pricing); missing types use the defaults (core/plans.ts). */
+  plans?: PlanPrices
+  /** Customers with their own price, by business id (the demo app keeps them here; the server in the same setting). */
+  custom?: Record<string, PlanPrice>
+  /** In the settings answer: how many customers have their own price. */
+  customPrices?: number
   /** Feature release flags (off / selected customers / all). */
   features?: FeatureFlags
   /** Renewal reminders sent to customers before their subscription ends. */

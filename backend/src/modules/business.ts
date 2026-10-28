@@ -1,7 +1,7 @@
 // Business settings, sign-up setup, branches, roles and staff logins.
 import { COUNTRIES, normalizePhone } from '@/core/phone'
 import { branchLimitMessage } from '@/core/subscription'
-import { isHardware, isSupermarket, isTextile } from '@/core/config'
+import { setupDefaultsFor } from '@/core/config'
 import { cleanStickers, stickerSettings } from '@/core/stickers'
 import { cleanGstin, GST_STATES, gstinError } from '@/core/gst'
 import { cleanLoyalty, loyaltyOf } from '@/core/loyalty'
@@ -175,13 +175,14 @@ define('business', {
   }) => {
     if (!String(input.name ?? '').trim()) throw new ApiError('Enter your business name')
     const probe = { category: input.category, subType: input.subType }
-    const modules = { ...input.modules, ...(isHardware(probe) ? { mobileOrders: true, customerOrders: true } : {}) }
+    const defaults = setupDefaultsFor(probe)
+    const modules = { ...input.modules, ...defaults.modules }
     await c.platform.update('businesses', c.businessId, { name: input.name.trim().slice(0, 150), category: code(E.BusinessCategory, input.category), sub_type: String(input.subType).slice(0, 60) })
     await putSetting(c.db, c.businessId, 'modules', modules, c.userId)
     await putSetting(c.db, c.businessId, 'terminology', input.terminology, c.userId)
-    // MRP / shelf prices include GST in supermarkets and textile shops (MRP on the sticker is what the customer pays).
-    await saveBilling(c, { orderTypes: input.orderTypes, taxMode: isSupermarket(probe) || isTextile(probe) ? 'inclusive' : 'exclusive' })
-    await setDefaultTaxByRate(c, isHardware(probe) ? 18 : isTextile(probe) ? 5 : input.category === 'retail' ? 0 : 5)
+    // MRP / shelf prices include GST in supermarkets, spare-parts and textile shops (core/config.ts setupDefaultsFor).
+    await saveBilling(c, { orderTypes: input.orderTypes, taxMode: defaults.taxMode })
+    await setDefaultTaxByRate(c, defaults.taxRate)
 
     // Categories: update kept ones, add new ones, remove the ones taken out of the list.
     const cats = await c.db.select('categories', { where: { business_id: c.businessId } })

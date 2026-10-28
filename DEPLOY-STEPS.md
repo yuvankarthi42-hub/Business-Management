@@ -1,6 +1,7 @@
 # Kadai Kalanjiyam — deploy this release, step by step
 
-Release: branch `release/kadai-kalanjiyam`, commit `bcac956` (25 Oct 2026).
+Release: branch `main`, 28 Oct 2026 — pagination, category photo / emoji picker, new item from a purchase bill,
+prices by business type (plus a customer's own price), Vegetables & Fruits / Auto Spare Parts / Vehicle Service types.
 All steps are in the **Catalyst console** (no command-line tools needed on the server side).
 
 **Zips (project folder):**
@@ -10,9 +11,15 @@ All steps are in the **Catalyst console** (no command-line tools needed on the s
 | `api.zip` | Functions → `api` (Advanced I/O) | Yes |
 | `daily.zip` | Functions → `daily` (Cron) | Yes |
 | `web-prod.zip` | Slate → web app | Yes |
-| `events.zip` | AppSail → `events` | Optional (live updates) |
+| `events.zip` | AppSail → `events` | **Optional** — skip it. Only for live updates (Step 6), and not changed in this release |
 
-Previous zips for rollback: `previous-zips-2026-10-21/`.
+**`events.zip` is optional:** the app works fully without it (screens check for changes every 30–60 s). Upload it only if
+you already run the event hub on AppSail, or when you have about 15+ shops (Step 6).
+
+**No database changes in this release.** After deploying, open **Admin → Pricing**, check the prices
+(₹399 / ₹799 / ₹999 by business type) and press **Save prices**.
+
+Previous zips for rollback: `previous-zips-2026-10-28/` (older: `previous-zips-2026-10-21/`).
 
 Replace `<api-url>` below with your API address, e.g. `https://billpoodum-60091831475.development.catalystserverless.in/server/api`.
 

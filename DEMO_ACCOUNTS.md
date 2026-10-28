@@ -29,6 +29,8 @@ approved); turn the feature on for FreshMart to see the Send buttons straight aw
 | Sri Murugan Hardware | `murugan` | Expires in a few days (warning banner) |
 | Sweet Spot Bakery | `sweetspot` | **Expired → read-only** (renew it from the admin dashboard) |
 | Kanchi Pattu Maaligai | `kanchisilks` | Active · 1 year |
+| Annai Fresh Vegetables & Fruits | `annaiveg` | Active · 6 months |
+| Sri Balaji Auto Spares & Service | `balajiauto` | Active · 1 year |
 
 ## 🍔 Food Corner — Restaurant & Fast Food (3 branches)
 
@@ -90,6 +92,29 @@ tools, paints, plumbing, screws — 18 % GST, contractor customers on credit, 14
 bridal silk, cotton and georgette sarees, blouses (sizes 36–42), dhotis and kids' pattu pavadai.
 MRP with 0–20 % discount, in-store codes for QR price stickers (`2000000000015` = first item),
 GST 5 % included in MRP, salesperson on most bills, 14 days of sales.
+
+## 🥬 Annai Fresh Vegetables & Fruits — Retail · Vegetables & Fruits
+
+| Name | Mobile (login) | Role |
+|---|---|---|
+| Selvi Rajan | 9876555551 | Owner |
+| Mani | 9876555552 | Cashier |
+
+28 items sold by kg, bunch, dozen or piece — tomato, onion, potato, greens, coriander and curry leaves, gourds,
+fruits, bananas, banana leaf. No GST (fresh produce), tile billing with loose quantities (0.25 / 0.5 kg), hotel and
+mess customers on weekly credit, a morning market purchase every day, 14 days of sales.
+
+## 🏍️ Sri Balaji Auto Spares & Service — Retail · Auto Spare Parts
+
+| Name | Mobile (login) | Role |
+|---|---|---|
+| Balaji R | 9876566661 | Owner |
+| Vignesh | 9876566662 | Cashier |
+
+30 items: engine oils, batteries, tyres and tubes, brake shoes and pads, chain sprocket kits, bulbs, spark plugs,
+filters, helmets and accessories — with barcodes, MRP and HSN, GST 18 % included in the price — plus labour charges
+(general service, oil change, puncture, fitting, water wash) on the same bill. Mechanic and garage customers on
+credit, scan-first billing, Customer Orders, 14 days of sales.
 
 ## Try barcode billing
 

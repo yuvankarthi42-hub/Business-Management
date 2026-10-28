@@ -8,11 +8,12 @@ import { assertPassword, hashPassword } from '../../core/passwords'
 import { adminRead, adminWrite, define } from '../../core/registry'
 import { signToken } from '../../core/tokens'
 import type { Row } from '../../db/types'
-import { bumpEpoch, featureFlags, pricePerBranch, type UserClaims } from '../../domain/session'
+import { bumpEpoch, featureFlags, loadPricing, type UserClaims } from '../../domain/session'
+import { cleanPlanPrice, monthlyValue, PLAN_KEYS, PLAN_LABEL, type PlanPrice, type PlanKey } from '@/core/plans'
 import { code, E, fromMinor, getPlatformSetting, nameOf, putPlatformSetting, r2, str, strOrNull } from '../../domain/util'
 import { acrossShops } from '../../domain/directory'
 import { adminView } from './auth'
-import { adminLog, adminLogFrom, businessLite, checkUsernameFormat, findBiz, ownerOf } from './shared'
+import { adminLog, adminLogFrom, businessLite, checkUsernameFormat, customerPrice, findBiz, ownerOf } from './shared'
 
 export const SUPPORT_TOKEN_TTL = 2 * 3600
 const DAY = 86_400_000
@@ -81,7 +82,7 @@ async function usage(c: Ctx) {
     acrossShops(c, ids, 'orders', { where: { ...completed, billed_at: { gte: iso(now - 7 * DAY) } }, fns: { n: ['COUNT', 'ROWID'] } }),
     acrossShops(c, ids, 'orders', { where: completed, fns: { last: ['MAX', 'billed_at'] } }),
     c.platform.select('subscription_periods', { where: { CREATEDTIME: { gte: firstMonth } } }),
-    pricePerBranch(c.platform),
+    loadPricing(c.platform),
   ])
   const of = (rows: Record<string, unknown>[], id: string) => rows.find((x) => String(x.business_id) === id)
   const rows = businesses.map((r) => {
@@ -95,7 +96,7 @@ async function usage(c: Ctx) {
       lastBillAt: lastBill ? new Date(lastBill).toISOString() : null,
       lastLoginAt: strOrNull(r.last_login_at),
       branches: Number(r.branches_used ?? 0),
-      monthlyPrice: b.maxBranches * price,
+      monthlyPrice: monthlyValue(customerPrice(price, r).price, b.maxBranches),
     }
   })
   for (const p of periods) { const m = months.find((x) => x.key === p.CREATEDTIME.slice(0, 7)); if (m) m.amount = r2(m.amount + fromMinor(p.amount_minor)) }
@@ -116,7 +117,12 @@ async function usage(c: Ctx) {
   }
 }
 
-const platformSettings = async (c: Ctx) => ({ pricePerBranchMonth: await pricePerBranch(c.platform), features: await featureFlags(c.platform) })
+const platformSettings = async (c: Ctx) => {
+  const [pricing, features] = await Promise.all([loadPricing(c.platform), featureFlags(c.platform)])
+  return { plans: pricing.plans, customPrices: Object.keys(pricing.custom).length, features }
+}
+const rupee = (x: number) => `₹${x.toLocaleString('en-IN')}`
+const priceText = (p: PlanPrice) => `${rupee(p.month)}/month, ${rupee(p.year)}/year, extra branch ${rupee(p.extraBranch)}/month`
 
 define('admin', {
   // ---- Feature releases ----
@@ -228,16 +234,36 @@ define('admin', {
 
   // ---- Platform settings & audit ----
   settings: adminRead('customers.view', async (c) => platformSettings(c)),
-  updateSettings: adminWrite('pricing.manage', async (c, patch: { pricePerBranchMonth: number }) => {
+  /** The price list of each business type. Used for new subscriptions and renewals; past payments keep their price. */
+  updateSettings: adminWrite('pricing.manage', async (c, patch: { plans: Partial<Record<PlanKey, PlanPrice>> }) => {
     const a = c.requireAdmin()
-    const p = Number(patch?.pricePerBranchMonth)
-    if (typeof patch?.pricePerBranchMonth !== 'number' || !Number.isFinite(p) || !(p >= 0) || p > 1_000_000) throw new ApiError('Enter a valid price')
-    const before = await pricePerBranch(c.platform)
+    const before = (await loadPricing(c.platform)).plans
+    const plans = { ...before }
+    for (const k of PLAN_KEYS) {
+      if (patch?.plans?.[k] === undefined) continue
+      const p = cleanPlanPrice(patch.plans[k])
+      if (!p) throw new ApiError(`Enter valid prices for ${PLAN_LABEL[k].name}`)
+      plans[k] = p
+    }
     const cur = await getPlatformSetting<Record<string, unknown>>(c.platform, 'pricing', {})
-    const next = Math.round(p)
-    await putPlatformSetting(c.platform, 'pricing', { ...cur, pricePerBranchMonth: next }, a.id)
-    await adminLog(c, a, 'settings', null, `Price per branch / month ${before} → ${next}`)
+    await putPlatformSetting(c.platform, 'pricing', { ...cur, plans }, a.id)
+    const changed = PLAN_KEYS.filter((k) => JSON.stringify(before[k]) !== JSON.stringify(plans[k]))
+    if (changed.length) await adminLog(c, a, 'settings', null, `Pricing · ${changed.map((k) => `${PLAN_LABEL[k].name}: ${priceText(plans[k])}`).join(' · ')}`)
     return platformSettings(c)
+  }),
+  /** A price for this customer only (null = back to their business type's price). From their next renewal. */
+  setCustomPrice: adminWrite('pricing.manage', async (c, id: string, price: PlanPrice | null) => {
+    const a = c.requireAdmin()
+    const r = await findBiz(c, id)
+    const p = price === null ? null : cleanPlanPrice(price)
+    if (price !== null && !p) throw new ApiError('Enter valid prices')
+    const cur = await getPlatformSetting<{ custom?: Record<string, unknown> } & Record<string, unknown>>(c.platform, 'pricing', {})
+    const custom = { ...(cur.custom ?? {}) }
+    if (p) custom[r.ROWID] = p
+    else delete custom[r.ROWID]
+    await putPlatformSetting(c.platform, 'pricing', { ...cur, custom }, a.id)
+    await adminLog(c, a, 'settings', { id: r.ROWID, name: str(r.name) }, p ? `Own price: ${priceText(p)}` : 'Own price removed — business type price again')
+    return customerPrice(await loadPricing(c.platform), r)
   }),
   audit: adminRead('customers.view', async (c, limit = 200) => {
     const n = Math.min(1000, Math.max(1, Math.floor(Number(limit) || 200)))

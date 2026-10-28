@@ -303,7 +303,7 @@ function FeatureExplorer() {
 
 interface Shape { key: string; label: string; sub: string; icon: LucideIcon; nav: [LucideIcon, string][]; terms: [string, string][] }
 const SHAPES: Shape[] = [
-  { key: 'retail', label: 'Retail', sub: 'Supermarket · Silk & textiles · Hardware · Electronics', icon: ShoppingCart,
+  { key: 'retail', label: 'Retail', sub: 'Supermarket · Silk & textiles · Hardware · Vegetables · Auto spares', icon: ShoppingCart,
     nav: [[ReceiptText, 'Billing'], [PackageOpen, 'Customer Orders'], [Tag, 'Products'], [Boxes, 'Inventory'], [Users, 'Customers'], [BarChart3, 'Reports']],
     terms: [['Items called', 'Products'], ['Buyers called', 'Customers'], ['Extras', 'QR price stickers, batches & expiry, wholesale prices']] },
   { key: 'food', label: 'Food', sub: 'Tea shop · Bakery · Fast food · Juice', icon: ChefHat,
@@ -472,7 +472,7 @@ function Rush() {
 
 // ======================================================================= page
 
-const KINDS = ['Tea shops', 'Supermarkets', 'Silk & saree shops', 'Bakeries', 'Restaurants', 'Textiles & garments', 'Salons', 'Hardware stores', 'Juice shops', 'Cafes', 'Sweet stalls', 'Laundries', 'Grocery stores', 'Cloud kitchens', 'Stationery', 'Spas', 'Dhabas', 'Electronics']
+const KINDS = ['Tea shops', 'Supermarkets', 'Silk & saree shops', 'Bakeries', 'Restaurants', 'Textiles & garments', 'Salons', 'Hardware stores', 'Juice shops', 'Cafes', 'Sweet stalls', 'Laundries', 'Grocery stores', 'Cloud kitchens', 'Stationery', 'Spas', 'Dhabas', 'Electronics', 'Vegetable shops', 'Auto spare parts', 'Garages']
 
 const UNLIMITED: [LucideIcon, string, string][] = [
   [ReceiptText, 'Unlimited bills', 'Every bill, every day, on every counter — no monthly bill count.'],

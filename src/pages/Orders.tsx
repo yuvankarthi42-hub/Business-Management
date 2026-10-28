@@ -14,6 +14,7 @@ import { useWhatsApp } from '@/features/whatsapp/useWhatsApp'
 import { CancelOrderModal } from './Tables'
 import { BillReturns, ReturnModal } from '@/features/Returns'
 import { formatPhone } from '@/core/phone'
+import { Pager, usePage } from '@/components/Pager'
 
 export const statusBadge = (o: Order): { tone: Tone; label: string } =>
   o.status === 'cancelled' ? { tone: 'red', label: 'Cancelled' }
@@ -47,6 +48,7 @@ function OrdersList({ toggle }: { toggle?: React.ReactNode }) {
   }), [orders, type, q, customers]) // eslint-disable-line react-hooks/exhaustive-deps
   const total = list.filter((o) => o.status === 'completed').reduce((a, o) => a + o.total, 0)
 
+  const pg = usePage(list, [range, status, type, q])
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader title={t('order', true)} subtitle={`${list.length} ${t('order', true).toLowerCase()} · ${money(total)} billed`}
@@ -62,10 +64,10 @@ function OrdersList({ toggle }: { toggle?: React.ReactNode }) {
           </Select>
         </div>
         {!list.length && orders ? <EmptyState icon={ShoppingBag} title={`No ${t('order', true).toLowerCase()} found`} description="Try another date range or filter." /> : (
-          <Table>
+          <Table footer={<Pager p={pg} />}>
             <thead><tr><Th>{t('order')}</Th>{showBranch && <Th>Branch</Th>}<Th>{t('invoice')}</Th><Th>Time</Th><Th>Type</Th><Th className="hidden md:table-cell">{t('customer')}</Th><Th className="hidden lg:table-cell">Items</Th><Th className="text-right">Total</Th><Th>Status</Th></tr></thead>
             <tbody>
-              {list.slice(0, 300).map((o) => {
+              {pg.rows.map((o) => {
                 const b = statusBadge(o)
                 return (
                   <tr key={o.id} onClick={() => setOpen(o.id)} className="cursor-pointer hover:bg-slate-50">

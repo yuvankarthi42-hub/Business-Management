@@ -17,11 +17,12 @@ import type { Row } from '../../db/types'
 import { eachShop } from '../../domain/directory'
 import { selectIn } from '../../domain/orders'
 import { expirePoints } from '../../domain/points'
-import { bumpEpoch, pricePerBranch } from '../../domain/session'
+import { bumpEpoch, loadPricing, type Pricing } from '../../domain/session'
+import { DEFAULT_PLANS, monthlyValue } from '@/core/plans'
 import { bizDay, bizDayStart, E, getPlatformSetting, putPlatformSetting, str, strOrNull } from '../../domain/util'
 import { cleanPhone } from '../business'
 import { checkAccount, dropToken, formatNumberForLog, liveTemplateStatus, saveToken, sendWhatsApp, tokenRow, VALID_WA } from '../whatsapp'
-import { adminLog, businessLite, findBiz } from './shared'
+import { adminLog, businessLite, customerPrice, findBiz } from './shared'
 
 const DAY = 86_400_000
 const TZ = 'Asia/Kolkata' // the platform's calendar day (the daily job, "once a day")
@@ -66,13 +67,13 @@ async function ownersOf(c: Ctx, ids: string[]) {
   return out
 }
 
-function fillReminder(template: string, cfg: ReminderSettings, price: number, now: Date, b: Row | null, owner: Row | null) {
+function fillReminder(template: string, cfg: ReminderSettings, pricing: Pricing | null, now: Date, b: Row | null, owner: Row | null) {
   const end = b?.subscription_end_at ? new Date(str(b.subscription_end_at)) : new Date(now.getTime() + 3 * DAY)
   const left = b ? Math.max(0, daysLeftOf(strOrNull(b.subscription_end_at), now)) : 3
   const branches = b ? Number(b.max_branches ?? 1) : 2
   return template.replaceAll('{owner}', owner ? str(owner.name).split(' ')[0] : 'Lakshmi').replaceAll('{business}', b ? str(b.name) : 'FreshMart Supermarket')
     .replaceAll('{date}', end.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: TZ }))
-    .replaceAll('{days}', daysText(left, template)).replaceAll('{amount}', `₹${(branches * price).toLocaleString('en-IN')}`)
+    .replaceAll('{days}', daysText(left, template)).replaceAll('{amount}', `₹${monthlyValue(b && pricing ? customerPrice(pricing, b).price : (pricing?.plans.retail ?? DEFAULT_PLANS.retail), branches).toLocaleString('en-IN')}`)
     .replaceAll('{support}', cfg.supportContact)
 }
 
@@ -112,7 +113,7 @@ async function sendReminders(c: Ctx, opts: { trigger: 'auto' | 'manual'; busines
   }
   const list = opts.business ? [opts.business] : await candidates(c, cfg, opts.trigger)
   if (!list.length) return 0
-  const [owners, price, token] = await Promise.all([ownersOf(c, list.map((b) => b.ROWID)), pricePerBranch(c.platform), tokenRow(c, 'platform', null)])
+  const [owners, price, token] = await Promise.all([ownersOf(c, list.map((b) => b.ROWID)), loadPricing(c.platform), tokenRow(c, 'platform', null)])
   let sent = 0
   for (const b of list) {
     const owner = owners.get(b.ROWID) ?? null
@@ -191,7 +192,7 @@ define('system', {
 define('admin', {
   // ---- renewal reminders ----
   renewals: adminRead('customers.view', async (c) => {
-    const [cfg, w, price, bizRows] = await Promise.all([loadSettings(c), platformWa(c), pricePerBranch(c.platform), c.platform.select('businesses', { where: { deleted_at: null } })])
+    const [cfg, w, price, bizRows] = await Promise.all([loadSettings(c), platformWa(c), loadPricing(c.platform), c.platform.select('businesses', { where: { deleted_at: null } })])
     const ids = bizRows.map((b) => b.ROWID)
     const since = new Date(c.now.getTime() - 90 * DAY).toISOString()
     const [owners, last, recent, due, logRows] = await Promise.all([
@@ -209,7 +210,7 @@ define('admin', {
       const from = endAt ? new Date(new Date(endAt).getTime() - (cfg.daysBefore + 1) * DAY).toISOString() : null
       return {
         id: b.id, name: b.name, state: b.st.state, endAt, daysLeft: endAt ? daysLeftOf(endAt, c.now) : null, paused: b.remindersPaused,
-        ownerName: str(owner?.name), phone: str(owner?.phone), monthly: b.maxBranches * price,
+        ownerName: str(owner?.name), phone: str(owner?.phone), monthly: monthlyValue(customerPrice(price, r).price, b.maxBranches),
         sentThisCycle: from ? recent.filter((m) => m.business_id === r.ROWID && m.CREATEDTIME > from).length : 0,
         lastSent: strOrNull(last.find((x) => x.business_id === r.ROWID)?.last as string),
         dueToday: dueIds.has(r.ROWID),
@@ -263,7 +264,7 @@ define('admin', {
   // ---- platform WhatsApp (sends renewal reminders from Kadai Kalanjiyam's own number) ----
   waStatus: adminRead('customers.view', async (c) => {
     const [w, cfg, price, sent7, logRows] = await Promise.all([
-      platformWa(c), loadSettings(c), pricePerBranch(c.platform),
+      platformWa(c), loadSettings(c), loadPricing(c.platform),
       c.platform.count('whatsapp_messages', { sender: E.WaSender.platform, kind: E.WaMessageKind.renewal_reminder, status: { ne: E.WaMessageStatus.failed }, CREATEDTIME: { gte: new Date(c.now.getTime() - 7 * DAY).toISOString() } }),
       recentReminders(c, 50),
     ])

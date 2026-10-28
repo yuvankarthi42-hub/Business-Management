@@ -3,7 +3,8 @@ import { Check, Copy } from 'lucide-react'
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Badge, Field, Input, Segmented, useToast } from '@/components/ui'
-import { addMonths, dateInputToEnd, periodAmount, VALIDITY_OPTIONS, type SubState } from '@/core/subscription'
+import { addMonths, dateInputToEnd, VALIDITY_OPTIONS, type SubState } from '@/core/subscription'
+import { planAmount, priceBreakdown, type PlanPrice } from '@/core/plans'
 import type { Validity } from '@/data'
 import type { AdminRole } from '@/core/types'
 import type { AdminPermission } from '@/core/adminRoles'
@@ -41,12 +42,15 @@ export const randomPassword = () => {
 }
 
 /** 1 / 2 / 6 / 12 months or a custom end date, with the resulting end date and price. */
-export function ValidityPicker({ value, onChange, from, branches, pricePerBranch }: {
-  value: Validity; onChange: (v: Validity) => void; from: Date; branches: number; pricePerBranch: number
+export function ValidityPicker({ value, onChange, from, branches, price, priceLabel }: {
+  value: Validity; onChange: (v: Validity) => void; from: Date; branches: number; price: PlanPrice
+  /** Which price this is ("Silk / textile shops", "Own price"). */
+  priceLabel?: string
 }) {
   const key = 'months' in value ? String(value.months) : 'custom'
   const end = 'months' in value ? new Date(addMonths(from, value.months).getTime() - 86_400_000) : value.endDate ? new Date(dateInputToEnd(value.endDate)) : null
-  const amount = end ? periodAmount(branches, pricePerBranch, 'months' in value ? value.months : null, from.toISOString(), end.toISOString()) : 0
+  const months = 'months' in value ? value.months : null
+  const amount = end ? planAmount(price, branches, months, from.toISOString(), end.toISOString()) : 0
   const minDate = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)
   return (
     <div className="space-y-3">
@@ -57,8 +61,9 @@ export function ValidityPicker({ value, onChange, from, branches, pricePerBranch
       )}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
         <span className="text-slate-600">{fmtDate(from.toISOString())} → <b className="text-slate-900">{end ? fmtDate(end.toISOString()) : 'pick a date'}</b></span>
-        <span className="text-slate-600">{branches} branch{branches === 1 ? '' : 'es'} × {rupees(pricePerBranch)}/month = <b className="text-slate-900">{rupees(amount)}</b></span>
+        <span className="text-slate-600">{branches} branch{branches === 1 ? '' : 'es'} = <b className="text-slate-900">{rupees(amount)}</b></span>
       </div>
+      <p className="-mt-1.5 px-1 text-[11px] text-slate-500">{priceLabel ? `${priceLabel} · ` : ''}{priceBreakdown(price, branches, months)}</p>
     </div>
   )
 }

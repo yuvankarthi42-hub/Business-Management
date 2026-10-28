@@ -10,6 +10,7 @@ import { fmtDateTime, money, num } from '@/lib/format'
 import { isTextileShop } from '@/core/stickers'
 import { LabelPrintModal } from '@/features/Labels'
 import { PurchasesView, SuppliersView } from '@/features/purchases/Purchases'
+import { LoadOlder, Pager, useOlder, usePage } from '@/components/Pager'
 
 const MOVE: Record<StockMovementType, { label: string; tone: Tone }> = {
   opening: { label: 'Opening', tone: 'slate' }, purchase: { label: 'Purchase', tone: 'green' }, sale: { label: 'Sale', tone: 'blue' },
@@ -26,7 +27,10 @@ export default function Inventory() {
   const [adjust, setAdjust] = useState<{ p: Product; type: StockMovementType } | null>(null)
   const [trackPick, setTrackPick] = useState(false)
   const { data: products = [] } = useData(() => api.products.list())
-  const { data: moves = [] } = useData(() => api.inventory.movements())
+  const { data: newest } = useData(() => api.inventory.movements())
+  // Stock history: the newest 3,000 first; "Load older" brings the next ones.
+  const history = useOlder(newest, 3000, (m) => m.createdAt, (before) => api.inventory.movements(null, before))
+  const moves = history.rows
   const tracked = products.filter((p) => p.trackStock && p.active)
   const low = tracked.filter((p) => p.stock > 0 && p.stock <= p.lowStockAt)
   const out = tracked.filter((p) => p.stock <= 0)
@@ -34,6 +38,8 @@ export default function Inventory() {
   const list = useMemo(() => tracked.filter((p) => (filter === 'all' || (filter === 'low' ? low.includes(p) : out.includes(p))) && p.name.toLowerCase().includes(q.toLowerCase())), [tracked, filter, q]) // eslint-disable-line react-hooks/exhaustive-deps
   const pname = (id: string) => products.find((p) => p.id === id)
 
+  const pg = usePage(list, [filter, q])
+  const pgMoves = usePage(moves, [tab])
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader title="Inventory" subtitle={`Stock is reduced automatically on every ${t('invoice').toLowerCase()}`}
@@ -57,10 +63,10 @@ export default function Inventory() {
             <Segmented value={filter} onChange={setFilter} options={[{ value: 'all', label: 'All' }, { value: 'low', label: 'Low', count: low.length }, { value: 'out', label: 'Out', count: out.length }]} />
           </div>
           {!list.length ? <EmptyState icon={PackageCheck} title="Nothing to show" description="Turn on “Track stock” for a product to manage it here." /> : (
-            <Table>
+            <Table footer={<Pager p={pg} />}>
               <thead><tr><Th>{t('product')}</Th><Th className="text-right">In stock</Th><Th className="hidden text-right sm:table-cell">Alert at</Th><Th className="hidden text-right md:table-cell">Value</Th><Th>Status</Th><Th /></tr></thead>
               <tbody>
-                {list.map((p) => {
+                {pg.rows.map((p) => {
                   const pct = Math.min(100, (p.stock / Math.max(1, p.lowStockAt * 4)) * 100)
                   return (
                     <tr key={p.id} className="hover:bg-slate-50">
@@ -88,10 +94,10 @@ export default function Inventory() {
         <ExpiryView batches={batches} />
       ) : (
         <Card>
-          <Table>
+          <Table footer={<Pager p={pgMoves} more={history.canMore ? <LoadOlder o={history} /> : undefined} />}>
             <thead><tr><Th>Date</Th><Th>{t('product')}</Th><Th>Type</Th><Th className="text-right">Qty</Th><Th className="text-right">Balance</Th><Th className="hidden md:table-cell">Note</Th></tr></thead>
             <tbody>
-              {moves.slice(0, 200).map((m) => (
+              {pgMoves.rows.map((m) => (
                 <tr key={m.id}>
                   <Td className="whitespace-nowrap text-slate-500">{fmtDateTime(m.createdAt)}</Td>
                   <Td className="font-medium"><span className="flex items-center gap-2">{pname(m.productId) && <Thumb item={pname(m.productId)!} className="h-6 w-6 rounded text-base" />}{pname(m.productId)?.name}</span></Td>

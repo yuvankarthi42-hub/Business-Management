@@ -1,6 +1,7 @@
 // Small helpers shared by every module: units, enum codes, settings rows, number series, audit log.
 import { r2 } from '@/core/pricing'
 import type { ModuleKey } from '@/core/types'
+import { idBefore, type Cursor } from '@/core/paging'
 import * as E from '../../../server/catalyst/enums'
 import type { Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
@@ -104,6 +105,28 @@ export async function nextNumber(db: Db, businessId: string, branchId: string | 
     if (await db.updateIfVersion('sequences', row.ROWID, Number(row.row_version), { next_value: n + 1 })) return { prefix: str(row.prefix), number: n, text: `${str(row.prefix)}${n}` }
   }
   throw new ApiError('Busy — please try again', 409, 'CONFLICT')
+}
+
+// ---------- "load older" lists ----------
+/** A cursor from the browser, checked (time + numeric id), or null. */
+export function cursorArg(v: unknown): Cursor | null {
+  const o = v as Partial<Cursor> | null | undefined
+  if (!o || typeof o.at !== 'string' || typeof o.id !== 'string' || !/^\d{1,20}$/.test(o.id) || Number.isNaN(Date.parse(o.at))) return null
+  return { at: o.at, id: o.id }
+}
+
+/**
+ * Newest-first rows of a table, `limit` of them, all older than `before` (the last row the screen has).
+ * Rows saved in the same instant are told apart by id, so none is skipped or shown twice.
+ */
+export async function selectOlder(c: Ctx, table: TableName, where: Record<string, unknown>, before: unknown, limit: number): Promise<Row[]> {
+  const cur = cursorArg(before)
+  const orderBy: [string, 'ASC' | 'DESC'][] = [['CREATEDTIME', 'DESC'], ['ROWID', 'DESC']]
+  if (!cur) return c.db.select(table, { where: where as never, orderBy, limit })
+  // Some stores compare times to the second: ask up to a second later, then keep exactly the older rows.
+  const upTo = new Date(Date.parse(cur.at) + 1000).toISOString()
+  const rows = await c.db.select(table, { where: { ...where, CREATEDTIME: { lte: upTo } } as never, orderBy, limit: limit + 200 })
+  return rows.filter((r) => r.CREATEDTIME < cur.at || (r.CREATEDTIME === cur.at && idBefore(r.ROWID, cur.id))).slice(0, limit)
 }
 
 // ---------- modules ----------

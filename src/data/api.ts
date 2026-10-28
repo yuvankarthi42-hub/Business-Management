@@ -2,7 +2,7 @@
 // future REST API backed by MySQL. To migrate: implement the same `api` shape with fetch() calls
 // (see server/README.md) and switch the export in src/data/index.ts. UI code never touches the DB directly.
 import { computeTotals, r2 } from '@/core/pricing'
-import { isHardware, isSupermarket, isTextile, modulesFor, qrSettings, templateFor } from '@/core/config'
+import { modulesFor, qrSettings, setupDefaultsFor, templateFor } from '@/core/config'
 import { applySpecials, dateKey } from '@/core/specials'
 import { COUNTRIES, normalizePhone } from '@/core/phone'
 import { makeItem, priceOverrideError } from '@/core/orderItem'
@@ -20,10 +20,12 @@ import type {
 import { uid } from '@/lib/format'
 import { nextInStoreBarcode } from '@/lib/barcode'
 import { getDB, notify, resetDB, tx as dbTx, type DB } from './db'
-import { addMonths, branchLimitMessage, dateInputToEnd, DEACTIVATED_MESSAGE, endOfDay, periodAmount, READ_ONLY_MESSAGE, subscriptionState } from '@/core/subscription'
+import { addMonths, branchLimitMessage, dateInputToEnd, DEACTIVATED_MESSAGE, endOfDay, READ_ONLY_MESSAGE, subscriptionState } from '@/core/subscription'
+import { cleanPlanPrice, monthlyValue, PLAN_KEYS, PLAN_LABEL, PLAN_START, planAmount, plansFrom, priceFor, type PlanKey, type PlanPrice } from '@/core/plans'
 import { ownerOf } from './seedPlatform'
 import { compressImage, ensureStoredImage, LOGO_IMAGE } from './media'
 import { orderNumberCandidates, TRACK_WINDOW_MS, type TrackStage, type TrackView } from '@/core/tracking'
+import { afterCursor, idBefore, type Cursor } from '@/core/paging'
 import { moduleOffError, moduleOffRead, READ_MODULE, WRITE_MODULE } from '@/core/moduleGuards'
 import type { WaMessageQuery } from '@/core/waReceipts'
 
@@ -48,7 +50,7 @@ export interface Session {
   support?: { adminId: string; adminName: string; reason: string; startedAt: string }
 }
 export const ALL_BRANCHES = 'all'
-const DEMO_BUSINESSES = ['biz_foodcorner', 'biz_sweetspot', 'biz_freshmart', 'biz_murugan_hw', 'biz_kanchi_silks']
+const DEMO_BUSINESSES = ['biz_foodcorner', 'biz_sweetspot', 'biz_freshmart', 'biz_murugan_hw', 'biz_kanchi_silks', 'biz_annai_veg', 'biz_balaji_auto']
 const SESSION_KEY = 'billpoodum.session'
 
 export const session = {
@@ -563,6 +565,9 @@ function branchAccess(d: DB, businessId: string, ids: string[]) {
   return { branchId: valid[0], branchIds: valid }
 }
 
+/** Newest first; the same instant → the larger id first (like the server's ORDER BY time DESC, id DESC). */
+const newestFirst = <T extends { id: string }>(at: (x: T) => string) => (a: T, b: T) => at(b).localeCompare(at(a)) || (idBefore(a.id, b.id) ? 1 : idBefore(b.id, a.id) ? -1 : 0)
+
 // ---------- Specials & QR helpers ----------
 
 function specialsFor(d: DB, businessId: string, date = dateKey()) {
@@ -671,7 +676,7 @@ function fillReminder(d: DB, template: string, b: Business | null) {
   const end = b?.subscription ? new Date(b.subscription.endAt) : new Date(Date.now() + 3 * 86_400_000)
   return template.replaceAll('{owner}', owner?.name.split(' ')[0] ?? 'Lakshmi').replaceAll('{business}', b?.name ?? 'FreshMart Supermarket')
     .replaceAll('{date}', end.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }))
-      .replaceAll('{days}', daysText(left, template)).replaceAll('{amount}', `₹${((b?.maxBranches ?? 2) * d.platform.pricePerBranchMonth).toLocaleString('en-IN')}`)
+      .replaceAll('{days}', daysText(left, template)).replaceAll('{amount}', `₹${monthlyValue(b ? bizPrice(d, b).price : plansFrom(d.platform.plans).retail, b?.maxBranches ?? 2).toLocaleString('en-IN')}`)
     .replaceAll('{support}', reminderSettings(d).supportContact)
 }
 const daysLeftOf = (b: Business) => (b.subscription ? Math.ceil((new Date(b.subscription.endAt).getTime() - Date.now()) / 86_400_000) : -1)
@@ -824,6 +829,11 @@ const adminView = (a: PlatformAdmin) => ({ id: a.id, name: a.name, username: a.u
 function markLogin(userId: string) {
   try { dbTx((d) => { const u = d.users.find((x) => x.id === userId); if (u) u.lastLoginAt = nowIso() }) } catch { /* storage full: sign in anyway */ }
 }
+/** Admin → Pricing as the screens read it: every type's price list, and how many customers have their own. */
+const platformSettingsOf = (d: DB) => {
+  const { custom, ...rest } = d.platform
+  return clone({ ...rest, plans: plansFrom(d.platform.plans), customPrices: Object.keys(custom ?? {}).length })
+}
 const findBiz = (d: DB, id: string) => { const b = d.businesses.find((x) => x.id === id); if (!b) throw new ApiError('Customer not found'); return b }
 const fmtDay = (iso: string) => new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
 function checkUsername(d: DB, raw: string, selfId?: string) {
@@ -852,9 +862,11 @@ function periodFor(v: Validity, from: Date) {
   if (new Date(endAt) <= start) throw new ApiError('The end date must be after the start date')
   return { startAt: start.toISOString(), endAt, months: null }
 }
+/** This customer's price: their own (set by the product admin), else their business type's — same as the server. */
+const bizPrice = (d: DB, b: Business) => priceFor(plansFrom(d.platform.plans), d.platform.custom, b)
 function addPeriod(d: DB, adminId: string, b: Business, kind: SubscriptionPeriod['kind'], startAt: string, endAt: string, months: number | null, note: string) {
-  const branches = b.maxBranches ?? 1, price = d.platform.pricePerBranchMonth
-  d.subscriptionPeriods.push({ id: uid('sub_'), businessId: b.id, kind, startAt, endAt, months, branches, pricePerBranch: price, amount: periodAmount(branches, price, months, startAt, endAt), note: note.trim(), createdAt: nowIso(), createdBy: adminId })
+  const branches = b.maxBranches ?? 1, { price } = bizPrice(d, b)
+  d.subscriptionPeriods.push({ id: uid('sub_'), businessId: b.id, kind, startAt, endAt, months, branches, pricePerBranch: price.month, amount: planAmount(price, branches, months, startAt, endAt), note: note.trim(), createdAt: nowIso(), createdBy: adminId })
 }
 function adminLog(d: DB, a: PlatformAdmin, action: AdminAuditLog['action'], b: Business | null, detail: string) {
   d.adminAudit.push({ id: uid('adl_'), at: nowIso(), adminId: a.id, adminName: a.name, action, businessId: b?.id ?? null, businessName: b?.name ?? '', detail })
@@ -864,12 +876,13 @@ function customerRow(d: DB, b: Business) {
   const owner = ownerOf(d, b)
   const st = subscriptionState(b)
   const lastBill = d.orders.filter((o) => o.businessId === b.id).reduce((m, o) => (o.createdAt > m ? o.createdAt : m), '')
+  const p = bizPrice(d, b)
   return {
     id: b.id, name: b.name || '(setup not finished)', category: b.category, subType: b.subType, onboarded: b.onboarded, createdAt: b.createdAt,
     ownerName: owner?.name ?? '', username: owner?.username ?? '', phone: owner?.phone ?? b.phone, email: owner?.email ?? '',
     status: b.status ?? 'active', state: st.state, daysLeft: st.daysLeft, startAt: st.startAt, endAt: st.endAt,
     maxBranches: b.maxBranches ?? 1, branchesUsed: d.branches.filter((x) => x.businessId === b.id).length,
-    monthlyPrice: (b.maxBranches ?? 1) * d.platform.pricePerBranchMonth, lastActivity: lastBill || null,
+    monthlyPrice: monthlyValue(p.price, b.maxBranches ?? 1), plan: p.plan, price: p.price, customPrice: p.custom, lastActivity: lastBill || null,
     lastLoginAt: d.users.filter((u) => u.businessId === b.id).reduce((m, u) => (u.lastLoginAt && u.lastLoginAt > m ? u.lastLoginAt : m), '') || null,
   }
 }
@@ -1011,10 +1024,11 @@ export const api = {
         if (!input.name.trim()) throw new ApiError('Enter your business name')
         Object.assign(b, { name: input.name.trim(), category: input.category, subType: input.subType, modules: input.modules, terminology: input.terminology })
         b.billing.orderTypes = input.orderTypes
-        b.billing.defaultTaxRateId = input.category === 'retail' ? 'tax_0' : 'tax_5'
-        b.billing.taxMode = isSupermarket(b) || isTextile(b) ? 'inclusive' : 'exclusive' // MRP / shelf prices include GST
-        if (isHardware(b)) { b.modules.mobileOrders = true; b.modules.customerOrders = true; b.billing.defaultTaxRateId = 'tax_18' }
-        if (isTextile(b)) b.billing.defaultTaxRateId = 'tax_5'
+        // Same defaults as the server (core/config.ts): GST rate, prices with / without GST, modules for the shop type.
+        const defaults = setupDefaultsFor(b)
+        b.billing.defaultTaxRateId = `tax_${defaults.taxRate}`
+        b.billing.taxMode = defaults.taxMode
+        Object.assign(b.modules, defaults.modules)
         b.logoEmoji = { food: '🍔', restaurant: '🍽️', retail: '🛒', service: '✂️' }[input.category]
 
         // Categories: update kept ones, add new ones, remove the ones taken out of the list.
@@ -1849,8 +1863,10 @@ export const api = {
   },
 
   inventory: {
-    async movements(productId?: string) {
-      return clone(here(getDB(), getDB().stockMovements).filter((m) => !productId || m.productId === productId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)))
+    /** Newest 3,000; `before` (the last one the screen has) → the next older ones — same as the server. */
+    async movements(productId?: string | null, before?: Cursor | null) {
+      const all = here(getDB(), getDB().stockMovements).filter((m) => !productId || m.productId === productId).sort(newestFirst((m) => m.createdAt))
+      return clone(afterCursor(all, (m) => m.createdAt, before).slice(0, 3000))
     },
     async adjust(productId: string, type: StockMovementType, qty: number, note: string, cost?: number, batch?: BatchInput) {
       return tx((d) => {
@@ -2427,9 +2443,10 @@ export const api = {
   },
 
   audit: {
-    async list(limit = 50) {
+    async list(limit = 50, before?: Cursor | null) {
       const d = getDB()
-      return clone(mine(d.auditLogs).slice(-limit).reverse().map((a) => ({ ...a, userName: d.users.find((u) => u.id === a.userId)?.name ?? '—' })))
+      const n = Math.min(500, Math.max(1, Math.floor(Number(limit)) || 50))
+      return clone(afterCursor(mine(d.auditLogs).slice().sort(newestFirst((a) => a.at)), (a) => a.at, before).slice(0, n).map((a) => ({ ...a, userName: d.users.find((u) => u.id === a.userId)?.name ?? '—' })))
     },
   },
 
@@ -2640,6 +2657,8 @@ export const api = {
     async createCustomer(input: {
       businessName: string; ownerName: string; username: string; password: string; phone: string; email?: string
       validity: Validity; maxBranches: number; note?: string
+      /** The price list the new customer starts on (fast food when not given). */
+      plan?: PlanKey
     }) {
       return dbTx((d) => {
         const a = requireAdmin(d, 'customers.create')
@@ -2656,7 +2675,8 @@ export const api = {
         const t = nowIso()
         const { startAt, endAt, months } = periodFor(input.validity, new Date())
         const businessId = uid('biz_'), branchId = uid('br_'), userId = uid('usr_')
-        const b = newBusiness({ id: businessId, name: businessName, category: 'food', subType: 'Fast Food', phone, createdAt: t })
+        const start = PLAN_START[PLAN_KEYS.includes(input.plan as PlanKey) ? input.plan! : 'food']
+        const b = newBusiness({ id: businessId, name: businessName, category: start.category, subType: start.subType, phone, createdAt: t })
         Object.assign(b, { onboarded: false, email, status: 'active', maxBranches, subscription: { startAt, endAt }, adminNote: input.note?.trim() ?? '' })
         d.businesses.push(b)
         d.branches.push({ id: branchId, businessId, name: 'Main', address: '', isDefault: true, active: true })
@@ -2732,7 +2752,7 @@ export const api = {
         const before = b.maxBranches ?? 1
         if (n === before) return n
         b.maxBranches = n
-        adminLog(d, a, 'branch_limit', b, `Branch limit ${before} → ${n} (${d.platform.pricePerBranchMonth * n}/month from next renewal)`)
+        adminLog(d, a, 'branch_limit', b, `Branch limit ${before} → ${n} (₹${monthlyValue(bizPrice(d, b).price, n)}/month from next renewal)`)
         return n
       })
     },
@@ -2775,7 +2795,7 @@ export const api = {
         const days = st.endAt ? Math.ceil((new Date(st.endAt).getTime() - Date.now()) / 86_400_000) : null
         return {
           id: b.id, name: b.name, state: st.state, endAt: st.endAt, daysLeft: days, paused: !!b.remindersPaused, ownerName: owner?.name ?? '', phone: owner?.phone ?? '',
-          monthly: (b.maxBranches ?? 1) * d.platform.pricePerBranchMonth,
+          monthly: monthlyValue(bizPrice(d, b).price, b.maxBranches ?? 1),
           sentThisCycle: logs.filter((l) => st.endAt && l.createdAt > new Date(new Date(st.endAt).getTime() - (cfg.daysBefore + 1) * 86_400_000).toISOString()).length,
           lastSent: logs.reduce((m, l) => (l.createdAt > m ? l.createdAt : m), '') || null,
           dueToday: candidatesForReminder(d, 'auto').some((c) => c.id === b.id),
@@ -3066,7 +3086,7 @@ export const api = {
           lastBillAt: lastBill ? new Date(lastBill).toISOString() : null,
           lastLoginAt: lastLogin || null,
           branches: d.branches.filter((x) => x.businessId === b.id).length,
-          monthlyPrice: (b.maxBranches ?? 1) * d.platform.pricePerBranchMonth,
+          monthlyPrice: monthlyValue(bizPrice(d, b).price, b.maxBranches ?? 1),
         }
       })
       // Subscription money by the month it was recorded, last 12 months.
@@ -3098,15 +3118,37 @@ export const api = {
       })
     },
 
-    async settings() { const d = getDB(); requireAdmin(d, 'customers.view'); return clone(d.platform) },
-    async updateSettings(patch: { pricePerBranchMonth: number }) {
+    async settings() { const d = getDB(); requireAdmin(d, 'customers.view'); return platformSettingsOf(d) },
+    /** The price list of each business type — same rules as the server. */
+    async updateSettings(patch: { plans: Partial<Record<PlanKey, PlanPrice>> }) {
       return dbTx((d) => {
         const a = requireAdmin(d, 'pricing.manage')
-        if (!(patch.pricePerBranchMonth >= 0)) throw new ApiError('Enter a valid price')
-        const before = d.platform.pricePerBranchMonth
-        d.platform.pricePerBranchMonth = Math.round(patch.pricePerBranchMonth)
-        adminLog(d, a, 'settings', null, `Price per branch / month ${before} → ${d.platform.pricePerBranchMonth}`)
-        return clone(d.platform)
+        const before = plansFrom(d.platform.plans), plans = { ...before }
+        for (const k of PLAN_KEYS) {
+          if (patch?.plans?.[k] === undefined) continue
+          const p = cleanPlanPrice(patch.plans[k])
+          if (!p) throw new ApiError(`Enter valid prices for ${PLAN_LABEL[k].name}`)
+          plans[k] = p
+        }
+        d.platform.plans = plans
+        const changed = PLAN_KEYS.filter((k) => JSON.stringify(before[k]) !== JSON.stringify(plans[k]))
+        if (changed.length) adminLog(d, a, 'settings', null, `Pricing · ${changed.map((k) => `${PLAN_LABEL[k].name}: ₹${plans[k].month}/month, ₹${plans[k].year}/year, extra branch ₹${plans[k].extraBranch}/month`).join(' · ')}`)
+        return platformSettingsOf(d)
+      })
+    },
+    /** A price for this customer only (null = their business type's price again). */
+    async setCustomPrice(businessId: string, price: PlanPrice | null) {
+      return dbTx((d) => {
+        const a = requireAdmin(d, 'pricing.manage')
+        const b = findBiz(d, businessId)
+        const p = price === null ? null : cleanPlanPrice(price)
+        if (price !== null && !p) throw new ApiError('Enter valid prices')
+        const custom = { ...(d.platform.custom ?? {}) }
+        if (p) custom[b.id] = p
+        else delete custom[b.id]
+        d.platform.custom = custom
+        adminLog(d, a, 'settings', b, p ? `Own price: ₹${p.month}/month, ₹${p.year}/year, extra branch ₹${p.extraBranch}/month` : 'Own price removed — business type price again')
+        return clone(bizPrice(d, b))
       })
     },
     async audit(limit = 200) {

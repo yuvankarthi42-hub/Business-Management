@@ -110,7 +110,8 @@ normal.)
 rm -f api.zip daily.zip events.zip && (cd catalyst/functions/api && zip -qr ../../../api.zip .) && (cd catalyst/functions/daily && zip -qr ../../../daily.zip .) && (cd catalyst/appsail/events && zip -qr ../../../events.zip .)
 ```
 
-You now have `api.zip`, `daily.zip` and `events.zip` in the project folder.
+You now have `api.zip`, `daily.zip` and `events.zip` in the project folder. **`events.zip` is optional** — it's only
+for live updates (Step 10); skip it until you have about 15+ shops. The app works fully without it.
 
 ## Step 1 — Create the Catalyst project (10 min)
 

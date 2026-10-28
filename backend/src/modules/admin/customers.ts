@@ -9,9 +9,10 @@ import type { Row } from '../../db/types'
 import { seedTaxRates } from '../../domain/business'
 import { seedRoles } from '../../domain/people'
 import { claimLogins, loginFree, saveUserWithLogins, syncOwner } from '../../domain/directory'
-import { bumpEpoch, featureFlags, pricePerBranch } from '../../domain/session'
+import { bumpEpoch, featureFlags, loadPricing } from '../../domain/session'
+import { monthlyValue, PLAN_KEYS, PLAN_START, type PlanKey } from '@/core/plans'
 import { code, E, str, strOrNull } from '../../domain/util'
-import { addPeriod, adminLog, adminLogFrom, businessLite, checkBranches, checkUsername, findBiz, fmtDay, ownerOf, periodFor, periodFrom, type Validity } from './shared'
+import { addPeriod, adminLog, adminLogFrom, businessLite, customerPrice, checkBranches, checkUsername, findBiz, fmtDay, ownerOf, periodFor, periodFrom, type Validity } from './shared'
 
 function cleanEmail(input: string | undefined) {
   const email = String(input ?? '').trim().toLowerCase()
@@ -29,15 +30,16 @@ function cleanPhone(input: string | undefined, iso: string, required?: string) {
 /** One row of the admin customer list — from the directory copies on the businesses rows (no shop reads). */
 async function customerRows(c: Ctx, businesses: Row[]) {
   if (!businesses.length) return []
-  const price = await pricePerBranch(c.platform)
+  const pricing = await loadPricing(c.platform)
   return businesses.map((r) => {
     const b = businessLite(r)
+    const p = customerPrice(pricing, r)
     return {
       id: b.id, name: b.name || '(setup not finished)', category: b.category, subType: b.subType, onboarded: b.onboarded, createdAt: b.createdAt,
       ownerName: str(r.owner_name), username: str(r.owner_username), phone: str(r.owner_phone) || b.phone, email: str(r.owner_email),
       status: b.status, state: b.st.state, daysLeft: b.st.daysLeft, startAt: b.st.startAt, endAt: b.st.endAt,
       maxBranches: b.maxBranches, branchesUsed: Number(r.branches_used ?? 0),
-      monthlyPrice: b.maxBranches * price,
+      monthlyPrice: monthlyValue(p.price, b.maxBranches), plan: p.plan, price: p.price, customPrice: p.custom,
       lastActivity: strOrNull(r.last_activity_at),
       lastLoginAt: strOrNull(r.last_login_at),
     }
@@ -89,8 +91,10 @@ define('admin', {
    */
   createCustomer: {
     access: 'admin', write: true, adminPerm: 'customers.create', tx: 'none',
-    run: async (c: Ctx, input: { businessName: string; ownerName: string; username: string; password: string; phone: string; email?: string; validity: Validity; maxBranches: number; note?: string }) => {
+    run: async (c: Ctx, input: { businessName: string; ownerName: string; username: string; password: string; phone: string; email?: string; validity: Validity; maxBranches: number; note?: string; plan?: PlanKey }) => {
       const a = c.requireAdmin()
+      // The plan picks the type the shop starts as (and so its price); fast food when not given, as before.
+      const start = PLAN_START[PLAN_KEYS.includes(input?.plan as PlanKey) ? input.plan! : 'food']
       const businessName = String(input?.businessName ?? '').trim().slice(0, 150), ownerName = String(input?.ownerName ?? '').trim().slice(0, 120)
       if (!businessName) throw new ApiError('Enter the business name')
       if (!ownerName) throw new ApiError('Enter the owner’s name')
@@ -103,9 +107,9 @@ define('admin', {
       const { startAt, endAt, months } = periodFor(input.validity, c.now)
       const hash = await hashPassword(input.password)
 
-      // The shop starts as a fast-food outlet; the owner picks the real type in the sign-up steps.
+      // The owner can still pick the real type in the sign-up steps.
       const biz = await c.platform.insert('businesses', {
-        name: businessName, category: code(E.BusinessCategory, 'food'), sub_type: 'Fast Food', phone, email: email || null, status: E.BusinessStatus.active,
+        name: businessName, category: code(E.BusinessCategory, start.category), sub_type: start.subType, phone, email: email || null, status: E.BusinessStatus.active,
         max_branches: maxBranches, subscription_start_at: startAt, subscription_end_at: endAt, admin_note: (input.note ?? '').trim().slice(0, 255) || null,
         owner_name: ownerName, owner_username: username, owner_phone: phone, owner_email: email || null, branches_used: 1,
       })
@@ -125,7 +129,7 @@ define('admin', {
         })
         await claim.bind(owner.ROWID)
         await c.platform.update('businesses', biz.ROWID, { owner_user_id: owner.ROWID })
-        await addPeriod(c, a, biz.ROWID, maxBranches, 'new', startAt, endAt, months, input.note ?? '')
+        await addPeriod(c, a, biz, maxBranches, 'new', startAt, endAt, months, input.note ?? '')
       } catch (e) {
         // Remove the half-made customer (its database first: deleting the row would forget where it is).
         await claim?.undo()
@@ -199,7 +203,7 @@ define('admin', {
     if (new Date(p.endAt) <= c.now) throw new ApiError('Choose an end date in the future')
     const kind = b.st.readOnly ? 'renew' : 'extend'
     const startAt = b.st.readOnly || !b.subscription ? p.startAt : b.subscription.startAt
-    await addPeriod(c, a, r.ROWID, b.maxBranches, kind, p.startAt, p.endAt, p.months, note)
+    await addPeriod(c, a, r, b.maxBranches, kind, p.startAt, p.endAt, p.months, note)
     await c.platform.update('businesses', r.ROWID, { subscription_start_at: startAt, subscription_end_at: p.endAt })
     await adminLog(c, a, 'renew', b, `${kind === 'renew' ? 'Renewed' : 'Extended'}${p.months ? ` by ${p.months} month${p.months === 1 ? '' : 's'}` : ''} · valid till ${fmtDay(p.endAt)}${note ? ` · ${note}` : ''}`)
     await bumpEpoch(c, r.ROWID)
@@ -215,7 +219,7 @@ define('admin', {
     const before = Number(r.max_branches ?? 1)
     if (n === before) return n
     await c.platform.update('businesses', r.ROWID, { max_branches: n })
-    await adminLog(c, a, 'branch_limit', { id: r.ROWID, name: str(r.name) }, `Branch limit ${before} → ${n} (${(await pricePerBranch(c.platform)) * n}/month from next renewal)`)
+    await adminLog(c, a, 'branch_limit', { id: r.ROWID, name: str(r.name) }, `Branch limit ${before} → ${n} (₹${monthlyValue(customerPrice(await loadPricing(c.platform), r).price, n)}/month from next renewal)`)
     await bumpEpoch(c, r.ROWID)
     return n
   }),
