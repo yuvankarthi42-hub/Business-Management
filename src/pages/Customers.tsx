@@ -1,7 +1,7 @@
 import { BellOff, Clock, IndianRupee, MessageCircle, Pencil, Phone, Plus, ShieldCheck, UserPlus, Users } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useApp, useData } from '@/app/AppContext'
-import { Badge, Button, Card, Checkbox, Drawer, EmptyState, Field, Input, Modal, PageHeader, SearchInput, Segmented, Select, Stat, Table, Td, Textarea, Th, useAction } from '@/components/ui'
+import { Badge, Button, Card, Checkbox, Drawer, EmptyState, Field, Input, Modal, MoreDetails, PageHeader, SearchInput, Segmented, Select, Stat, Table, Td, Textarea, Th, useAction } from '@/components/ui'
 import { PAYMENT_LABEL } from '@/core/config'
 import type { Customer, PaymentMethod } from '@/core/types'
 import { api } from '@/data'
@@ -148,7 +148,7 @@ export function CollectDueModal({ customer, outstanding, onClose }: { customer: 
       footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="success" onClick={async () => { if (await run(() => api.customers.collectDue(customer.id, Number(amount), method, ref), 'Payment recorded')) onClose() }}>Save {money(Number(amount) || 0)}</Button></>}>
       <div className="space-y-4">
         <Field required label="Amount (₹)"><Input autoFocus type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} className="h-12 text-lg font-semibold" /></Field>
-        <Field required label="Method">
+        <Field required label="Paid by">
           <Select value={method} onChange={(e) => setMethod(e.target.value as PaymentMethod)}>
             {me!.business.billing.paymentMethods.filter((m) => m !== 'credit').map((m) => <option key={m} value={m}>{PAYMENT_LABEL[m]}</option>)}
           </Select>
@@ -169,10 +169,13 @@ function CustomerForm({ initial, onClose }: { initial: Partial<Customer>; onClos
       <div className="grid gap-4 sm:grid-cols-2">
         <Field required label="Name"><Input autoFocus value={c.name} onChange={(e) => setC({ ...c, name: e.target.value })} /></Field>
         <div><span className="mb-1.5 block text-xs font-medium text-slate-600">Mobile</span><PhoneInput value={c.phone ?? ''} onChange={(v) => setC({ ...c, phone: v })} defaultCountry={me?.business.defaultCountry} /></div>
-        <Field label="Email" className="sm:col-span-2"><Input type="email" value={c.email} onChange={(e) => setC({ ...c, email: e.target.value })} /></Field>
-        <Field label="Address" className="sm:col-span-2"><Textarea value={c.address} onChange={(e) => setC({ ...c, address: e.target.value })} /></Field>
-        <Field label="Notes" className="sm:col-span-2"><Input value={c.notes} onChange={(e) => setC({ ...c, notes: e.target.value })} /></Field>
+        <Field label="Notes (optional)" className="sm:col-span-2"><Input value={c.notes} onChange={(e) => setC({ ...c, notes: e.target.value })} /></Field>
         <div className="sm:col-span-2"><Checkbox checked={c.marketingOptIn !== false} onChange={(v) => setC({ ...c, marketingOptIn: v })} label="OK to send offers and specials on WhatsApp" /></div>
+        {/* Needed only for home delivery or B2B GST bills: closed unless this customer already has them. */}
+        <MoreDetails className="sm:col-span-2" open={!!(initial.email || initial.address || initial.gstin || initial.stateCode)} label="More details — email, address, GST">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Email" className="sm:col-span-2"><Input type="email" value={c.email} onChange={(e) => setC({ ...c, email: e.target.value })} /></Field>
+            <Field label="Address" className="sm:col-span-2"><Textarea value={c.address} onChange={(e) => setC({ ...c, address: e.target.value })} /></Field>
         {me?.business.billing.taxEnabled && (
           <div className="grid gap-4 rounded-xl border border-slate-200 p-3 sm:col-span-2 sm:grid-cols-2">
             <p className="text-xs font-medium text-slate-600 sm:col-span-2">GST — for business customers (B2B tax invoice)</p>
@@ -184,6 +187,8 @@ function CustomerForm({ initial, onClose }: { initial: Partial<Customer>; onClos
             )}
           </div>
         )}
+          </div>
+        </MoreDetails>
         {me && wholesaleOn(me.business.billing) && (
           <div className="sm:col-span-2 rounded-xl border border-slate-200 p-3">
             <p className="mb-2 text-xs font-medium text-slate-600">Price list for this {t('customer').toLowerCase()}</p>

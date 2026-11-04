@@ -2,7 +2,7 @@ import clsx from 'clsx'
 import { Boxes, FileUp, FolderPlus, IndianRupee, Layers, PackageSearch, Pencil, Percent, Plus, ScanLine, Shirt, Tag, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useApp, useData } from '@/app/AppContext'
-import { Badge, Button, Card, Chips, EmptyState, Field, Input, Modal, PageHeader, SearchInput, Select, Table, Td, Th, Toggle, VegMark, useAction } from '@/components/ui'
+import { Badge, Button, Card, ChangeLink, Chips, EmptyState, Field, Input, Modal, MoreDetails, PageHeader, SearchInput, Select, Table, Td, Th, Toggle, VegMark, useAction } from '@/components/ui'
 import { productFormFor, templateFor, usesRetailPos } from '@/core/config'
 import { ScanAddModal } from '@/features/supermarket/ScanAdd'
 import { LabelPrintModal } from '@/features/Labels'
@@ -142,6 +142,9 @@ export function ProductForm({ initial, onClose }: { initial: Partial<Product>; o
     ? { value: (p.price ?? 0) - (p.costPrice ?? 0), pct: Math.round((((p.price ?? 0) - (p.costPrice ?? 0)) / (p.price ?? 1)) * 100) }
     : null
   const [newCat, setNewCat] = useState<string | null>(null)
+  // HSN: when the category has one, the item uses it unless the owner sets its own.
+  const [hsnOpen, setHsnOpen] = useState(!!initial.hsn)
+  const catHsn = categories.find((c) => c.id === p.categoryId)?.hsn
   const [openingBatch, setOpeningBatch] = useState({ batchNo: '', expiry: '' })
   // Categories load asynchronously: pick the first one for a new item once they arrive.
   useEffect(() => { if (isNew && !initial.categoryId && categories.length) setP((x) => (x.categoryId ? x : { ...x, categoryId: categories[0].id })) }, [categories.length]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -258,9 +261,10 @@ export function ProductForm({ initial, onClose }: { initial: Partial<Product>; o
                 {billing.taxRates.map((r) => <option key={r.id} value={r.id}>{r.rate}%{r.rate === 0 ? ' (exempt)' : ''}</option>)}
               </Select>
             </Field>
-            {billing.taxEnabled && (
-              <HsnInput label={form.isService || p.kind === 'service' ? 'SAC code' : 'HSN code'} value={p.hsn} onChange={(v) => set('hsn', v)}
-                hint={!p.hsn && categories.find((c) => c.id === p.categoryId)?.hsn ? `Empty = category’s ${categories.find((c) => c.id === p.categoryId)!.hsn}` : 'Optional'} placeholder={form.isService ? '9983' : '1006'} />
+            {billing.taxEnabled && (catHsn && !p.hsn && !hsnOpen
+              ? <ChangeLink label={form.isService || p.kind === 'service' ? 'SAC code' : 'HSN code'} value={<>Uses category’s <span className="font-mono">{catHsn}</span></>} onChange={() => setHsnOpen(true)} />
+              : <HsnInput label={form.isService || p.kind === 'service' ? 'SAC code' : 'HSN code'} value={p.hsn} onChange={(v) => set('hsn', v)}
+                  hint={!p.hsn && catHsn ? `Empty = category’s ${catHsn}` : 'Optional'} placeholder={form.isService ? '9983' : '1006'} />
             )}
           </div>
         </section>
@@ -308,20 +312,30 @@ export function ProductForm({ initial, onClose }: { initial: Partial<Product>; o
         <OptionList title={form.variants.title} hint={form.variants.hint} rows={p.variants ?? []} onChange={(v) => set('variants', v as Variant[])} placeholder={form.variants.placeholder} wholesale={ws ? wholesaleLabel(billing) : undefined} />
         {form.addOns && <OptionList title={form.addOns.title} hint={form.addOns.hint} rows={p.addOns ?? []} onChange={(v) => set('addOns', v as AddOn[])} placeholder={form.addOns.placeholder} />}
 
+        {/* The toggles box: only when it has a row (a new item in a shop without kitchen / stock has none). */}
+        {((!form.barcodeFirst && (form.isService || p.kind === 'service')) || (mod('kitchen') && form.showKitchen) || (!form.barcodeFirst && mod('inventory') && p.kind !== 'service') || !isNew || p.active === false) && (
         <div className="divide-y divide-slate-100 rounded-xl border border-slate-200">
-          {!form.barcodeFirst && <ToggleRow label="Is a service (no stock)" checked={p.kind === 'service'} onChange={(v) => setP((x) => ({ ...x, kind: v ? 'service' : 'goods', trackStock: v ? false : x.trackStock }))} />}
+          {!form.barcodeFirst && (form.isService || p.kind === 'service') && <ToggleRow label="Is a service (no stock)" checked={p.kind === 'service'} onChange={(v) => setP((x) => ({ ...x, kind: v ? 'service' : 'goods', trackStock: v ? false : x.trackStock }))} />}
           {mod('kitchen') && form.showKitchen && <ToggleRow label="Send to kitchen (KOT)" hint="Turn off for packaged drinks, water etc." checked={!!p.sendToKitchen} onChange={(v) => set('sendToKitchen', v)} />}
           {!form.barcodeFirst && mod('inventory') && p.kind !== 'service' && <ToggleRow label="Track stock" hint="Stock reduces automatically on every bill" checked={!!p.trackStock} onChange={(v) => set('trackStock', v)} />}
           {!form.barcodeFirst && mod('inventory') && p.trackStock && (
             <div className="grid grid-cols-2 gap-4 px-4 py-3 sm:grid-cols-4">
               {isNew && <Field label="Opening stock"><Input type="number" value={p.stock} onChange={(e) => set('stock', Number(e.target.value))} /></Field>}
               <Field label="Low stock alert at"><Input type="number" value={p.lowStockAt} onChange={(e) => set('lowStockAt', Number(e.target.value))} /></Field>
-              <Field label="SKU"><Input value={p.sku} onChange={(e) => set('sku', e.target.value)} /></Field>
-              <Field label="Barcode"><Input value={p.barcode} onChange={(e) => set('barcode', e.target.value)} placeholder="Scan or type" /></Field>
             </div>
           )}
-          <ToggleRow label="Active" hint="Inactive items are hidden from billing" checked={!!p.active} onChange={(v) => set('active', v)} />
+          {(!isNew || p.active === false) && <ToggleRow label="Active" hint="Inactive items are hidden from billing" checked={!!p.active} onChange={(v) => set('active', v)} />}
         </div>
+        )}
+        {/* Rarely used by restaurants, food and service shops (retail has them at the top, by the name). */}
+        {!form.barcodeFirst && (
+          <MoreDetails open={!!(initial.sku || initial.barcode)} label="More details — SKU, barcode">
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="SKU / item code"><Input value={p.sku} onChange={(e) => set('sku', e.target.value)} placeholder="Optional" /></Field>
+              <Field label="Barcode"><Input value={p.barcode} onChange={(e) => set('barcode', e.target.value)} placeholder="Scan or type" /></Field>
+            </div>
+          </MoreDetails>
+        )}
       </div>
     </Modal>
   )

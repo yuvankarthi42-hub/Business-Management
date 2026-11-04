@@ -4,6 +4,16 @@ import type { Dictionary } from '.'
 
 const ta: Dictionary = {
   "exact": {
+    "Change table": "மேசையை மாற்று",
+    "Notes (optional)": "குறிப்புகள் (விருப்பம்)",
+    "Note (only admins see this)": "குறிப்பு (நிர்வாகிகள் மட்டும் பார்க்கலாம்)",
+    "More details — SKU, barcode": "மேலும் விவரங்கள் — SKU, பார்கோடு",
+    "More details — email, address, GST": "மேலும் விவரங்கள் — மின்னஞ்சல், முகவரி, GST",
+    "Uses category’s": "வகையின் குறியீடு:",
+    "UTR / cheque no.": "UTR / காசோலை எண்",
+    "GST report": "GST அறிக்கை",
+    "Daily Specials & offers display": "இன்றைய சிறப்பு உணவுகள் & ஆஃபர் காட்சி",
+    "Single device (no background sync)": "ஒரே சாதனம் (பின்னணி ஒத்திசைவு இல்லை)",
     "Terms & Conditions": "விதிமுறைகள் & நிபந்தனைகள்",
     "Privacy Policy": "தனியுரிமைக் கொள்கை",
     "Terms": "விதிமுறைகள்",

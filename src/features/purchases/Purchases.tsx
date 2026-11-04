@@ -233,12 +233,12 @@ export function NewPurchaseModal({ onClose, supplierId: preset }: { onClose: () 
               <Field label="Paid now" hint="Leave empty if it’s on credit"><div className="relative"><span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">₹</span><Input type="number" inputMode="decimal" min={0} value={paid} onChange={(e) => setPaid(e.target.value)} placeholder="0" className="pl-7" /></div></Field>
               <Field required label="Paid by"><Select value={method} onChange={(e) => setMethod(e.target.value as SupplierPayMethod)}>{SUPPLIER_PAY_METHODS.map((m) => <option key={m} value={m}>{PAYMENT_LABEL[m]}</option>)}</Select></Field>
             </div>
-            {paidNum > 0 && method !== 'cash' && <Field label="Reference" hint="UTR / cheque no."><Input value={reference} onChange={(e) => setReference(e.target.value)} /></Field>}
+            {paidNum > 0 && method !== 'cash' && <Field label="Reference (optional)" hint="UTR / cheque no."><Input value={reference} onChange={(e) => setReference(e.target.value)} /></Field>}
             <div className="flex flex-wrap gap-1.5">
               {total > 0 && <button type="button" className="rounded-full border border-slate-200 px-2.5 py-0.5 text-xs text-slate-600 hover:border-brand-300" onClick={() => setPaid(String(total))}>Paid in full</button>}
               {total > 0 && <button type="button" className="rounded-full border border-slate-200 px-2.5 py-0.5 text-xs text-slate-600 hover:border-brand-300" onClick={() => setPaid('')}>On credit</button>}
             </div>
-            <Field label="Note" hint="Optional"><Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+            <Field label="Notes (optional)"><Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
           </div>
           <div className="space-y-1.5 rounded-xl bg-slate-50 p-4 text-sm">
             <div className="flex justify-between"><span className="text-slate-500">Value before GST</span><span className="tabular">{money(taxable, { decimals: true })}</span></div>
@@ -361,7 +361,7 @@ export function SupplierForm({ initial, onClose }: { initial: Partial<Supplier>;
           <div className="relative"><span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">₹</span><Input type="number" inputMode="decimal" value={s.openingBalance || ''} onChange={(e) => setS({ ...s, openingBalance: Number(e.target.value) })} className="pl-7" placeholder="0" /></div>
         </Field>
         <Field label="Address" className="sm:col-span-2"><Input value={s.address} onChange={(e) => setS({ ...s, address: e.target.value })} /></Field>
-        <Field label="Notes" className="sm:col-span-2"><Input value={s.notes} onChange={(e) => setS({ ...s, notes: e.target.value })} placeholder="Pays on the 10th · bank details…" /></Field>
+        <Field label="Notes (optional)" className="sm:col-span-2"><Input value={s.notes} onChange={(e) => setS({ ...s, notes: e.target.value })} placeholder="Pays on the 10th · bank details…" /></Field>
       </div>
     </Modal>
   )
@@ -430,12 +430,12 @@ function PaySupplierModal({ supplier, owed, onClose }: { supplier: Supplier; owe
     <Modal open onClose={onClose} size="sm" title={`Pay ${supplier.name}`} subtitle={owed > 0 ? `You owe ${money(owed)}` : 'No balance due — this will be an advance'}
       footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="success" disabled={!(n > 0)} onClick={async () => { if (await run(() => api.suppliers.pay(supplier.id, { amount: n, method, date, reference }), 'Payment recorded')) onClose() }}>Save {money(n)}</Button></>}>
       <div className="space-y-4">
-        <Field required label="Amount"><div className="relative"><span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">₹</span><Input autoFocus type="number" inputMode="decimal" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} className="pl-7" /></div></Field>
+        <Field required label="Amount (₹)"><div className="relative"><span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">₹</span><Input autoFocus type="number" inputMode="decimal" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} className="pl-7" /></div></Field>
         <div className="grid grid-cols-2 gap-3">
           <Field required label="Paid by"><Select value={method} onChange={(e) => setMethod(e.target.value as SupplierPayMethod)}>{SUPPLIER_PAY_METHODS.map((m) => <option key={m} value={m}>{PAYMENT_LABEL[m]}</option>)}</Select></Field>
           <Field required label="Date"><Input type="date" max={today()} value={date} onChange={(e) => setDate(e.target.value)} /></Field>
         </div>
-        {method !== 'cash' && <Field label="Reference" hint="UTR / cheque no."><Input value={reference} onChange={(e) => setReference(e.target.value)} /></Field>}
+        {method !== 'cash' && <Field label="Reference (optional)" hint="UTR / cheque no."><Input value={reference} onChange={(e) => setReference(e.target.value)} /></Field>}
         {n > owed && owed > 0 && <p className="text-xs text-amber-700">{money(r2(n - owed))} more than you owe — it stays as an advance.</p>}
       </div>
     </Modal>

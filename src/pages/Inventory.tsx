@@ -176,7 +176,7 @@ function AdjustModal({ product, initialType, onClose }: { product: Product; init
           </div>
         )}
         {product.trackExpiry && !needsBatch && ['wastage', 'damage', 'adjustment'].includes(type) && <p className="text-xs text-slate-500">Taken from the batch that expires first. To remove one specific batch, use Inventory → Expiry → Write off.</p>}
-        <Field label="Note"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Supplier, reason…" /></Field>
+        <Field label="Notes (optional)"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Supplier, reason…" /></Field>
         {n !== 0 && <p className={clsx('rounded-lg px-3 py-2 text-sm font-medium', after < 0 ? 'bg-red-50 text-red-700' : 'bg-slate-50 text-slate-700')}>Stock after: {after} {product.unit}</p>}
       </div>
     </Modal>

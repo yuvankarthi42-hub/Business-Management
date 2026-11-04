@@ -108,7 +108,7 @@ export function ReturnModal({ order: o, onClose }: { order: Order; onClose: () =
               {(Object.keys(RETURN_REASON) as ReturnReason[]).map((r) => <option key={r} value={r}>{RETURN_REASON[r]}</option>)}
             </Select>
           </Field>
-          <Field label="Note (optional)"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Seal broken" maxLength={300} /></Field>
+          <Field label="Notes (optional)"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Seal broken" maxLength={300} /></Field>
         </div>
 
         {total > 0 && (

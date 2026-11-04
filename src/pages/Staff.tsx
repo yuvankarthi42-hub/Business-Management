@@ -259,7 +259,7 @@ function AdvanceModal({ r, onClose }: { r: PayrollRow; onClose: () => void }) {
     <Modal open onClose={onClose} size="sm" title={`Advance · ${r.name}`} subtitle="Taken off the next salary.">
       <form className="space-y-4" onSubmit={async (e) => { e.preventDefault(); if (await run(() => api.staff.giveAdvance(r.userId, { amount: Number(amount), method, note }), 'Advance recorded')) onClose() }}>
         <div className="grid grid-cols-2 gap-3"><Field required label="Amount (₹)"><Input autoFocus type="number" min={1} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field><Field required label="Paid by"><Methods value={method} onChange={setMethod} /></Field></div>
-        <Field label="Note (optional)"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Festival" /></Field>
+        <Field label="Notes (optional)"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Festival" /></Field>
         <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={onClose}>Cancel</Button><Button type="submit" icon={HandCoins} disabled={!(Number(amount) > 0)}>Give advance</Button></div>
       </form>
     </Modal>
@@ -290,7 +290,7 @@ function PaySalaryModal({ r, month, onClose }: { r: PayrollRow; month: string; o
           <Field label="Other deduction (₹)"><Input type="number" min={0} inputMode="decimal" value={deduction} onChange={(e) => setDeduction(e.target.value)} placeholder="0" /></Field>
           <Field required label="Paid by"><Methods value={method} onChange={setMethod} /></Field>
         </div>
-        <Field label="Note (optional)"><Input value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+        <Field label="Notes (optional)"><Input value={note} onChange={(e) => setNote(e.target.value)} /></Field>
         {net < 0 && <p className="text-sm text-amber-700">The advance is more than this month’s pay — {money(-net)} stays to recover.</p>}
         <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={onClose}>Cancel</Button><Button type="submit" icon={Wallet}>Pay {money(Math.max(0, net))}</Button></div>
       </form>

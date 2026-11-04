@@ -102,9 +102,9 @@ function ExpenseForm({ onClose }: { onClose: () => void }) {
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Field required label="Date"><Input type="date" value={e.date} max={toDateInput(new Date())} onChange={(x) => setE({ ...e, date: x.target.value })} /></Field>
-          <Field required label="Paid via"><Select value={e.method} onChange={(x) => setE({ ...e, method: x.target.value as PaymentMethod })}>{me!.business.billing.paymentMethods.filter((m) => m !== 'credit' && m !== 'bank').map((m) => <option key={m} value={m}>{PAYMENT_LABEL[m]}</option>)}<option value="bank">Bank Transfer</option></Select></Field>
+          <Field required label="Paid by"><Select value={e.method} onChange={(x) => setE({ ...e, method: x.target.value as PaymentMethod })}>{me!.business.billing.paymentMethods.filter((m) => m !== 'credit' && m !== 'bank').map((m) => <option key={m} value={m}>{PAYMENT_LABEL[m]}</option>)}<option value="bank">Bank Transfer</option></Select></Field>
         </div>
-        <Field label="Notes"><Input value={e.notes} onChange={(x) => setE({ ...e, notes: x.target.value })} placeholder="e.g. Vegetables from market" /></Field>
+        <Field label="Notes (optional)"><Input value={e.notes} onChange={(x) => setE({ ...e, notes: x.target.value })} placeholder="e.g. Vegetables from market" /></Field>
         {me?.isAll && (
           <Field label="Branch"><Select value={e.branchId} onChange={(x) => setE({ ...e, branchId: x.target.value })}>{me.branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select></Field>
         )}

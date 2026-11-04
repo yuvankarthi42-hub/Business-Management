@@ -52,7 +52,7 @@ export function NewItemPanel({ typed, onSaved, onCancel }: { typed: string; onSa
       </div>
       <div className="grid gap-2 sm:grid-cols-6">
         <Field required label="Item name" className="sm:col-span-3"><Input autoFocus={!first.name} value={f.name} onChange={(e) => set({ name: e.target.value })} placeholder={form.namePlaceholder} /></Field>
-        <Field label="Barcode / code" className="sm:col-span-3"><Input value={f.barcode} onChange={(e) => set({ barcode: e.target.value })} placeholder="Scan or type (optional)" className="font-mono" /></Field>
+        <Field label="Barcode" className="sm:col-span-3"><Input value={f.barcode} onChange={(e) => set({ barcode: e.target.value })} placeholder="Scan or type (optional)" className="font-mono" /></Field>
         {form.textile && <Field label="Design no." className="sm:col-span-2"><Input value={f.design} onChange={(e) => set({ design: e.target.value })} placeholder="D-1024" /></Field>}
         {form.showMrp && <Field label="MRP (₹)" className="sm:col-span-2"><Input type="number" inputMode="decimal" min={0} step="0.01" value={f.mrp} onChange={(e) => set({ mrp: e.target.value })} placeholder="0" /></Field>}
         <Field required label="Selling price (₹)" className="sm:col-span-2"><Input type="number" inputMode="decimal" min={0} step="0.01" value={f.price} onChange={(e) => set({ price: e.target.value })} placeholder={f.mrp || '0'} /></Field>
@@ -67,7 +67,7 @@ export function NewItemPanel({ typed, onSaved, onCancel }: { typed: string; onSa
               {b.billing.taxRates.map((r) => <option key={r.id} value={r.id}>{r.rate}%</option>)}
             </Select>
           </Field>
-          <Field label="HSN" className="sm:col-span-2"><Input value={f.hsn} onChange={(e) => set({ hsn: e.target.value.replace(/\D/g, '').slice(0, 8) })} placeholder="Optional" className="font-mono" /></Field>
+          <Field label="HSN code" className="sm:col-span-2"><Input value={f.hsn} onChange={(e) => set({ hsn: e.target.value.replace(/\D/g, '').slice(0, 8) })} placeholder="Optional" className="font-mono" /></Field>
         </>}
       </div>
       <div className="mt-3 flex flex-wrap items-center justify-end gap-2">

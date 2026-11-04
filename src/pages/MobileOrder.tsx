@@ -291,7 +291,7 @@ function CartPanel({ cart, title, existing, newCount, onPlace, onClose, onChange
           <p className="truncate font-semibold">{title}</p>
           <p className="text-xs text-slate-500">{existing ? `Running order ${existing} · ` : ''}{cart.count} item{cart.count === 1 ? '' : 's'}</p>
         </div>
-        {onChangeTable && <button onClick={onChangeTable} className="text-xs font-medium text-brand-600 hover:underline">Change</button>}
+        {onChangeTable && <button onClick={onChangeTable} className="text-xs font-medium text-brand-600 hover:underline">Change table</button>}
         {onClose && <button onClick={onClose} className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100" aria-label="Close"><X className="h-4 w-4" /></button>}
       </div>
       {customer && <div className="border-b border-slate-100 px-4 py-2.5">{customer}</div>}

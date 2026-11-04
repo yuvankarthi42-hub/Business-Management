@@ -186,7 +186,7 @@ function EditModal({ c, onClose }: { c: Detail; onClose: () => void }) {
           <Field required label="Username" hint="Changing it changes how the customer signs in"><Input required value={f.username} onChange={(e) => setF({ ...f, username: e.target.value.toLowerCase().replace(/\s/g, '') })} className="font-mono" /></Field>
           <Field required label="Mobile number (login ID)"><PhoneInput required value={f.phone} onChange={(v) => setF({ ...f, phone: v })} /></Field>
           <Field label="Email"><Input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
-          <Field label="Note (admins only)"><Input value={f.adminNote} onChange={(e) => setF({ ...f, adminNote: e.target.value })} /></Field>
+          <Field label="Note (only admins see this)"><Input value={f.adminNote} onChange={(e) => setF({ ...f, adminNote: e.target.value })} /></Field>
         </div>
         <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={onClose}>Cancel</Button><Button type="submit">Save</Button></div>
       </form>
@@ -268,7 +268,7 @@ function RenewModal({ c, onClose }: { c: Detail; onClose: () => void }) {
       subtitle={expired ? 'Starts today. The account becomes fully usable again right away.' : `Added after the current end date (${fmtDate(c.endAt)}).`}>
       <form className="space-y-4" onSubmit={async (e) => { e.preventDefault(); if (await run(() => api.admin.renew(c.id, v, note), expired ? 'Subscription renewed' : 'Subscription extended')) onClose() }}>
         <ValidityPicker value={v} onChange={setV} from={from} branches={c.maxBranches} price={c.price} priceLabel={c.customPrice ? 'Own price' : PLAN_LABEL[c.plan].name} />
-        <Field label="Note (optional)"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Paid ₹2,994 by UPI" /></Field>
+        <Field label="Notes (optional)"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Paid ₹2,994 by UPI" /></Field>
         <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={onClose}>Cancel</Button><Button type="submit" icon={CalendarPlus} disabled={'endDate' in v && !v.endDate}>{expired ? 'Renew' : 'Extend'}</Button></div>
       </form>
     </Modal>

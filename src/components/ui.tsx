@@ -107,6 +107,36 @@ export function Field({ label, hint, error, children, className, required }: { l
   )
 }
 
+/**
+ * Fields most shops don't need, closed until asked for. Starts open when it already holds something
+ * (editing a record that has these filled), so nothing saved is ever hidden.
+ */
+export function MoreDetails({ open: startOpen = false, label = 'More details', children, className }: { open?: boolean; label?: string; children: ReactNode; className?: string }) {
+  const [open, setOpen] = useState(startOpen)
+  return (
+    <div className={clsx('rounded-xl border border-slate-200', className)}>
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
+        className="flex w-full items-center justify-between px-4 py-2.5 text-left text-sm font-medium text-slate-700 hover:bg-slate-50">
+        {label}<span className={clsx('text-xs text-slate-400 transition', open && 'rotate-180')} aria-hidden>▾</span>
+      </button>
+      {open && <div className="border-t border-slate-100 px-4 py-3">{children}</div>}
+    </div>
+  )
+}
+
+/** A field that usually keeps its default: shows the value with "Edit"; the real field opens on click. */
+export function ChangeLink({ label, value, onChange }: { label: string; value: ReactNode; onChange: () => void }) {
+  return (
+    <div>
+      <span className="mb-1.5 block text-xs font-medium text-slate-600">{label}</span>
+      <div className="flex h-10 items-center gap-2 text-sm text-slate-700">
+        <span className="truncate">{value}</span>
+        <button type="button" onClick={onChange} className="shrink-0 text-xs font-medium text-brand-700 hover:underline">Edit</button>
+      </div>
+    </div>
+  )
+}
+
 export const SearchInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & { kbd?: string }>(function SearchInput({ className, kbd, ...rest }, ref) {
   return (
     <div className={clsx('relative', className)}>

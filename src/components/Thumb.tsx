@@ -66,7 +66,7 @@ export function PhotoDrop({ imageUrl, onChange, size = 176 }: { imageUrl: string
           <>
             <img src={imageUrl} alt="Item photo" className="h-full w-full object-cover" />
             <div className="absolute inset-x-0 bottom-0 flex gap-1.5 bg-gradient-to-t from-slate-900/70 to-transparent p-2 opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
-              <button type="button" onClick={(e) => { e.stopPropagation(); input.current?.click() }} className="flex-1 rounded-lg bg-white/95 py-1.5 text-xs font-semibold text-slate-800 hover:bg-white">Change</button>
+              <button type="button" onClick={(e) => { e.stopPropagation(); input.current?.click() }} className="flex-1 rounded-lg bg-white/95 py-1.5 text-xs font-semibold text-slate-800 hover:bg-white">Change photo</button>
               <button type="button" onClick={(e) => { e.stopPropagation(); onChange(null); setInfo('') }} className="rounded-lg bg-white/95 px-2.5 py-1.5 text-red-600 hover:bg-white" aria-label="Remove photo"><Trash2 className="h-3.5 w-3.5" /></button>
             </div>
           </>
