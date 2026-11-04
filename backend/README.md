@@ -4,8 +4,7 @@ TypeScript + Express, bundled into a Catalyst Advanced I/O function (`catalyst/f
 (`catalyst/functions/daily`).
 - Data is in **Turso**: one platform database plus one database per shop. The Catalyst Data Store still works as a
   single-database option.
-- How it works: [`server/catalyst/TURSO.md`](../server/catalyst/TURSO.md).
-- Deploy steps: [`server/catalyst/DEPLOY.md`](../server/catalyst/DEPLOY.md).
+- Deploy steps: [`DEPLOY-NEW-ACCOUNT.md`](../DEPLOY-NEW-ACCOUNT.md).
 
 ## Run and test locally
 
@@ -98,10 +97,8 @@ Rules that keep things correct:
 
 ## Things to check on the first real deploy
 
-The smoke test (`scripts/smoke.mjs`) covers these:
-- **Turso.** The platform database migrates on the first request, and a new customer gets its own database. It also
-  prints how long 20 bills at the same moment take.
-- **Catalyst Data Store** (if used instead):
+Run the smoke test against the deployed API — [`DEPLOY-NEW-ACCOUNT.md`](../DEPLOY-NEW-ACCOUNT.md) Step 7.4.
+Only if the **Catalyst Data Store** is used instead of Turso, also check:
   - ZCQL `UPDATE … WHERE row_version = n` must return the updated rows.
   - The time zone of `CREATEDTIME` (`CATALYST_TZ_OFFSET_MIN`).
   - Column names that may be reserved words. The schema check shows them.

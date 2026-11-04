@@ -9,7 +9,7 @@ A guide to [`schema.sql`](schema.sql): what each table is for and how the tables
 > `shop_databases`. In both (shop rows in the shop's, platform rows in the platform's): `media_files`, `secrets`,
 > `whatsapp_templates`, `whatsapp_messages`. Every other table is in each shop's own database. A relation between the
 > two databases is kept by the API, not by a foreign key. Source: [`backend/scripts/placement.mjs`](../../backend/scripts/placement.mjs),
-> details in [TURSO.md](TURSO.md). On the Catalyst Data Store all tables are in one place. Fixed lists (status, kind, method…) are stored as numbers — see [`enums.ts`](enums.ts).
+> On the Catalyst Data Store all tables are in one place. Fixed lists (status, kind, method…) are stored as numbers — see [`enums.ts`](enums.ts).
 
 > **How to read the diagrams**
 > `A ||--o{ B` = one **A** has many **B** (B has a column pointing to A).

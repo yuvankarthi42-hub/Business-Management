@@ -1,5 +1,5 @@
 // Encrypts a value the way the API stores secrets (shop database tokens, WhatsApp tokens): AES-256-GCM with
-// SECRETS_KEY, as "v1:<base64>". Use it when repointing a restored shop database (PRODUCTION.md → Backups).
+// SECRETS_KEY, as "v1:<base64>". Use it when repointing a restored shop database (DEPLOY-NEW-ACCOUNT.md → Backups and restoring a shop).
 //   SECRETS_KEY='<same as the api function>' node backend/scripts/encrypt-secret.mjs '<value>'
 // Prints only the encrypted value. Never commit or share the plain value.
 import { createCipheriv, createHash, randomBytes } from 'node:crypto'

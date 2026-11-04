@@ -1,6 +1,6 @@
-// Mock API. Every function is async and scoped to the logged-in business/branch, exactly like the
-// future REST API backed by MySQL. To migrate: implement the same `api` shape with fetch() calls
-// (see server/README.md) and switch the export in src/data/index.ts. UI code never touches the DB directly.
+// Mock API (the demo app). Every function is async and scoped to the logged-in business/branch, exactly like the
+// real backend (backend/): src/data/remote/ calls it with the same `api` shape, and src/data/index.ts picks one.
+// UI code never touches the DB directly.
 import { computeTotals, r2 } from '@/core/pricing'
 import { modulesFor, qrSettings, setupDefaultsFor, templateFor } from '@/core/config'
 import { applySpecials, dateKey } from '@/core/specials'

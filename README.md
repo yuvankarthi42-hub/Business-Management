@@ -9,11 +9,11 @@ Two ways to run the same app:
 | | Data | Start |
 |---|---|---|
 | **Demo app** (default) | in this browser, with demo shops and demo logins | `npm run dev` |
-| **Zoho Catalyst** | the real backend in [`backend/`](backend/README.md) — Data Store, Cache, Stratus | `npm run dev:catalyst` (+ `npm --prefix backend run dev` locally) |
+| **Zoho Catalyst** | the real backend in [`backend/`](backend/README.md) — data in Turso (one database per shop), photos in Stratus | `npm run dev:catalyst` (+ `npm --prefix backend run dev` locally) |
 
 Catalyst: database design in [server/catalyst/schema.sql](server/catalyst/schema.sql) ·
 [TABLES.md](server/catalyst/TABLES.md) (what each table is for) · deployment in
-[server/catalyst/DEPLOY.md](server/catalyst/DEPLOY.md). On Catalyst there are no demo logins — the product admin
+[DEPLOY-NEW-ACCOUNT.md](DEPLOY-NEW-ACCOUNT.md). On Catalyst there are no demo logins — the product admin
 creates every customer.
 
 ## Run

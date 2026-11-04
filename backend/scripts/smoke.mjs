@@ -20,6 +20,8 @@ const rpc = async (name, token, ...args) => {
   if (body.error) throw new Error(`${body.error.message} (${body.error.code ?? res.status})`)
   return body
 }
+/** The whole catalogue, as the app reads it: products.page, 300 at a time. */
+const allProducts = async (token) => { const out = []; for (let at = 0; at !== null;) { const pg = (await rpc('products.page', token, at)).data; out.push(...pg.rows); at = pg.next } return out }
 const must = (cond, msg) => { if (!cond) throw new Error(msg) }
 
 await step('health', async () => { const r = await fetch(`${base}/health`); const j = await r.json(); must(j.ok, 'not ok'); return `${j.handlers} actions` })
@@ -53,7 +55,7 @@ if (created) {
       const [x, y] = await Promise.all([rpc('orders.checkout', owner, { ...draft, items: [{ ...item, qty: 0.5 }] }, [{ method: 'cash', amount: 5 }]), rpc('orders.checkout', owner, { ...draft, items: [{ ...item, qty: 0.5 }] }, [{ method: 'cash', amount: 5 }])])
       must(x.data.invoiceNumber !== y.data.invoiceNumber, 'same bill number twice'); return `${x.data.invoiceNumber}, ${y.data.invoiceNumber}`
     })
-    await step('stock after 4 sales is 0', async () => { const list = (await rpc('products.list', owner)).data; const s = list.find((x) => x.id === p.id)?.stock; must(s === 0, `stock ${s}`); return String(s) })
+    await step('stock after 4 sales is 0', async () => { const s = (await allProducts(owner)).find((x) => x.id === p.id)?.stock; must(s === 0, `stock ${s}`); return String(s) })
     await step('stock can’t go below zero', async () => { try { await rpc('inventory.adjust', owner, p.id, 'wastage', 1, 'smoke'); throw new Error('was allowed') } catch (e) { must(/below zero/.test(e.message), e.message); return 'refused' } })
     await step('report totals (GROUP BY)', async () => { const s = (await rpc('reports.summary', owner, new Date(Date.now() - 864e5).toISOString(), new Date(Date.now() + 3600e3).toISOString())).data; must(s.orderCount === 4, `orders ${s.orderCount}`); return `₹${s.sales}` })
     // 20 counters at once on one shop: the shop's single writer must take every bill, with unique numbers.
@@ -66,7 +68,7 @@ if (created) {
         const ms = Date.now() - t0
         const nums = new Set(all.map((r) => r.data.invoiceNumber))
         must(nums.size === 20, `${nums.size} different numbers`)
-        const left = (await rpc('products.list', owner)).data.find((x) => x.id === bulk.id)?.stock
+        const left = (await allProducts(owner)).find((x) => x.id === bulk.id)?.stock
         must(left === 20, `stock ${left}`)
         return `${ms} ms for all 20 (${Math.round(ms / 20)} ms each on average)`
       })

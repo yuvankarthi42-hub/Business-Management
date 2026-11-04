@@ -1,5 +1,5 @@
 // Mock "server" image pipeline. Every photo is compressed HERE (in the API layer), never by the screens.
-// The real backend does the same with `sharp` (see server/README.md → Image uploads).
+// The real backend compresses uploads too (backend/src/modules/catalog.ts → photos).
 //
 //   any JPG / PNG / WebP / GIF (and HEIC where the browser can read it), up to 50 MB / 200 megapixels
 //   → turned upright, metadata removed → longest side ≤ 800 px → WebP (JPEG if WebP can't be made)
