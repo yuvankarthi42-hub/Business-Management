@@ -55,7 +55,7 @@ export interface DB {
 }
 
 const KEY = 'billpoodum.db' // legacy localStorage key (moved to IndexedDB on first load)
-const VERSION = 27
+const VERSION = 28
 const IDB_NAME = 'billpoodum'
 const IDB_STORE = 'kv'
 
@@ -131,6 +131,7 @@ function migrate(parsed: DB): DB | null {
   if (parsed.version === 24) { const k = parsed.businesses.find((b) => b.id === 'biz_kanchi_silks'); if (k) k.billing.orderTypes = ['counter']; parsed.version = 25 } // saree shop: counter only
   if (parsed.version === 25) { addTextileHsn(parsed); parsed.version = 26 } // HSN on the saree shop's categories
   if (parsed.version === 26) { addVegAutoDemos(parsed); normalizeAllPhones(parsed); seedPlatform(parsed); parsed.version = 27 } // vegetable shop + auto spares demo shops
+  if (parsed.version === 27) { releaseDemoFeatures(parsed); parsed.version = 28 } // QR Orders / Daily Specials / GST report became release flags
   return parsed.version === VERSION ? parsed : null
 }
 
@@ -175,6 +176,7 @@ function freshSeed(save = true): DB {
   seedPlatform(fresh)
   seedAdminTeam(fresh)
   addWhatsApp(fresh)
+  releaseDemoFeatures(fresh)
   seedStaffAndWholesale(fresh)
   markContractors(fresh)
   seedSupport(fresh)
@@ -188,6 +190,12 @@ function addWhatsApp(d: DB) {
   d.secrets ??= []
   d.platform.features ??= {}
   d.platform.features.whatsapp ??= { mode: 'off', businessIds: [] }
+}
+
+/** v28: QR Orders, Daily Specials and the GST report are release flags now — on for everyone in the demo (as before). */
+function releaseDemoFeatures(d: DB) {
+  d.platform.features ??= {}
+  for (const k of ['qrOrders', 'specials', 'gstReport'] as const) d.platform.features[k] ??= { mode: 'all', businessIds: [] }
 }
 
 /** Keeps existing test data when new features add collections or module flags. */

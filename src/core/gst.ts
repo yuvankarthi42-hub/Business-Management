@@ -110,7 +110,27 @@ const taxOf = (h: Heads) => r2(h.igst + h.cgst + h.sgst)
 /** B2C invoices to another state above this value are listed one by one (GSTR-1 table B2CL). */
 export const B2CL_LIMIT = 100000
 
-export function buildGstReport(input: { month: string; shopState: string | null; bills: GstBill[]; creditNotes: GstCreditNote[]; purchases: GstPurchase[] }) {
+/** GST already split per line (per bill × rate for B2CS) with splitTax's exact rounding, then added up (₹). */
+export interface GstSplit { igst: number; cgst: number; sgst: number }
+/**
+ * The month's bills already added up by the database (the fast report). Then `bills` holds only the bills listed
+ * one by one (B2B, B2CL); everything else comes from here. Each list is in the order its rows first appear on the bills.
+ */
+export interface GstPreAdded {
+  outward: { taxable: number; split: GstSplit }
+  /** Walk-in bills (not B2B / B2CL) by place of supply × rate; `igst` = how the first such bill was billed. */
+  b2cs: { placeOfSupply: string | null; rate: number; igst: boolean; taxable: number; split: GstSplit }[]
+  /** By HSN × rate × UQC; qty already added up the way the line-by-line report does. */
+  hsn: { hsn: string; name: string; uqc: string; rate: number; qty: number; taxable: number; split: GstSplit }[]
+  missingHsn: number
+  docs: { from: string; to: string; count: number }
+}
+const addSplit = <H extends Heads>(h: H, taxable: number, t: GstSplit): H => {
+  h.taxable = r2(h.taxable + taxable); h.igst = r2(h.igst + t.igst); h.cgst = r2(h.cgst + t.cgst); h.sgst = r2(h.sgst + t.sgst)
+  return h
+}
+
+export function buildGstReport(input: { month: string; shopState: string | null; bills: GstBill[]; creditNotes: GstCreditNote[]; purchases: GstPurchase[]; pre?: GstPreAdded }) {
   const { shopState } = input
   const b2b: { invoiceNumber: string; date: string; customer: string; gstin: string; placeOfSupply: string; invoiceValue: number; rate: number; taxable: number; igst: number; cgst: number; sgst: number }[] = []
   const b2cl: typeof b2b = []
@@ -128,15 +148,27 @@ export function buildGstReport(input: { month: string; shopState: string | null;
     hsn.set(key, g)
   }
 
-  const invoices = input.bills.map((b) => b.invoiceNumber).filter(Boolean).sort()
+  const pre = input.pre
+  if (pre) {
+    addSplit(outward, pre.outward.taxable, pre.outward.split)
+    missingHsn += pre.missingHsn
+    for (const g of pre.hsn) hsn.set(`${g.hsn || '—'}|${g.rate}|${g.uqc}`, addSplit({ hsn: g.hsn, name: g.name, uqc: g.uqc, rate: g.rate, qty: g.qty, ...zero() }, g.taxable, g.split))
+    for (const g of pre.b2cs) {
+      const pos = g.placeOfSupply ?? shopState ?? ''
+      const key = `${pos}|${g.rate}`
+      const row = b2cs.get(key) ?? { placeOfSupply: pos, rate: g.rate, type: g.igst ? 'inter' as const : 'intra' as const, ...zero() }
+      b2cs.set(key, addSplit(row, g.taxable, g.split))
+    }
+  }
+  const invoices = pre ? [] : input.bills.map((b) => b.invoiceNumber).filter(Boolean).sort()
   for (const b of input.bills) {
     const pos = b.placeOfSupply ?? shopState ?? ''
-    for (const l of b.lines) { add(outward, l.taxable, l.tax, b.igst); toHsn(l, b.igst, 1) }
+    if (!pre) for (const l of b.lines) { add(outward, l.taxable, l.tax, b.igst); toHsn(l, b.igst, 1) }
     if (b.gstin) {
       for (const [rate, g] of byRate(b.lines)) b2b.push({ invoiceNumber: b.invoiceNumber, date: b.date, customer: b.customer, gstin: b.gstin, placeOfSupply: pos, invoiceValue: b.total, rate, taxable: g.taxable, ...splitTax(g.tax, b.igst) })
     } else if (b.igst && b.total > B2CL_LIMIT) {
       for (const [rate, g] of byRate(b.lines)) b2cl.push({ invoiceNumber: b.invoiceNumber, date: b.date, customer: b.customer, gstin: '', placeOfSupply: pos, invoiceValue: b.total, rate, taxable: g.taxable, ...splitTax(g.tax, true) })
-    } else {
+    } else if (!pre) {
       for (const [rate, g] of byRate(b.lines)) {
         const key = `${pos}|${rate}`
         const row = b2cs.get(key) ?? { placeOfSupply: pos, rate, type: b.igst ? 'inter' as const : 'intra' as const, ...zero() }
@@ -176,7 +208,7 @@ export function buildGstReport(input: { month: string; shopState: string | null;
     b2cs: [...b2cs.values()].filter((r) => r.taxable !== 0 || taxOf(r) !== 0).sort((a, b) => a.placeOfSupply.localeCompare(b.placeOfSupply) || a.rate - b.rate),
     cdn,
     hsn: [...hsn.values()].map((g) => ({ ...g, total: r2(g.taxable + taxOf(g)) })).sort((a, b) => a.hsn.localeCompare(b.hsn) || a.rate - b.rate),
-    docs: { from: invoices[0] ?? '', to: invoices[invoices.length - 1] ?? '', count: invoices.length, creditNotes: input.creditNotes.length },
+    docs: { ...(pre ? pre.docs : { from: invoices[0] ?? '', to: invoices[invoices.length - 1] ?? '', count: invoices.length }), creditNotes: input.creditNotes.length },
     purchases,
     summary: {
       outward, returns, net, input: input_,

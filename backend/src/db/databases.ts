@@ -8,7 +8,7 @@ import * as E from '../../../server/catalyst/enums'
 import { SqlError, type SqlDriver } from './sql/driver'
 import { HranaDriver } from './sql/hrana'
 import { TursoDb } from './turso'
-import type { Db } from './types'
+import type { Db, Row } from './types'
 
 export interface Databases {
   /** true = every shop has its own database. */
@@ -16,6 +16,8 @@ export interface Databases {
   platform(): Promise<Db>
   /** The shop's own database (migrated to the newest schema on first use). */
   shop(businessId: string): Promise<Db>
+  /** Opens several shops' databases with one lookup (instead of one per shop). Optional; failures surface in shop(). */
+  openMany?(businessIds: string[]): Promise<void>
   /** Makes the shop's database (product admin → create customer). No-op with a single database. */
   createShop(businessId: string): Promise<void>
   /** Removes the shop's database and everything in it. No-op with a single database (the cascade does it). */
@@ -76,9 +78,22 @@ export class PerShopDatabases implements Databases {
     }
     return hit
   }
-  private async open(businessId: string): Promise<Db> {
+  async openMany(businessIds: string[]) {
+    const want = [...new Set(businessIds.map(String))].filter((id) => /^\d{1,16}$/.test(id) && !this.shops.has(id))
+    if (!want.length) return
     const p = await this.platform()
-    const row = await p.first('shop_databases', { business_id: businessId })
+    const rows = await p.select('shop_databases', { where: { business_id: { in: want } } })
+    const byShop = new Map(rows.map((r) => [String(r.business_id), r]))
+    for (const id of want) {
+      const hit = this.open(id, byShop.get(id) ?? null).catch((e) => { this.shops.delete(id); throw e })
+      hit.catch(() => {}) // reported when the shop is used
+      this.shops.set(id, hit)
+    }
+  }
+
+  private async open(businessId: string, known?: Row | null): Promise<Db> {
+    const p = await this.platform()
+    const row = known !== undefined ? known : await p.first('shop_databases', { business_id: businessId })
     if (!row || !row.db_url) throw new ApiError('This shop has no data yet. Please contact support.', 404, 'NO_SHOP_DB')
     if (Number(row.status) !== E.ShopDbStatus.ready) throw new ApiError('This shop is being set up — please try again in a minute.', 503, 'SHOP_DB_NOT_READY')
     const driver = await this.prov.connect(String(row.db_url), row.db_token ? String(row.db_token) : null)

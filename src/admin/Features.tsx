@@ -68,7 +68,7 @@ function FeatureCard({ f, customers }: { f: Row; customers: Awaited<ReturnType<t
             </div>
           )}
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-sm text-slate-500">{count} of {customers.length} customers will see it</span>
+            <span className="text-sm text-slate-500">{f.key === 'singleDevice' ? `${count} of ${customers.length} customers on single device` : `${count} of ${customers.length} customers will see it`}</span>
             {dirty && (
               <div className="flex gap-2">
                 <Button variant="ghost" onClick={() => setFlag(f.flag)}>Undo</Button>

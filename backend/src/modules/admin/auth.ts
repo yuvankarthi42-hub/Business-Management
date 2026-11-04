@@ -3,7 +3,7 @@ import { ADMIN_ROLES } from '@/core/adminRoles'
 import type { AdminRole } from '@/core/types'
 import type { AdminSession, Ctx } from '../../core/context'
 import { ApiError } from '../../core/errors'
-import { assertPassword, checkPassword, hashPassword } from '../../core/passwords'
+import { assertPassword, checkPassword, hashPassword, needsRehash } from '../../core/passwords'
 import { adminRead, define, publicWrite } from '../../core/registry'
 import { signToken } from '../../core/tokens'
 import type { Db } from '../../db/types'
@@ -48,7 +48,9 @@ define('admin', {
       await c.platform.update('platform_admins', a.ROWID, { failed_logins: n >= LOCK_AFTER ? 0 : n, locked_until: n >= LOCK_AFTER ? new Date(Date.now() + LOCK_MINUTES * 60_000).toISOString() : null })
       throw new ApiError('Wrong admin username or password', 401, 'BAD_LOGIN')
     }
-    await c.platform.update('platform_admins', a.ROWID, { failed_logins: 0, locked_until: null, last_login_at: c.now.toISOString() })
+    // An older or weaker hash (bcrypt, fewer iterations, no pepper yet) is replaced in the same write.
+    const rehash = needsRehash(str(a.password_hash)) ? { password_hash: await hashPassword(password) } : {}
+    await c.platform.update('platform_admins', a.ROWID, { failed_logins: 0, locked_until: null, last_login_at: c.now.toISOString(), ...rehash })
     await c.platform.insert('admin_audit_logs', { admin_id: a.ROWID, admin_name: str(a.name), action: E.AdminAction.login, detail: 'Signed in' })
     const session: AdminSession = { id: a.ROWID, name: str(a.name), username: str(a.username), role: nameOf(E.AdminRole, a.role) as AdminRole }
     return { token: signToken({ t: 'a', aid: a.ROWID, tv: Number(a.token_version ?? 1) }, ADMIN_TOKEN_TTL), admin: adminView(session) }

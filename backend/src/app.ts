@@ -7,14 +7,16 @@ import { ApiError } from './core/errors'
 import { handler, handlerNames, type Handler } from './core/registry'
 import { verifyToken } from './core/tokens'
 import { DuplicateError } from './db/types'
-import { loadSession, type AdminClaims, type UserClaims } from './domain/session'
+import { featureFlags, loadSession, type AdminClaims, type UserClaims } from './domain/session'
 import { loadAdmin } from './modules/admin/auth'
 import './modules'
 import { checkSchema } from './modules/admin/schema'
 import { touchActivity } from './domain/directory'
 import { moduleOffError, moduleOffRead } from '@/core/moduleGuards'
+import { FEATURE_ACTIONS, featureOffAction, featureOn } from '@/core/features'
 import { afterOrderWrite } from './domain/tracking'
 import { bumpMenu } from './domain/menuCache'
+import { RawJson } from './core/rawJson'
 import { bumpReports } from './domain/reportCache'
 import { bumpCustomerStats } from './domain/statsCache'
 import { moduleOn } from './domain/util'
@@ -34,7 +36,8 @@ const MENU_WRITES = /^(products|categories|specials|tables|branches|business|sto
 const SETTINGS_WRITES = /^(business|branches)\./
 /** Something public to refresh: the QR menu (QR ordering) or the TV board (specials). Neither on → no cache work. */
 const publicCopies = (name: string, c: Ctx) => SETTINGS_WRITES.test(name) || moduleOn(c, 'qrOrdering') || moduleOn(c, 'specials')
-const menuChanged = (name: string, c: Ctx) => (MENU_WRITES.test(name) || !!c.effects.stock?.length) && publicCopies(name, c)
+// A bill's stock change matters only when an item sold out (or came back): the menu shows no stock numbers.
+const menuChanged = (name: string, c: Ctx) => (MENU_WRITES.test(name) || (!!c.effects.stock?.length && c.soldOutChanged)) && publicCopies(name, c)
 /** Order tracking (QR customers' tracking screen, "Notify me") exists only with QR ordering on. */
 const tracks = (name: string, c: Ctx) => TRACKING_WRITES.test(name) && moduleOn(c, 'qrOrdering')
 
@@ -151,6 +154,10 @@ export function createApp(envFor: (req: Request) => Env) {
         if (h.write) c.assertWritable({ readOnlyOk: h.readOnlyOk })
         else if (c.session.business.status === 'deactivated' && !c.session.support) throw new ApiError('This account has been deactivated. Please contact the product admin.', 403, 'DEACTIVATED')
         if (h.perm) c.requirePerm(h.perm)
+        // A feature the product admin hasn't released to this customer: never runs (core/features.ts).
+        const notReleased = featureOffAction(name, c.session.features)
+        if (notReleased && 'error' in notReleased) throw new ApiError(notReleased.error, 403, 'FEATURE_OFF')
+        if (notReleased) { await c.finish(true); res.json({ data: notReleased.empty }); return }
         // A module switched off in Settings → Modules: its actions make no new entries (core/moduleGuards.ts).
         if (h.write) { const off = moduleOffError(name, c.session.business.modules); if (off) throw new ApiError(off, 403, 'MODULE_OFF') }
         // …and its reads touch no database: lists answer empty, the rest are refused.
@@ -172,6 +179,10 @@ export function createApp(envFor: (req: Request) => Env) {
         } catch { c.session = null }
       }
       const args = Array.isArray(req.body?.args) ? req.body.args : []
+      // Customer QR actions (order, tracking) of a shop that doesn't have QR Orders released: refused before any shop read.
+      if (h.access === 'public' && FEATURE_ACTIONS[name] && !featureOn(await featureFlags(c.platform), FEATURE_ACTIONS[name].feature, String(args[0] ?? ''))) {
+        throw new ApiError('Online ordering is not available right now', 403, 'FEATURE_OFF')
+      }
       if (h.write && h.access !== 'admin' && !h.quiet) c.changeName = name
       let data: unknown
       try { data = await run(c, h, args) } catch (e) { await c.finish(false); throw e }
@@ -191,7 +202,10 @@ export function createApp(envFor: (req: Request) => Env) {
       }
       if (c.events) await sendEvents(c, h, name, args, data)
       const feed = await feedNote(c, h, name)
-      res.json({ data: data === undefined ? null : data, ...(Object.keys(c.effects).length ? { effects: c.effects } : {}), ...(feed ? { feed } : {}) })
+      const rest = { ...(Object.keys(c.effects).length ? { effects: c.effects } : {}), ...(feed ? { feed } : {}) }
+      // A cached copy that is already JSON text (QR menu, TV board): written as it is — the same bytes res.json would send.
+      if (data instanceof RawJson) { const more = JSON.stringify(rest); res.type('application/json').send(`{"data":${data.text}${more === '{}' ? '' : `,${more.slice(1, -1)}`}}`); return }
+      res.json({ data: data === undefined ? null : data, ...rest })
     } catch (e) {
       if (e instanceof ApiError) { res.status(e.status).json({ error: { message: e.message, code: e.code } }); return }
       if (e instanceof DuplicateError) { res.status(409).json({ error: { message: 'This already exists — it may have been saved on another device. Refresh and check.', code: 'DUPLICATE' } }); return }

@@ -2,7 +2,7 @@
 // with Turso) so a normal request costs one small epoch read instead of ~30 rows. Any change to the user,
 // roles, branches, business settings, subscription or features calls bumpEpoch(), which makes every cached
 // copy for that business stale at once.
-import { featuresFor, type FeatureFlags } from '@/core/features'
+import { featuresFor, withFeatures, type FeatureFlags } from '@/core/features'
 import { cleanPlanPrice, plansFrom, type PlanPrice, type PlanPrices } from '@/core/plans'
 import type { Branch, Business, Role, User } from '@/core/types'
 import { ALL_BRANCHES, type Ctx, type Session, type SupportClaim } from '../core/context'
@@ -18,12 +18,13 @@ export interface AdminClaims { t: 'a'; aid: string; tv: number }
 interface Cached { user: User; role: Role; business: Business; allBranches: Branch[]; tokenVersion: number; features: Record<string, boolean> }
 
 /** Call after any write that changes what auth.me returns (business, settings, branches, users, roles, features). */
-export async function bumpEpoch(c: Ctx, businessId: string | 'global') {
+export async function bumpEpoch(c: Ctx, businessId: string | 'global', opts: { menu?: boolean } = {}) {
   await c.epochs.bump(c, businessId)
   // Open screens of that shop re-check the sign-in (sent after the request is saved).
   if (businessId !== 'global') c.emit({ kind: 'session', shop: String(businessId), branch: null })
-  // Subscription / account / settings changes also change what the QR menu may show.
-  if (businessId !== 'global') c.afterCommit(() => bumpMenu(c, String(businessId)))
+  // Subscription / account / settings changes also change what the QR menu may show (a password change doesn't:
+  // menu: false keeps the customers' cached menu).
+  if (businessId !== 'global' && opts.menu !== false) c.afterCommit(() => bumpMenu(c, String(businessId)))
 }
 
 export async function featureFlags(db: Db): Promise<FeatureFlags> {
@@ -47,9 +48,12 @@ async function loadFresh(c: Ctx, claims: UserClaims): Promise<Cached | null> {
   ])
   if (!bundle || !roleRow) return null
   const user = userFrom(u, ub.map((x) => str(x.branch_id)))
+  const features = featuresFor(flags, claims.bid)
+  // A module whose feature isn't released to this customer counts as off everywhere (core/features.ts).
+  const business = { ...bundle.business, modules: withFeatures(bundle.business.modules, features) }
   return {
-    user, role: roleFrom(roleRow, perms), business: bundle.business, allBranches: bundle.branches,
-    tokenVersion: Number(u.token_version ?? 1), features: featuresFor(flags, claims.bid),
+    user, role: roleFrom(roleRow, perms), business, allBranches: bundle.branches,
+    tokenVersion: Number(u.token_version ?? 1), features,
   }
 }
 

@@ -1,6 +1,6 @@
 // Zoho Catalyst Cron function ("daily"). Schedule it in the console: Cloud Scale → Triggers → Cron,
-// every day at 09:00 IST, target function "daily". It sends the renewal reminders (once per day —
-// platform_settings.reminders.lastRunOn stops a second run).
+// every day at 09:00 IST, target function "daily". It runs the daily jobs in batches until all shops are done, and
+// sends the renewal reminders (once per day — a second run the same day does nothing).
 import catalyst from 'zcatalyst-sdk-node'
 import { catalystEnv } from './catalystEnv'
 import { Ctx } from './core/context'

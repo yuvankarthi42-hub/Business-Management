@@ -13,6 +13,8 @@ import { addDays, money, num, pctChange, rangeFor, timeAgo, type RangeKey } from
 import { AXIS, METHOD_COLOR, SERIES } from '@/lib/chart'
 import { BranchOverview } from '@/features/BranchOverview'
 
+const TOP = { top: 5 }
+
 function previousRange(key: RangeKey) {
   const cur = rangeFor(key)
   if (key === 'today') {
@@ -40,9 +42,10 @@ export default function Dashboard() {
   // Stable per range so child queries don't refetch on every render.
   const cur = useMemo(() => rangeFor(range), [range])
   const prev = useMemo(() => previousRange(range), [range])
-  const { data: s } = useData(() => api.reports.summary(cur.from, cur.to), [range])
-  const { data: p } = useData(() => api.reports.summary(prev.from, prev.to), [range])
-  const { data: y } = useData(() => (range === 'today' ? api.reports.summary(rangeFor('yesterday').from, rangeFor('yesterday').to) : Promise.resolve(null)), [range])
+  // The dashboard shows the top 5 items: only those come back (not every item sold in the range).
+  const { data: s } = useData(() => api.reports.summary(cur.from, cur.to, TOP), [range])
+  const { data: p } = useData(() => api.reports.summary(prev.from, prev.to, TOP), [range])
+  const { data: y } = useData(() => (range === 'today' ? api.reports.summary(rangeFor('yesterday').from, rangeFor('yesterday').to, TOP) : Promise.resolve(null)), [range])
   const { data: running = [] } = useData(() => api.orders.running())
   const { data: kots = [] } = useData(() => (mod('kitchen') ? api.kitchen.list() : Promise.resolve([])))
   const { data: products = [] } = useData(() => api.products.list())

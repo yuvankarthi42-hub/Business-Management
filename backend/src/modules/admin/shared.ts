@@ -13,11 +13,12 @@ import { code, E, fromMinor, nameOf, str, strOrNull, toMinor } from '../../domai
 export type Validity = { months: number } | { endDate: string }
 
 export async function adminLog(c: Ctx, a: AdminSession, action: AdminAuditLog['action'], b: { id: string; name: string } | null, detail: string) {
-  await c.platform.insert('admin_audit_logs', {
-    admin_id: a.id, admin_name: a.name, business_id: b?.id ?? null, business_name: b?.name ?? '',
-    action: code(E.AdminAction, action), detail: detail.slice(0, 255),
-  })
+  await c.platform.insert('admin_audit_logs', adminLogRow(a, action, b, detail))
 }
+export const adminLogRow = (a: AdminSession, action: AdminAuditLog['action'], b: { id: string; name: string } | null, detail: string) => ({
+  admin_id: a.id, admin_name: a.name, business_id: b?.id ?? null, business_name: b?.name ?? '',
+  action: code(E.AdminAction, action), detail: detail.slice(0, 255),
+})
 export function adminLogFrom(r: Row): AdminAuditLog {
   return {
     id: r.ROWID, at: r.CREATEDTIME, adminId: str(r.admin_id), adminName: str(r.admin_name), action: nameOf(E.AdminAction, r.action) as AdminAuditLog['action'],
@@ -45,12 +46,16 @@ export function customerPrice(pricing: Pricing, r: Row) {
 
 /** A paid period at this customer's price. `price_per_branch` keeps the monthly price it was charged at. */
 export async function addPeriod(c: Ctx, a: AdminSession, biz: Row, branches: number, kind: SubscriptionPeriod['kind'], startAt: string, endAt: string, months: number | null, note: string) {
+  await c.platform.insert('subscription_periods', await periodRow(c, a, biz, branches, kind, startAt, endAt, months, note))
+}
+/** The subscription_periods row addPeriod writes (its price is the customer's price now). */
+export async function periodRow(c: Ctx, a: AdminSession, biz: Row, branches: number, kind: SubscriptionPeriod['kind'], startAt: string, endAt: string, months: number | null, note: string) {
   const { price } = customerPrice(await loadPricing(c.platform), biz)
-  await c.platform.insert('subscription_periods', {
+  return {
     business_id: biz.ROWID, kind: code(E.PeriodKind, kind), start_at: startAt, end_at: endAt, months, branches,
     price_per_branch_minor: toMinor(price.month) ?? 0, amount_minor: toMinor(planAmount(price, branches, months, startAt, endAt)) ?? 0,
     note: note.trim().slice(0, 255), admin_id: a.id,
-  })
+  }
 }
 export function periodFrom(r: Row): SubscriptionPeriod {
   return {

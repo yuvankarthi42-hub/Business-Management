@@ -16,7 +16,7 @@ import { DEFAULT_SEQ } from './business'
 import { loadProducts, wholesaleList } from './catalog'
 import { movePoints } from './points'
 import { moveStockMany, stockProduct } from './stock'
-import { audit, bizDay, code, moduleOn, codeOrNull, E, fromMilli, fromMinor, isId, nameOf, nameOrNull, nextNumber, str, strOrNull, toBp, toMilli, toMinor } from './util'
+import { audit, bizDay, code, moduleOn, codeOrNull, E, fromMilli, fromMinor, isId, nameOf, nextNumber, str, strOrNull, toBp, toMilli, toMinor } from './util'
 
 export interface OrderDraft {
   id?: string
@@ -95,8 +95,11 @@ export async function withItems(c: Ctx, rows: Row[]): Promise<Order[]> {
   const items = await selectIn(c, 'order_items', 'order_id', rows.map((r) => r.ROWID))
   const addons = items.length ? await selectIn(c, 'order_item_addons', 'order_item_id', items.map((i) => i.ROWID)) : []
   const byOrder = new Map<string, Row[]>()
-  for (const i of items.sort((a, b) => Number(a.sort_order) - Number(b.sort_order))) byOrder.set(str(i.order_id), [...(byOrder.get(str(i.order_id)) ?? []), i])
-  return rows.map((r) => orderFrom(r, (byOrder.get(r.ROWID) ?? []).map((i) => itemFrom(i, addons))))
+  for (const i of items.sort((a, b) => Number(a.sort_order) - Number(b.sort_order))) { const k = str(i.order_id); const l = byOrder.get(k); if (l) l.push(i); else byOrder.set(k, [i]) }
+  // Each item gets only its own add-ons (itemFrom filters the list it is given; a short list keeps that cheap).
+  const addonsByItem = new Map<string, Row[]>()
+  for (const a of addons) { const k = str(a.order_item_id); const l = addonsByItem.get(k); if (l) l.push(a); else addonsByItem.set(k, [a]) }
+  return rows.map((r) => orderFrom(r, (byOrder.get(r.ROWID) ?? []).map((i) => itemFrom(i, addonsByItem.get(i.ROWID) ?? []))))
 }
 export async function loadOrder(c: Ctx, id: string, opts: { inScope?: boolean; businessId?: string } = {}) {
   if (!isId(id)) throw new ApiError('Order not found', 404)
@@ -418,4 +421,3 @@ export async function settle(c: Ctx, orderId: string, pays: PaymentInput[]) {
   await audit(c, 'order', row.ROWID, 'update', `bill ${num.text} • ${order.total}`, str(row.branch_id))
 }
 
-export const statusName = (v: unknown) => nameOrNull(E.OrderStatus, v as number)

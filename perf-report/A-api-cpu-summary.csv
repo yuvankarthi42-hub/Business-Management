@@ -1,0 +1,179 @@
+API,Endpoint,Page / Action (browser run: page (calls)),Calls,Error calls,Min CPU ms,Avg CPU ms,P90 CPU ms,Max CPU ms,Cold (1st call) ms,Warm avg ms,Normal-data avg ms,Normal-data P90 ms,Large-data avg ms,Large-data P90 ms,Large-data max ms
+admin.audit,POST /server/api/rpc/admin.audit,Admin > Audit log (1),41,0,0.10,0.20,0.34,0.85,0.47,0.18,0.15,0.18,0.24,0.34,0.36
+admin.createCustomer,POST /server/api/rpc/admin.createCustomer,Scripted — Admin > Customers · New customer,10,0,45.40,48.20,50.28,58.76,47.71,48.33,48.30,53.69,48.10,49.06,49.34
+admin.customer,POST /server/api/rpc/admin.customer,Admin > Customer detail (11),51,1,0.16,0.49,1.11,1.50,0.81,0.47,0.55,1.29,0.41,0.59,0.75
+admin.customers,POST /server/api/rpc/admin.customers,"Admin > Features (2), Admin Login (1), Admin > Customer detail (1)",44,0,0.13,0.33,0.44,1.93,0.73,0.30,0.33,0.81,0.33,0.35,0.76
+admin.deleteCustomer,POST /server/api/rpc/admin.deleteCustomer,Admin > Customer detail (1),17,8,0.19,0.60,0.99,3.15,3.15,0.28,0.85,2.07,0.28,0.38,0.42
+admin.endSupport,POST /server/api/rpc/admin.endSupport,Scripted — Shop app (support session) · End support,6,0,0.18,0.24,0.32,0.34,0.32,0.21,0.24,0.29,0.25,0.32,0.34
+admin.exportCustomer,POST /server/api/rpc/admin.exportCustomer,Admin > Customer detail (1),7,0,713.52,1849.67,3305.72,3307.58,1631.96,2012.94,763.13,814.40,3298.38,3306.96,3307.58
+admin.features,POST /server/api/rpc/admin.features,Admin > Features (2),42,0,0.08,0.16,0.23,0.62,0.34,0.14,0.14,0.16,0.17,0.24,0.31
+admin.login,POST /server/api/rpc/admin.login,Admin Login (1),11,0,4.18,4.47,4.61,5.69,4.87,4.32,4.50,5.02,4.43,4.55,4.61
+admin.me,POST /server/api/rpc/admin.me,Admin Login (1),41,0,0.07,0.12,0.19,0.62,0.35,0.10,0.12,0.19,0.12,0.16,0.24
+admin.pauseReminders,POST /server/api/rpc/admin.pauseReminders,Admin > Renewals (1),9,0,0.14,0.34,0.51,1.20,0.58,0.22,0.37,0.80,0.30,0.33,0.34
+admin.renew,POST /server/api/rpc/admin.renew,Admin > Customer detail (1),11,0,0.23,0.70,0.73,3.24,1.48,0.41,0.82,1.88,0.57,0.71,0.73
+admin.renewals,POST /server/api/rpc/admin.renewals,Admin > Renewals (3),43,0,0.26,0.78,1.70,2.85,1.83,0.70,0.61,1.58,0.98,1.67,2.85
+admin.replyTicket,POST /server/api/rpc/admin.replyTicket,Admin > Support ticket (1),11,0,0.13,0.47,0.51,2.53,1.05,0.25,0.55,1.38,0.37,0.48,0.51
+admin.resetPassword,POST /server/api/rpc/admin.resetPassword,Admin > Customer detail (1),7,0,4.16,4.91,5.63,6.25,5.17,4.72,4.76,5.69,5.11,5.19,5.22
+admin.runReminders,POST /server/api/rpc/admin.runReminders,Scripted — Admin > Renewals · Send today’s reminders,6,0,0.09,0.22,0.34,0.37,0.25,0.20,0.11,0.13,0.32,0.36,0.37
+admin.saveAdmin,POST /server/api/rpc/admin.saveAdmin,Scripted — Admin > Team · Add / edit admin,8,0,4.23,5.00,5.80,5.92,5.13,4.96,4.41,4.63,5.59,5.86,5.92
+admin.schemaCheck,POST /server/api/rpc/admin.schemaCheck,Scripted — Admin > Settings · Check database (after deploy),40,0,0.15,0.31,0.61,1.14,0.72,0.29,0.20,0.22,0.43,0.69,1.14
+admin.sendReminder,POST /server/api/rpc/admin.sendReminder,Scripted — Admin > Renewals · Send now (needs approved template),6,6,0.12,0.23,0.39,0.44,0.30,0.20,0.14,0.15,0.33,0.42,0.44
+admin.setAdminActive,POST /server/api/rpc/admin.setAdminActive,Scripted — Admin > Team · Turn admin on/off,8,0,0.12,0.23,0.39,0.44,0.31,0.21,0.14,0.17,0.33,0.42,0.44
+admin.setBranchLimit,POST /server/api/rpc/admin.setBranchLimit,Scripted — Admin > Customer detail · More / Fewer branches,12,0,0.16,0.30,0.49,0.53,0.33,0.30,0.19,0.24,0.41,0.51,0.53
+admin.setCustomPrice,POST /server/api/rpc/admin.setCustomPrice,Admin > Customer detail (1),11,0,0.14,0.51,0.64,2.32,1.10,0.29,0.56,1.33,0.45,0.59,0.64
+admin.setCustomerFeature,POST /server/api/rpc/admin.setCustomerFeature,Admin > Customer detail (1),13,0,0.20,0.49,0.94,1.62,1.00,0.33,0.46,0.88,0.52,0.84,1.01
+admin.setFeature,POST /server/api/rpc/admin.setFeature,Scripted — Admin > Features · Off / Selected / All,8,0,0.17,0.28,0.38,0.45,0.23,0.30,0.21,0.27,0.35,0.42,0.45
+admin.setStatus,POST /server/api/rpc/admin.setStatus,Admin > Customer detail (2),14,0,0.14,0.39,0.83,1.75,0.72,0.31,0.45,1.17,0.32,0.46,0.62
+admin.settings,POST /server/api/rpc/admin.settings,"Admin > Customer detail (10), Admin > Pricing (Settings) (2), Admin Login (1)",53,0,0.09,0.24,0.48,1.14,0.27,0.24,0.26,0.50,0.20,0.28,0.32
+admin.setup,POST /server/api/rpc/admin.setup,Scripted — First-time admin setup (once per install),4,4,0.07,0.15,0.28,0.35,0.10,0.21,0.08,0.09,0.23,0.32,0.35
+admin.startSupport,POST /server/api/rpc/admin.startSupport,Scripted — Admin > Customer detail · View as customer,6,0,0.17,0.37,0.58,0.68,0.46,0.32,0.20,0.23,0.53,0.64,0.68
+admin.storeScreenshot,POST /server/api/rpc/admin.storeScreenshot,Scripted — Admin > Support ticket · Attach screenshot,6,0,0.59,1.95,4.01,4.61,2.81,1.52,3.02,4.37,0.88,1.03,1.03
+admin.team,POST /server/api/rpc/admin.team,Admin > Team (2),42,0,0.08,0.15,0.22,0.79,0.31,0.14,0.15,0.19,0.16,0.23,0.30
+admin.ticket,POST /server/api/rpc/admin.ticket,Admin > Support ticket (3),43,0,0.11,0.28,0.41,1.85,0.82,0.24,0.30,0.81,0.26,0.37,0.43
+admin.tickets,POST /server/api/rpc/admin.tickets,"Admin > Customer detail (9), Admin > WhatsApp (3), Admin > Support ticket (2), Admin Login (1) +2 more",57,0,0.10,0.44,0.88,3.31,0.44,0.44,0.38,0.80,0.54,1.23,3.31
+admin.updateCustomer,POST /server/api/rpc/admin.updateCustomer,Admin > Customer detail (1),21,0,0.19,0.44,0.76,2.44,1.30,0.30,0.47,0.76,0.41,0.70,0.86
+admin.updateReminderSettings,POST /server/api/rpc/admin.updateReminderSettings,Scripted — Admin > Renewals · Save reminder settings,8,0,0.13,0.25,0.40,0.50,0.25,0.25,0.16,0.19,0.35,0.46,0.50
+admin.updateSettings,POST /server/api/rpc/admin.updateSettings,Admin > Pricing (Settings) (1),9,0,0.16,0.45,0.74,1.36,0.74,0.31,0.42,0.92,0.49,0.58,0.58
+admin.updateTicket,POST /server/api/rpc/admin.updateTicket,Admin > Support ticket (1),11,0,0.11,0.48,0.52,2.65,1.11,0.25,0.55,1.41,0.39,0.52,0.52
+admin.usage,POST /server/api/rpc/admin.usage,Admin > Usage (Reports) (1),41,0,0.49,0.92,1.40,2.98,1.95,0.84,0.75,1.23,1.10,1.41,1.63
+admin.waConnect,POST /server/api/rpc/admin.waConnect,Admin > WhatsApp (1),1,0,2.18,2.18,2.18,2.18,2.18,,2.18,2.18,,,
+admin.waDisconnect,POST /server/api/rpc/admin.waDisconnect,Scripted — Admin > WhatsApp · Disconnect,2,0,0.27,0.28,0.30,0.30,0.28,,0.27,0.27,0.30,0.30,0.30
+admin.waSaveTemplate,POST /server/api/rpc/admin.waSaveTemplate,Admin > WhatsApp (1),1,0,1.88,1.88,1.88,1.88,1.88,,1.88,1.88,,,
+admin.waSendTest,POST /server/api/rpc/admin.waSendTest,Scripted — Admin > WhatsApp · Send test message,12,12,0.09,0.18,0.29,0.57,0.22,0.18,0.12,0.14,0.25,0.43,0.57
+admin.waStatus,POST /server/api/rpc/admin.waStatus,Admin > WhatsApp (5),45,0,0.14,0.36,0.76,1.50,0.70,0.33,0.34,0.87,0.38,0.54,1.20
+admin.waTest,POST /server/api/rpc/admin.waTest,Admin > WhatsApp (1),1,0,0.85,0.85,0.85,0.85,0.85,,0.85,0.85,,,
+audit.list,POST /server/api/rpc/audit.list,Settings > Audit & Data (2),42,0,0.21,0.39,0.44,3.09,1.36,0.31,0.52,1.44,0.25,0.26,0.52
+auth.boot,POST /server/api/rpc/auth.boot,"Settings > Staff & Roles (6), Dashboard (5), Login (2), Onboarding (2) +3 more",61,0,0.29,0.88,2.23,4.03,0.63,0.89,1.13,2.40,0.35,0.43,0.55
+auth.changePassword,POST /server/api/rpc/auth.changePassword,Scripted — Not used by any screen (kept for API),4,0,8.76,10.65,12.37,12.84,12.05,9.24,10.01,11.02,11.28,12.53,12.84
+auth.login,POST /server/api/rpc/auth.login,Login (2),18,0,4.24,5.04,6.65,7.69,6.09,4.74,4.98,7.20,5.11,5.54,6.43
+auth.me,POST /server/api/rpc/auth.me,Scripted — App start (fallback when auth.boot is not available),40,0,0.17,0.21,0.27,0.38,0.36,0.21,0.21,0.28,0.21,0.26,0.38
+auth.setLanguage,POST /server/api/rpc/auth.setLanguage,Scripted — Top bar · English / Tamil,8,0,0.18,0.38,0.56,0.57,0.23,0.43,0.28,0.34,0.48,0.57,0.57
+auth.signup,POST /server/api/rpc/auth.signup,Scripted — Login page (always refuses: admin creates accounts),6,6,0.07,0.12,0.18,0.19,0.18,0.09,0.11,0.17,0.12,0.16,0.17
+auth.switchBranch,POST /server/api/rpc/auth.switchBranch,Dashboard (3),11,0,0.10,0.47,0.89,2.14,0.48,0.47,0.64,1.39,0.19,0.28,0.33
+branches.addDemo,POST /server/api/rpc/branches.addDemo,Scripted — Demo app only (refuses on the server),6,6,0.12,0.23,0.37,0.46,0.37,0.16,0.18,0.25,0.28,0.42,0.46
+branches.list,POST /server/api/rpc/branches.list,Settings > Branches (2),42,0,0.18,0.31,0.32,1.95,0.94,0.26,0.37,0.37,0.24,0.31,0.49
+branches.save,POST /server/api/rpc/branches.save,Settings > Branches (1),21,0,0.39,0.73,0.95,3.29,1.86,0.54,0.69,0.53,0.77,1.03,1.80
+branches.savePrinter,POST /server/api/rpc/branches.savePrinter,Scripted — Settings > Branches · Printer,20,0,0.26,0.42,0.51,1.18,0.44,0.42,0.39,0.47,0.45,0.51,0.53
+business.finishOnboarding,POST /server/api/rpc/business.finishOnboarding,Dashboard (1),7,0,0.37,0.62,1.03,1.58,0.87,0.42,0.68,1.22,0.53,0.63,0.66
+business.saveSetup,POST /server/api/rpc/business.saveSetup,Onboarding (1),1,0,5.48,5.48,5.48,5.48,5.48,,5.48,5.48,,,
+business.setLogo,POST /server/api/rpc/business.setLogo,Scripted — Settings > Business Profile · Shop logo (file upload),6,0,0.61,1.36,2.11,2.75,2.11,0.99,1.39,2.36,1.34,1.46,1.48
+business.update,POST /server/api/rpc/business.update,Settings > Business Profile (1),21,0,0.27,0.54,0.59,3.03,1.23,0.42,0.57,0.34,0.50,0.60,0.64
+campaigns.create,POST /server/api/rpc/campaigns.create,Scripted — Guests · Offers / campaigns,20,0,0.17,0.29,0.40,1.16,0.33,0.29,0.23,0.30,0.36,0.51,1.16
+campaigns.markSent,POST /server/api/rpc/campaigns.markSent,Scripted — Guests · Offers · Mark sent,20,0,0.16,0.27,0.33,0.88,0.33,0.26,0.20,0.28,0.34,0.42,0.88
+campaigns.today,POST /server/api/rpc/campaigns.today,Scripted — Guests · Offers (today),40,0,0.10,0.12,0.13,0.22,0.21,0.11,0.11,0.12,0.12,0.14,0.22
+campaigns.update,POST /server/api/rpc/campaigns.update,Scripted — Guests · Offers · Edit,20,0,0.14,0.19,0.24,0.31,0.26,0.18,0.16,0.18,0.22,0.29,0.31
+categories.list,POST /server/api/rpc/categories.list,"Menu items (2), Login (1), Onboarding (1), Billing (1) +1 more",46,0,0.11,0.23,0.55,0.96,0.41,0.21,0.25,0.57,0.19,0.20,0.96
+categories.remove,POST /server/api/rpc/categories.remove,Scripted — Menu items · Category · Delete,20,0,0.15,0.20,0.27,0.35,0.31,0.19,0.18,0.24,0.23,0.31,0.35
+categories.save,POST /server/api/rpc/categories.save,Scripted — Menu items · + New category,20,0,0.16,0.23,0.38,0.47,0.42,0.21,0.20,0.22,0.26,0.44,0.47
+customers.adjustPoints,POST /server/api/rpc/customers.adjustPoints,Scripted — Guests > Profile · Add / remove points,20,0,0.16,0.30,0.50,0.61,0.38,0.29,0.19,0.22,0.41,0.58,0.61
+customers.collectDue,POST /server/api/rpc/customers.collectDue,Guests (Customers) (1),21,0,0.20,0.63,0.90,3.11,1.39,0.50,0.50,0.30,0.78,0.90,0.94
+customers.history,POST /server/api/rpc/customers.history,Guests (Customers) (3),43,0,0.19,0.45,0.63,3.00,1.30,0.39,0.49,0.94,0.41,0.52,3.00
+customers.list,POST /server/api/rpc/customers.list,"Billing (3), Guests (Customers) (3), Tables (2), Orders (2)",50,0,0.79,2.71,5.14,8.22,4.99,2.57,1.93,4.03,3.88,5.36,6.46
+customers.one,POST /server/api/rpc/customers.one,Scripted — Guests > Profile (direct link),40,0,0.12,0.18,0.26,0.41,0.37,0.17,0.19,0.26,0.17,0.22,0.41
+customers.points,POST /server/api/rpc/customers.points,Guests (Customers) (3),43,0,0.14,0.25,0.34,2.50,1.08,0.19,0.32,0.59,0.18,0.23,0.36
+customers.save,POST /server/api/rpc/customers.save,Guests (Customers) (2),22,0,0.16,0.36,0.41,1.73,0.74,0.30,0.43,1.45,0.27,0.31,0.43
+dataExport.mine,POST /server/api/rpc/dataExport.mine,Settings > Audit & Data (1),7,0,702.22,1884.58,3399.57,3435.56,1688.30,2031.79,760.37,831.86,3383.52,3423.56,3435.56
+events.ticket,POST /server/api/rpc/events.ticket,Login (2),42,0,0.09,0.16,0.14,1.06,0.65,0.13,0.20,0.64,0.12,0.14,0.19
+expenses.list,POST /server/api/rpc/expenses.list,Expenses (4),44,0,0.25,0.60,0.80,2.88,1.08,0.56,0.54,0.95,0.66,0.72,0.83
+expenses.save,POST /server/api/rpc/expenses.save,Expenses (1),21,0,0.15,0.32,0.42,1.66,0.78,0.24,0.30,0.19,0.34,0.43,0.48
+expenses.void,POST /server/api/rpc/expenses.void,Expenses (1),11,0,0.15,0.42,0.88,1.32,0.62,0.35,0.36,0.77,0.50,0.79,0.88
+inventory.adjust,POST /server/api/rpc/inventory.adjust,Inventory (2),22,1,0.17,0.40,0.47,2.02,0.91,0.31,0.50,1.76,0.28,0.38,0.47
+inventory.batches,POST /server/api/rpc/inventory.batches,"Inventory (5), Dashboard (4), Inventory > Purchases (2), Login (1)",52,0,0.22,0.50,1.48,2.31,1.09,0.45,0.65,1.59,0.27,0.28,0.67
+inventory.movements,POST /server/api/rpc/inventory.movements,"Inventory (6), Inventory > Purchases (2)",48,0,0.21,0.40,0.72,2.10,1.01,0.36,0.51,1.10,0.25,0.28,0.54
+inventory.weekSummary,POST /server/api/rpc/inventory.weekSummary,Reports > Inventory (1),41,0,0.39,1.59,2.13,9.23,4.48,1.37,0.85,0.73,2.37,2.37,9.23
+inventory.writeOffBatch,POST /server/api/rpc/inventory.writeOffBatch,Inventory (2),22,0,0.19,0.51,0.91,2.41,1.09,0.42,0.56,1.99,0.46,0.58,0.95
+kitchen.list,POST /server/api/rpc/kitchen.list,"Tables (6), Kitchen (KOT) (5), Dashboard (4), Login (1) +1 more",57,0,0.19,0.57,1.36,4.01,0.67,0.56,0.74,1.83,0.25,0.31,0.40
+kitchen.setStatus,POST /server/api/rpc/kitchen.setStatus,Kitchen (KOT) (4),44,6,0.24,0.54,0.90,2.78,0.92,0.50,0.63,1.58,0.42,0.50,1.37
+media.store,POST /server/api/rpc/media.store,Scripted — Menu items · Item photo (file upload),6,0,0.42,0.59,0.77,0.83,0.77,0.49,0.61,0.78,0.56,0.68,0.71
+orders.board,POST /server/api/rpc/orders.board,Customer Orders (1),41,0,0.19,0.28,0.33,1.61,0.87,0.23,0.30,0.37,0.26,0.32,0.57
+orders.cancel,POST /server/api/rpc/orders.cancel,"Tables (1), Orders (1)",22,0,0.37,0.79,1.68,2.78,0.99,0.76,0.72,1.62,0.87,1.18,2.26
+orders.checkout,POST /server/api/rpc/orders.checkout,Billing (4),24,0,0.85,2.13,4.94,5.93,3.42,1.95,2.18,5.41,2.06,3.15,4.58
+orders.get,POST /server/api/rpc/orders.get,"Orders (5), Billing (4), Tables (1), Payments (1)",51,0,0.16,0.46,1.29,2.73,0.45,0.46,0.56,1.36,0.30,0.30,1.58
+orders.list,POST /server/api/rpc/orders.list,"Dashboard (4), Login (1)",45,0,0.54,1.00,1.17,1.56,1.11,0.99,0.96,1.27,1.04,1.12,1.35
+orders.mergeTables,POST /server/api/rpc/orders.mergeTables,Tables (1),9,2,0.56,1.51,2.82,5.25,2.40,0.85,1.96,4.03,0.91,1.08,1.12
+orders.page,POST /server/api/rpc/orders.page,Orders (12),52,0,0.73,1.66,4.00,5.42,2.23,1.62,2.04,4.53,1.05,1.56,1.82
+orders.running,POST /server/api/rpc/orders.running,"Billing (5), Tables (5), Dashboard (4), Login (1) +1 more",56,0,0.31,0.56,1.16,2.46,0.81,0.54,0.68,1.36,0.36,0.41,0.48
+orders.save,POST /server/api/rpc/orders.save,"Billing (1), Tables (1), Take Order (1)",43,0,0.40,1.05,2.54,5.59,1.60,1.01,1.06,3.51,1.04,1.80,2.71
+orders.sendToKitchen,POST /server/api/rpc/orders.sendToKitchen,Scripted — Tables / Billing · Send more items to kitchen,20,0,0.33,0.47,0.62,0.80,0.56,0.46,0.36,0.39,0.58,0.72,0.80
+orders.setFulfilment,POST /server/api/rpc/orders.setFulfilment,Scripted — Customer Orders board (retail shops),20,0,0.22,0.31,0.41,0.51,0.34,0.30,0.25,0.27,0.37,0.48,0.51
+orders.settle,POST /server/api/rpc/orders.settle,Tables (1),21,0,0.40,0.78,0.92,3.86,1.09,0.73,0.95,2.27,0.60,0.67,0.74
+orders.transferTable,POST /server/api/rpc/orders.transferTable,Tables (1),11,0,0.26,0.92,2.37,4.18,1.72,0.62,0.95,2.28,0.88,1.66,2.37
+payments.list,POST /server/api/rpc/payments.list,Scripted — Old Payments screen (kept for older tabs; new screen uses payments.page),40,0,0.83,2.94,5.25,6.80,3.92,2.89,0.91,0.99,4.97,5.63,6.80
+payments.page,POST /server/api/rpc/payments.page,Payments (6),46,0,0.41,0.64,1.26,2.81,1.11,0.60,0.76,1.71,0.47,0.48,0.81
+products.assignBarcodes,POST /server/api/rpc/products.assignBarcodes,Scripted — Labels / barcodes (retail shops),20,0,0.81,2.77,5.45,5.73,2.71,2.78,0.87,0.98,4.67,5.65,5.73
+products.importMany,POST /server/api/rpc/products.importMany,Scripted — Menu items · More · Import (CSV file),6,0,1.52,3.90,6.82,7.96,3.32,4.19,1.58,1.62,6.22,7.51,7.96
+products.list,POST /server/api/rpc/products.list,Scripted — Old full catalogue read (kept for older tabs; app now uses products.page),40,0,2.72,8.81,12.52,31.66,17.38,8.36,4.05,6.20,13.57,20.05,31.66
+products.page,POST /server/api/rpc/products.page,"Dashboard (6), Login (4), Menu items (4), Inventory > Purchases (4) +1 more",60,0,0.50,3.02,5.34,11.93,4.91,2.89,3.33,5.52,2.41,2.93,5.25
+products.save,POST /server/api/rpc/products.save,"Menu items (5), Inventory > Purchases (1)",46,3,0.26,0.66,0.70,6.93,0.59,0.66,0.80,1.80,0.49,0.66,0.80
+products.saveDesign,POST /server/api/rpc/products.saveDesign,Scripted — Textile · New design (textile shops),6,0,3.37,10.97,19.24,21.71,9.47,11.72,3.93,4.69,18.01,20.72,21.71
+products.setDiscount,POST /server/api/rpc/products.setDiscount,Scripted — Menu items · Discount by category (retail),20,0,1.97,7.72,14.94,19.58,11.44,7.30,2.37,3.37,13.06,17.19,19.58
+public.live,POST /server/api/rpc/public.live,Customer QR Menu (1),41,0,0.04,0.09,0.12,0.83,0.35,0.07,0.09,0.06,0.10,0.12,0.24
+public.menu,POST /server/api/rpc/public.menu,Customer QR Menu (2),52,0,0.33,2.67,3.96,28.10,13.27,2.03,0.98,2.35,4.51,5.70,28.10
+public.order,POST /server/api/rpc/public.order,"Customer QR Menu (3), Customer Track Order (2)",45,0,0.07,0.19,0.42,1.08,0.63,0.15,0.24,0.67,0.12,0.15,0.45
+public.placeOrder,POST /server/api/rpc/public.placeOrder,Customer QR Menu (1),21,0,0.55,1.17,1.41,4.26,2.04,1.03,1.02,0.96,1.34,1.64,3.78
+public.pushKey,POST /server/api/rpc/public.pushKey,Customer QR Menu (1),41,0,0.05,0.08,0.10,0.39,0.21,0.07,0.07,0.09,0.08,0.10,0.15
+public.specials,POST /server/api/rpc/public.specials,TV Specials Display (1),41,0,0.07,1.02,0.21,25.31,11.88,0.16,0.56,0.10,1.50,0.42,25.31
+public.subscribePush,POST /server/api/rpc/public.subscribePush,Scripted — Customer QR · “Notify me” (needs browser push permission),6,0,0.18,0.66,1.25,1.47,0.80,0.60,0.90,1.38,0.43,0.54,0.57
+public.track,POST /server/api/rpc/public.track,Customer Track Order (1),41,20,0.10,0.21,0.32,0.93,0.56,0.15,0.22,0.32,0.19,0.30,0.43
+purchases.create,POST /server/api/rpc/purchases.create,Inventory > Purchases (1),21,0,0.67,1.19,1.55,3.36,1.93,1.06,1.00,0.94,1.39,1.62,2.24
+purchases.get,POST /server/api/rpc/purchases.get,Scripted — Inventory > Purchases · Open bill (direct),40,0,0.12,0.15,0.17,0.26,0.21,0.14,0.15,0.16,0.15,0.18,0.26
+purchases.list,POST /server/api/rpc/purchases.list,Inventory > Purchases (2),42,0,1.33,6.97,12.13,18.89,9.42,6.78,1.89,2.07,12.55,14.39,18.89
+purchases.void,POST /server/api/rpc/purchases.void,Scripted — Inventory > Purchases · Void purchase,10,0,0.28,0.60,0.83,1.74,0.47,0.63,0.33,0.39,0.87,1.34,1.74
+qr.accept,POST /server/api/rpc/qr.accept,QR Orders (1),21,0,0.40,0.76,1.08,2.17,1.62,0.61,0.66,1.08,0.86,1.14,1.62
+qr.pending,POST /server/api/rpc/qr.pending,"Billing (5), Tables (5), QR Orders (2), Orders (2) +10 more",64,0,0.15,0.49,0.82,6.34,0.30,0.50,0.63,0.93,0.17,0.20,0.23
+qr.recent,POST /server/api/rpc/qr.recent,QR Orders (3),43,0,0.24,0.38,0.39,2.10,0.76,0.35,0.44,0.83,0.30,0.38,0.41
+qr.reject,POST /server/api/rpc/qr.reject,QR Orders (1),21,0,0.24,0.46,0.66,1.86,0.85,0.40,0.42,0.37,0.51,0.67,0.75
+reports.byBranch,POST /server/api/rpc/reports.byBranch,Dashboard (4),44,0,2.26,20.61,42.45,60.23,12.34,21.22,4.19,5.58,40.31,49.90,60.23
+reports.gst,POST /server/api/rpc/reports.gst,Reports > GST returns (1),41,0,5.37,18.01,31.15,67.74,35.05,16.66,9.31,15.36,27.14,32.94,67.74
+reports.receivables,POST /server/api/rpc/reports.receivables,Reports > Guests (1),41,0,0.23,0.72,1.01,3.66,2.66,0.57,0.45,0.41,1.02,1.03,3.61
+reports.summary,POST /server/api/rpc/reports.summary,"Dashboard (18), Login (3), Reports > Daily Income (3), Reports (1) +1 more",66,0,0.51,7.44,17.16,29.03,8.04,7.40,3.42,6.07,16.70,25.08,29.03
+reports.topProducts,POST /server/api/rpc/reports.topProducts,"Billing (1), Tables (1)",42,0,0.17,1.91,2.99,30.03,15.52,0.87,1.69,6.82,2.15,1.31,30.03
+returns.create,POST /server/api/rpc/returns.create,Orders (1),21,0,0.36,0.80,0.90,4.46,1.91,0.62,0.89,1.21,0.70,0.86,0.90
+returns.creditNote,POST /server/api/rpc/returns.creditNote,Scripted — Billing · Pay with credit note,40,0,0.10,0.15,0.22,0.36,0.30,0.15,0.12,0.15,0.18,0.26,0.36
+returns.forOrder,POST /server/api/rpc/returns.forOrder,"Orders (4), Payments (1)",45,0,0.12,0.27,0.48,1.65,0.60,0.25,0.34,0.94,0.18,0.25,0.35
+returns.list,POST /server/api/rpc/returns.list,Scripted — Orders · Returns list,40,0,0.21,0.64,0.97,4.12,0.61,0.64,0.24,0.27,1.04,1.18,4.12
+roles.list,POST /server/api/rpc/roles.list,Settings > Staff & Roles (2),42,0,0.11,0.17,0.16,1.19,0.49,0.14,0.19,0.16,0.13,0.16,0.16
+roles.remove,POST /server/api/rpc/roles.remove,Scripted — Settings > Staff & Roles · Delete role,20,0,0.23,0.36,0.51,0.59,0.37,0.36,0.26,0.29,0.45,0.58,0.59
+roles.save,POST /server/api/rpc/roles.save,Settings > Staff & Roles (1),21,0,0.30,0.52,0.63,2.52,1.21,0.41,0.56,0.63,0.48,0.58,0.64
+specials.list,POST /server/api/rpc/specials.list,"Daily Specials (3), Billing (1)",44,0,0.11,0.21,0.39,0.75,0.49,0.19,0.23,0.54,0.20,0.25,0.44
+specials.save,POST /server/api/rpc/specials.save,Daily Specials (1),21,0,0.80,2.73,5.57,5.96,3.73,2.57,1.22,1.01,4.40,5.65,5.96
+staff.day,POST /server/api/rpc/staff.day,Staff (4),44,0,0.09,0.17,0.23,0.80,0.40,0.15,0.20,0.52,0.13,0.15,0.23
+staff.giveAdvance,POST /server/api/rpc/staff.giveAdvance,Staff > Salary (1),21,0,0.19,0.36,0.45,1.80,0.94,0.26,0.39,0.41,0.33,0.47,0.62
+staff.list,POST /server/api/rpc/staff.list,Staff (4),44,0,0.14,0.24,0.26,1.63,0.71,0.20,0.29,0.70,0.17,0.19,0.29
+staff.mark,POST /server/api/rpc/staff.mark,Staff (2),42,4,0.17,0.37,0.41,2.37,1.06,0.31,0.46,0.61,0.27,0.34,0.46
+staff.markAll,POST /server/api/rpc/staff.markAll,Staff (1),41,20,0.20,0.33,0.35,1.64,1.64,0.27,0.42,0.44,0.23,0.29,0.33
+staff.month,POST /server/api/rpc/staff.month,"Staff > Salary (3), Staff (1)",44,0,0.24,0.53,1.38,2.37,1.81,0.43,0.60,1.59,0.44,0.51,2.07
+staff.paySalary,POST /server/api/rpc/staff.paySalary,Staff > Salary (1),41,28,0.67,1.04,1.95,2.37,2.18,0.95,1.22,2.26,0.84,0.98,1.03
+staff.setPay,POST /server/api/rpc/staff.setPay,Staff > Salary (1),21,0,0.25,0.46,0.61,1.73,0.60,0.43,0.51,1.18,0.40,0.60,0.61
+suppliers.ledger,POST /server/api/rpc/suppliers.ledger,Inventory > Suppliers (2),42,0,0.19,0.38,0.47,1.48,0.88,0.34,0.35,0.46,0.42,0.46,0.67
+suppliers.list,POST /server/api/rpc/suppliers.list,"Inventory > Purchases (2), Inventory > Suppliers (2)",44,0,0.25,0.57,0.75,2.03,0.74,0.56,0.48,1.22,0.68,0.73,0.75
+suppliers.pay,POST /server/api/rpc/suppliers.pay,Inventory > Suppliers (1),21,0,0.21,0.37,0.51,1.89,0.83,0.30,0.39,0.29,0.36,0.51,0.52
+suppliers.save,POST /server/api/rpc/suppliers.save,Inventory > Suppliers (1),21,0,0.17,0.40,0.80,2.14,0.93,0.31,0.43,0.80,0.37,0.46,0.82
+suppliers.voidPayment,POST /server/api/rpc/suppliers.voidPayment,Scripted — Inventory > Suppliers · Void payment,10,0,0.18,0.24,0.33,0.33,0.33,0.22,0.21,0.28,0.27,0.31,0.33
+support.create,POST /server/api/rpc/support.create,Scripted — Support · Report a problem,10,0,0.20,0.29,0.39,0.47,0.36,0.27,0.26,0.32,0.31,0.44,0.47
+support.markRead,POST /server/api/rpc/support.markRead,Scripted — Support · Open ticket (mark read),20,0,0.10,0.44,1.13,3.62,0.18,0.47,0.11,0.13,0.76,2.25,3.62
+support.mine,POST /server/api/rpc/support.mine,"Support (2), Tables (1), Orders (1), Inventory > Purchases (1) +1 more",46,0,0.11,0.22,0.66,1.02,0.46,0.21,0.29,0.79,0.13,0.14,0.20
+support.reply,POST /server/api/rpc/support.reply,Support (2),22,0,0.16,0.43,0.50,2.52,1.03,0.34,0.57,2.29,0.27,0.34,0.52
+support.resolve,POST /server/api/rpc/support.resolve,Scripted — Support · Mark resolved,10,0,0.15,0.85,2.56,2.64,1.38,0.72,0.67,1.67,1.03,2.35,2.55
+support.storeScreenshot,POST /server/api/rpc/support.storeScreenshot,Scripted — Support · Attach screenshot (file),6,0,0.31,0.48,0.72,0.82,0.72,0.36,0.43,0.56,0.53,0.75,0.82
+sync.changes,POST /server/api/rpc/sync.changes,"Settings > Staff & Roles (6), Onboarding (3), Billing (3), Login (2) +4 more",60,0,0.09,0.50,1.26,3.56,1.17,0.45,0.64,1.55,0.22,0.18,2.03
+system.runDailyBatch,POST /server/api/rpc/system.runDailyBatch,Scripted — Hourly scheduler (daily jobs batch),10,0,0.09,0.13,0.19,0.33,0.25,0.10,0.11,0.15,0.15,0.24,0.33
+system.runDailyJobs,POST /server/api/rpc/system.runDailyJobs,Scripted — Daily cron 09:00 IST (Catalyst),6,0,0.08,0.10,0.13,0.14,0.12,0.09,0.08,0.09,0.12,0.14,0.14
+tables.list,POST /server/api/rpc/tables.list,"Tables (4), Billing (1), QR Orders (1), Orders (1) +1 more",48,0,0.11,0.21,0.50,0.95,0.45,0.19,0.25,0.66,0.14,0.18,0.22
+tables.remove,POST /server/api/rpc/tables.remove,Scripted — Settings > Tables · Remove,10,0,0.21,0.32,0.43,0.64,0.45,0.28,0.25,0.30,0.39,0.54,0.64
+tables.save,POST /server/api/rpc/tables.save,Settings > Tables (1),21,0,0.19,0.38,0.50,1.21,0.63,0.33,0.32,0.42,0.43,0.54,0.89
+tables.unmerge,POST /server/api/rpc/tables.unmerge,Scripted — Tables · Unmerge,6,0,0.24,0.29,0.32,0.33,0.31,0.28,0.27,0.29,0.32,0.33,0.33
+users.list,POST /server/api/rpc/users.list,"Settings > Staff & Roles (4), Billing (1)",45,0,0.13,0.33,0.85,2.19,0.61,0.30,0.40,1.03,0.23,0.23,1.56
+users.save,POST /server/api/rpc/users.save,Settings > Staff & Roles (2),12,0,2.39,4.76,5.23,6.77,5.40,4.55,4.50,5.45,5.12,5.21,5.24
+whatsapp.connect,POST /server/api/rpc/whatsapp.connect,Scripted — Settings > Integrations · WhatsApp set up,8,0,0.27,0.64,0.96,1.23,1.04,0.51,0.57,0.82,0.72,1.07,1.23
+whatsapp.disconnect,POST /server/api/rpc/whatsapp.disconnect,Scripted — Settings > Integrations · Disconnect,2,0,0.26,0.41,0.53,0.56,0.41,,0.26,0.26,0.56,0.56,0.56
+whatsapp.enable,POST /server/api/rpc/whatsapp.enable,Scripted — Settings > Integrations · Turn on WhatsApp,4,0,0.26,0.36,0.41,0.42,0.32,0.41,0.34,0.40,0.38,0.40,0.40
+whatsapp.finishSetup,POST /server/api/rpc/whatsapp.finishSetup,Scripted — Settings > Integrations · Finish set-up,12,6,0.26,0.36,0.47,0.52,,0.36,0.37,0.42,0.35,0.47,0.52
+whatsapp.messages,POST /server/api/rpc/whatsapp.messages,Scripted — Settings > Integrations · Message log,40,0,0.09,0.12,0.17,0.27,0.27,0.11,0.12,0.17,0.12,0.14,0.27
+whatsapp.saveTemplate,POST /server/api/rpc/whatsapp.saveTemplate,Scripted — Settings > Integrations · Templates,16,6,0.25,0.42,0.63,0.72,,0.42,0.47,0.63,0.37,0.57,0.62
+whatsapp.sendBill,POST /server/api/rpc/whatsapp.sendBill,Scripted — Billing receipt · Send on WhatsApp,20,20,0.13,0.23,0.35,0.49,0.28,0.22,0.21,0.31,0.25,0.37,0.49
+whatsapp.sendOffer,POST /server/api/rpc/whatsapp.sendOffer,Scripted — Guests · Send offer,12,12,0.12,0.20,0.30,0.34,0.28,0.19,0.19,0.26,0.21,0.32,0.34
+whatsapp.sendTest,POST /server/api/rpc/whatsapp.sendTest,Scripted — Settings > Integrations · Send test,6,0,0.17,0.33,0.49,0.53,0.42,0.29,0.23,0.29,0.43,0.52,0.53
+whatsapp.setAutoSendBill,POST /server/api/rpc/whatsapp.setAutoSendBill,Scripted — Settings > Integrations · Auto-send bills,6,0,0.17,0.24,0.33,0.38,0.29,0.21,0.18,0.19,0.29,0.36,0.38
+whatsapp.status,POST /server/api/rpc/whatsapp.status,"Billing (5), Orders (2), Guests (Customers) (2), Tables (1) +4 more",54,0,0.09,0.30,0.86,2.15,0.56,0.29,0.40,0.99,0.14,0.23,0.42
+whatsapp.test,POST /server/api/rpc/whatsapp.test,Scripted — Settings > Integrations · Test connection,8,0,0.22,0.32,0.44,0.51,0.33,0.32,0.26,0.28,0.39,0.48,0.51

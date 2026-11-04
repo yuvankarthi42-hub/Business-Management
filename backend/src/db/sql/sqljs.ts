@@ -2,6 +2,7 @@
 // One lock per database, like SQLite's single writer: a transaction holds it from BEGIN to COMMIT, and every
 // other statement waits (see lock.ts).
 import type { Database, SqlJsStatic } from 'sql.js'
+import { countRequest } from '../../core/meter'
 import { Lock } from '../lock'
 import { sqlError, SqlError, type SqlDriver, type SqlResult, type SqlTx, type SqlValue, type Stmt } from './driver'
 
@@ -42,7 +43,9 @@ export class SqlJsDriver implements SqlDriver {
   }
   private writes = (stmts: Stmt[]) => stmts.some((s) => !/^\s*(SELECT|PRAGMA|WITH)\b/i.test(s.sql))
 
+  // (Each call counts as one outgoing request, like a round trip to Turso — the hourly jobs' request budget.)
   async run(stmts: Stmt[]) {
+    countRequest()
     const release = await this.lock.acquire()
     try {
       const r = this.exec(stmts)
@@ -51,10 +54,12 @@ export class SqlJsDriver implements SqlDriver {
     } finally { release() }
   }
   async script(sql: string) {
+    countRequest()
     const release = await this.lock.acquire()
     try { this.db.exec(sql); this.onCommit?.(this.db) } catch (e) { throw sqlError((e as Error).message) } finally { release() }
   }
   async batch(stmts: Stmt[]) {
+    countRequest()
     const release = await this.lock.acquire()
     try {
       this.db.exec('BEGIN IMMEDIATE')
@@ -63,6 +68,7 @@ export class SqlJsDriver implements SqlDriver {
     } finally { release() }
   }
   async begin(): Promise<SqlTx> {
+    countRequest()
     const release = await this.lock.acquire()
     this.db.exec('BEGIN IMMEDIATE')
     let done = false, calls = 2 // BEGIN and COMMIT are round trips too
@@ -76,9 +82,9 @@ export class SqlJsDriver implements SqlDriver {
     }
     const live = () => { if (done) throw new SqlError('other', 'Transaction already finished') }
     return {
-      run: async (stmts) => { live(); calls++; if (process.env.DEBUG_TX) console.log('TX', stmts.map((x) => x.sql.slice(0, 90)).join(' ;; ')); return this.exec(stmts) },
-      script: async (sql) => { live(); calls++; try { this.db.exec(sql) } catch (e) { throw sqlError((e as Error).message) } },
-      commit: async () => { try { end('COMMIT') } catch (e) { throw sqlError((e as Error).message) } },
+      run: async (stmts) => { live(); calls++; countRequest(); if (process.env.DEBUG_TX) console.log('TX', stmts.map((x) => x.sql.slice(0, 90)).join(' ;; ')); return this.exec(stmts) },
+      script: async (sql) => { live(); calls++; countRequest(); try { this.db.exec(sql) } catch (e) { throw sqlError((e as Error).message) } },
+      commit: async () => { countRequest(); try { end('COMMIT') } catch (e) { throw sqlError((e as Error).message) } },
       rollback: async () => { try { end('ROLLBACK') } catch { /* already rolled back */ } },
     }
   }

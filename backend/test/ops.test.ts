@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import '../src/modules/ops'
 import '../src/modules/reports'
 import { withShop } from './fixtures'
+import { listProducts } from './helpers'
 
 type P = { id: string; stock: number }
 type Move = { productId: string; type: string; qty: number; balanceAfter: number }
@@ -29,7 +30,7 @@ test('inventory, expenses, reports and audit', async () => {
     await assert.rejects(s.call('inventory.adjust', milk.id, 'adjustment', -20, 'Count'), /below zero/)
     const moves = await s.call<Move[]>('inventory.movements', milk.id)
     assert.deepEqual(moves.map((m) => [m.type, m.qty, m.balanceAfter]), [['wastage', -2, 8], ['purchase', 10, 10]])
-    assert.equal((await s.call<P[]>('products.list')).find((p) => p.id === milk.id)!.stock, 8)
+    assert.equal((await listProducts<P>(s)).find((p) => p.id === milk.id)!.stock, 8)
 
     // Batch items need an expiry; batches list with days left; write-off takes that exact batch.
     const curd = await s.call<P>('products.save', { name: 'Curd', price: 30, trackStock: true, trackExpiry: true })
@@ -42,7 +43,7 @@ test('inventory, expenses, reports and audit', async () => {
     assert.equal(batches[0].product?.name, 'Curd')
     await s.call('inventory.writeOffBatch', batches[0].id, 'Expired')
     assert.deepEqual((await s.call<Batch[]>('inventory.batches')).map((b) => b.batchNo), ['B2'])
-    assert.equal((await s.call<P[]>('products.list')).find((p) => p.id === curd.id)!.stock, 3)
+    assert.equal((await listProducts<P>(s)).find((p) => p.id === curd.id)!.stock, 3)
     assert.equal((await s.call<Move[]>('inventory.movements', curd.id))[0].qty, -5)
 
     // Expenses: save, list, void.

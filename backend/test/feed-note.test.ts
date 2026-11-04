@@ -13,7 +13,7 @@ test('every signed-in answer carries the change number; own writes say which cha
       const res = await fetch(`${s.base}/rpc/${name}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${s.ownerToken}` }, body: JSON.stringify({ args }) })
       return await res.json() as { data?: unknown; feed?: Feed; error?: unknown }
     }
-    const read = await raw('products.list')
+    const read = await raw('products.page', 0)
     if (!PER_SHOP) { assert.equal(read.feed, undefined, 'single-database mode: unchanged'); return }
     assert.equal(typeof read.feed?.latest, 'number')
     assert.ok(read.feed?.epoch)
@@ -33,7 +33,7 @@ test('every signed-in answer carries the change number; own writes say which cha
     const own = new Set([write.feed.own!])
     assert.equal(feedDecision(read.feed!.latest, write.feed, own, write.feed.epoch ?? null), 'own')
     await s.call('products.save', { name: 'Coffee', price: 25 }) // "another device"
-    const after = await raw('products.list')
+    const after = await raw('products.page', 0)
     assert.equal(feedDecision(write.feed.latest, after.feed!, own, write.feed.epoch ?? null), 'ask')
   } finally { s.close() }
 })

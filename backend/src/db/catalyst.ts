@@ -43,6 +43,8 @@ function condSql(table: TableName, col: string, cond: Cond): string {
     if (!list.length) return '1 = 0'
     return `${col} IN (${list.map((v) => literal(table, col, v)).join(', ')})`
   }
+  // ZCQL: * is the wildcard; quotes and * in the text are dropped (search only).
+  if ('contains' in c) return `${col} LIKE '*${String(c.contains).replace(/['"\\*]/g, '')}*'`
   const parts: string[] = []
   if ('ne' in c) parts.push(c.ne === null ? `${col} is not null` : `${col} != ${literal(table, col, c.ne as Value)}`)
   if ('gt' in c) parts.push(`${col} > ${literal(table, col, c.gt as Value)}`)

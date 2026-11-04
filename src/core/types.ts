@@ -581,6 +581,8 @@ export interface Payment extends Scoped, Audit {
   amount: number
   reference: string
   voided: boolean
+  /** In payments.page answers: the bill's number (bill no., else order no.), so the list needs no orders. */
+  billNumber?: string | null
 }
 
 // ---------- Staff: attendance & payroll ----------

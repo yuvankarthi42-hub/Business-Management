@@ -6,6 +6,7 @@ import { useApp, useData } from '@/app/AppContext'
 import { Badge, Button, Card, EmptyState, Field, Input, Modal, Table, Td, Th, Toggle, useAction } from '@/components/ui'
 import { PhoneInput } from '@/components/PhoneInput'
 import { formatPhone } from '@/core/phone'
+import { FEATURES, type FeatureKey } from '@/core/features'
 import { api, type Validity } from '@/data'
 import { BranchUsage } from './Customers'
 import { ExportButtons } from '@/features/ExportData'
@@ -327,6 +328,14 @@ function SupportModal({ c, onClose }: { c: Detail; onClose: () => void }) {
 
 const WA_STATE: Record<string, string> = { off: 'Not released', not_set_up: 'Not set up yet', incomplete: 'Setup in progress', connected: 'Connected' }
 
+/** Released features with a per-customer switch here, and what the customer misses while it's off. */
+const RELEASES: { key: FeatureKey; off: string; on?: string }[] = [
+  { key: 'qrOrders', off: 'no QR Ordering module, QR Orders screen or customer QR menu' },
+  { key: 'specials', off: 'no Daily Specials module, offers in billing / QR menu or TV display' },
+  { key: 'gstReport', off: 'no GST returns tab in Reports' },
+  { key: 'singleDevice', on: 'On — screens don’t check for other devices’ changes (they still do while QR ordering is on)', off: 'other devices’ changes show within 30–60 s (screens check in the background)' },
+]
+
 /** Features released to this customer (flags live on the Features page). */
 function FeaturesCard({ c, editable }: { c: Detail; editable: boolean }) {
   const run = useAction()
@@ -341,6 +350,16 @@ function FeaturesCard({ c, editable }: { c: Detail; editable: boolean }) {
         <Toggle checked={c.features.whatsapp} disabled={!editable} label="WhatsApp integration"
           onChange={(v) => run(() => api.admin.setCustomerFeature(c.id, 'whatsapp', v), v ? 'WhatsApp turned on for this customer' : 'WhatsApp turned off for this customer')} />
       </div>
+      {RELEASES.map(({ key, off, on }) => (
+        <div key={key} className="flex flex-wrap items-center gap-4 border-t border-slate-100 px-5 py-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">{FEATURES[key].name}</p>
+            <p className="text-xs text-slate-500">{c.features[key] ? on ?? 'On for this customer' : `Off — ${off}`}</p>
+          </div>
+          <Toggle checked={!!c.features[key]} disabled={!editable} label={FEATURES[key].name}
+            onChange={(v) => run(() => api.admin.setCustomerFeature(c.id, key, v), `${FEATURES[key].name} turned ${v ? 'on' : 'off'} for this customer`)} />
+        </div>
+      ))}
     </Card>
   )
 }

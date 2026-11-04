@@ -11,6 +11,7 @@ import { ScanAddModal } from '@/features/supermarket/ScanAdd'
 import { ProductImportModal } from '@/features/ProductImport'
 import { CategoryLabel, Thumb } from '@/components/Thumb'
 import { priceLabel } from '@/features/Catalog'
+import { moduleReleased } from '@/core/features'
 import { DEFAULT_TERMS, defaultCategoriesFor, modulesShownFor, modulesFor, ORDER_TYPE_LABEL, TEMPLATES, TERM_LABELS, templateFor, templateKeyOf, type BusinessTemplate } from '@/core/config'
 import type { BusinessCategory, ModuleConfig, OrderType, TermKey, Terminology } from '@/core/types'
 import { api } from '@/data'
@@ -169,7 +170,7 @@ export default function Onboarding() {
               <h2 className="text-xl font-semibold">Pick the features you need</h2>
               <p className="mt-1 text-sm text-slate-500">We’ve switched on what a {subType.toLowerCase()} usually needs. Turn on more any time from Settings.</p>
               <div className="mt-6 divide-y divide-slate-100 rounded-xl border border-slate-200">
-                {modulesShownFor({ category, subType }).map((m) => (
+                {modulesShownFor({ category, subType }).filter((m) => moduleReleased(m.key, me?.features)).map((m) => (
                   <div key={m.key} className="flex items-center gap-4 px-4 py-3">
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium">{m.name} {m.core && <span className="ml-1 text-[11px] text-slate-400">Always on</span>}{m.comingSoon && <span className="ml-1 rounded bg-amber-50 px-1.5 text-[11px] font-medium text-amber-700">Coming soon</span>}</p>

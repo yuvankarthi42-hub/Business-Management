@@ -9,7 +9,7 @@ import { compressImage, ensureStoredImage, LOGO_IMAGE } from '../media'
 import { cachedRead, clearAll, confirmedWrite, invalidate, notify, hasFresh, seed } from './cache'
 import { ApiError, auth, rpc, setSignedOutHandler, type TokenKind } from './http'
 import { isRead } from './policy'
-import { setFeedStart, startSync } from './sync'
+import { setFeedStart, setSyncMode, startSync } from './sync'
 import { restartLive, stopLive } from './live'
 
 /** Reads that must never be cached (big one-off downloads). */
@@ -100,7 +100,9 @@ export function createRemoteApi(shape: Api): Api {
     if (!auth.user) return null
     try {
       if (!hasFresh('auth.me', [])) await boot()
-      return await cachedRead('auth.me', [], 'user')
+      const me = await cachedRead('auth.me', [], 'user')
+      setSyncMode(me as Parameters<typeof setSyncMode>[0]) // single-device shop without QR ordering: no timed checks
+      return me
     } catch (e) { if ((e as ApiError).status === 401 || (e as ApiError).code === 'DEACTIVATED') { auth.user = null; return null } throw e }
   }) as Api['auth']['me']
   a.auth.switchBranch = (async (branchId: string) => {
@@ -158,6 +160,19 @@ export function createRemoteApi(shape: Api): Api {
   a.admin.uploadScreenshot = ((file: Blob) => uploadScreenshot('admin.storeScreenshot', file)) as Api['admin']['uploadScreenshot']
   a.dataExport.mine = (async () => withImageData(await call('dataExport.mine'))) as Api['dataExport']['mine']
   a.admin.exportCustomer = (async (id: string) => withImageData(await call('admin.exportCustomer', id))) as Api['admin']['exportCustomer']
+
+  // ---- products: read in pages of 300 and joined (each server answer stays small); same list, same cache entry ----
+  a.products.list = (() => cachedRead('products.list', [], 'user', async () => {
+    const all: Awaited<ReturnType<Api['products']['list']>> = []
+    let after: number | null = 0
+    while (after !== null) {
+      const page: { rows: typeof all; next: number | null } = (await rpc<{ rows: typeof all; next: number | null }>('products.page', [after], 'user')).data
+      all.push(...page.rows)
+      after = page.next
+    }
+    const seen = new Set<string>()
+    return all.filter((p) => !seen.has(p.id) && !!seen.add(p.id)) // a product added while paging is never shown twice
+  })) as Api['products']['list']
 
   /** CSV import: photo links are compressed here when the site allows it, else kept as links (like the demo app). */
   a.products.importMany = (async (rows: (ImportItem & { row: number })[], opts: { onExisting: 'skip' | 'update'; fileName: string }) => {

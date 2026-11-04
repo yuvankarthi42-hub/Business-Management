@@ -88,6 +88,15 @@ setFeedListener(onServerFeed)
 /** One catch-up read (never two at once). */
 export async function catchUp() { if (!running) await poll() }
 
+// ---- Single-device shops (Admin → Features → Single device) ----
+// One device bills, and no QR orders come in: no timed checks at all. Its own work refreshes its screens; a change
+// from elsewhere (owner's phone, the product admin) shows at its next call, which carries the shop's change number.
+let quiet = false
+/** From the signed-in user (auth.me): the shop's single-device flag and whether QR ordering is on. */
+export function setSyncMode(me: { features?: Partial<Record<string, boolean>>; business?: { modules?: Partial<Record<string, boolean>> } } | null | undefined) {
+  quiet = !!me?.features?.singleDevice && !me?.business?.modules?.qrOrdering
+}
+
 let started = false
 export function startSync() {
   if (started || typeof window === 'undefined') return
@@ -97,7 +106,7 @@ export function startSync() {
   // Coming back to the tab: catch up at once.
   document.addEventListener('visibilitychange', () => { if (!live && visible() && Date.now() - lastPoll > 5000) { lastUse = Date.now(); void poll() } })
   setInterval(() => {
-    if (live || running || off || !visible() || Date.now() - lastUse > IDLE_AFTER) return
+    if (quiet || live || running || off || !visible() || Date.now() - lastUse > IDLE_AFTER) return
     // Heard from the server recently with nothing new from other devices: no need to ask on the timer yet.
     if (Date.now() - Math.max(lastPoll, lastHeard) >= intervalNow()) void poll()
   }, 5000)

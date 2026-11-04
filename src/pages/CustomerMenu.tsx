@@ -9,10 +9,10 @@ import { ORDER_TYPE_LABEL } from '@/core/config'
 import { itemLabel } from '@/core/orderItem'
 import { lineTotal } from '@/core/pricing'
 import type { OrderType, Product } from '@/core/types'
-import { api, BACKEND } from '@/data'
+import { api } from '@/data'
 import { REFRESH_GAP_MS, trackStage, type TrackStage } from '@/core/tracking'
 import { enablePush, onPushMessage, pushStateFor, type PushState } from '@/features/tracking/push'
-import { usePublicLive } from '@/features/tracking/publicLive'
+import { useCheckEvery, usePublicLive } from '@/features/tracking/publicLive'
 import { fmtTime, money, setCurrencySymbol } from '@/lib/format'
 import { useCart } from '@/features/cart'
 import { PhoneInput } from '@/components/PhoneInput'
@@ -32,8 +32,11 @@ export default function CustomerMenu() {
   const tableParam = params.get('t')
   // Prices / items changed while the menu is open (live event): read it again once.
   const [fresh, setFresh] = useState(0)
-  usePublicLive(businessId, null, { menu: () => setFresh(Date.now()) })
+  const live = usePublicLive(businessId, null, { menu: () => setFresh(Date.now()) })
   const { data: menu, error } = useData(() => (fresh ? api.public.menu(businessId, branchParam, tableParam, fresh) : api.public.menu(businessId, branchParam, tableParam)), [businessId, branchParam, tableParam, fresh])
+  // No live updates (Catalyst): prices / items checked every 5 minutes while the menu is open (from the server's
+  // cache) — only while QR ordering is on for the shop (Admin → Features → QR Orders and the shop's module).
+  useCheckEvery(5 * 60_000, !live && !!menu?.business.modules.qrOrdering, () => setFresh(Date.now()))
   useEffect(() => { if (menu) { setCurrencySymbol(menu.business.currencySymbol); document.title = `${menu.business.name} — Order` } }, [menu])
 
   if (error) return <Message icon={XCircle} title="Menu not available" text="This menu could not be loaded on this device. Please ask the staff for help." />
@@ -305,9 +308,13 @@ export function TrackOrderPage() {
 }
 
 /**
- * The customer's order status. Never checks on a timer: it asks when the page opens, when the customer comes back
- * to it, when they press Refresh (at most every 10 s) and when a push arrives. The server answers from its cache.
+ * The customer's order status. It asks when the page opens, when the customer comes back to it, when they press
+ * Refresh (at most every 10 s), when a push arrives, and — without live updates (Catalyst) — every 30 s while the
+ * page is on screen and the order is still on its way (for up to 30 minutes). The server answers from its cache.
  */
+/** How long an open tracking page checks by itself (no live updates); after that, Refresh / push / coming back. */
+const TRACK_POLL_FOR_MS = 30 * 60_000
+
 function Tracking({ businessId, orderId, table, onNew, newLabel }: { businessId: string; orderId: string; table: string | null; onNew: () => void; newLabel?: string }) {
   const [nonce, setNonce] = useState(0)
   const [lastAsk, setLastAsk] = useState(() => Date.now())
@@ -330,8 +337,11 @@ function Tracking({ businessId, orderId, table, onNew, newLabel }: { businessId:
   })
   useEffect(() => onPushMessage((id) => { if (id === orderId) refresh(true) }))
   // Live: the shop changed this order → read it (from the server's cache).
-  usePublicLive(businessId, orderId, { order: () => refresh(true) })
+  const live = usePublicLive(businessId, orderId, { order: () => refresh(true) })
   const stage = o ? trackStage(o) : null
+  const [opened] = useState(() => Date.now())
+  const waiting = stage !== 'done' && stage !== 'rejected' && Date.now() - opened < TRACK_POLL_FOR_MS
+  useCheckEvery(30_000, !live && waiting, () => refresh(true))
   const prev = useRef<TrackStage | null>(null)
   useEffect(() => {
     if (!o || !stage) return
@@ -406,7 +416,7 @@ function Tracking({ businessId, orderId, table, onNew, newLabel }: { businessId:
           <p className="mt-2 text-center text-xs text-slate-400">
             Updated {fmtTime(o.checkedAt)}
             {' · '}
-            {pushState === 'on' ? 'We’ll notify you when it’s ready.' : BACKEND === 'mock' ? 'This page updates by itself while it’s open.' : 'Tap Refresh to see the latest status.'}
+            {pushState === 'on' ? 'We’ll notify you when it’s ready.' : 'This page updates by itself while it’s open.'}
           </p>
         </div>
       )}

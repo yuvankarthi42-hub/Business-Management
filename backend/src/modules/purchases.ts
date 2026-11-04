@@ -3,15 +3,16 @@
 import { cleanPartyGst, isInterState, shopStateOf } from '@/core/gst'
 import { planPurchase, SUPPLIER_PAY_METHODS, supplierLedger, type PurchaseInput, type SupplierPayMethod } from '@/core/purchases'
 import { r2 } from '@/core/pricing'
+import { idBefore } from '@/core/paging'
 import type { Purchase, Supplier, SupplierPayment } from '@/core/types'
 import type { Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
 import { define, userRead, userWrite } from '../core/registry'
-import type { Row } from '../db/types'
+import type { NewRow, Row, Where } from '../db/types'
 import { DEFAULT_SEQ } from '../domain/business'
 import { clientUuid, selectIn } from '../domain/orders'
-import { moveStock, stockOf, stockProduct } from '../domain/stock'
-import { audit, bizDay, code, E, fromMilli, fromMinor, isId, keyPart, nameOf, nextNumber, own, str, strOrNull, toBp, toMilli, toMinor, fromBp } from '../domain/util'
+import { moveStockMany, stockProduct } from '../domain/stock'
+import { audit, bizDay, code, cursorArg, E, fromMilli, fromMinor, isId, keyPart, nameOf, nextNumber, own, str, strOrNull, toBp, toMilli, toMinor, fromBp } from '../domain/util'
 import { cleanPhone } from './business'
 import { categoryIdFor } from './ops'
 
@@ -68,7 +69,11 @@ async function loadPurchases(c: Ctx, rows: Row[]) {
     selectIn(c, 'purchase_items', 'purchase_id', rows.map((r) => r.ROWID)),
     selectIn(c, 'suppliers', 'ROWID', [...new Set(rows.map((r) => str(r.supplier_id)).filter(Boolean))], { business_id: c.businessId }),
   ])
-  return rows.map((r) => purchaseFrom(r, items, str(sups.find((s) => s.ROWID === str(r.supplier_id))?.name)))
+  // Each bill's lines and its supplier by id (one pass each), not a search of every line for every bill.
+  const linesOf = new Map<string, Row[]>()
+  for (const i of items) { const k = str(i.purchase_id); const l = linesOf.get(k); if (l) l.push(i); else linesOf.set(k, [i]) }
+  const supName = new Map(sups.map((x) => [x.ROWID, str(x.name)]))
+  return rows.map((r) => purchaseFrom(r, linesOf.get(r.ROWID) ?? [], supName.get(str(r.supplier_id)) ?? ''))
 }
 
 async function pay(c: Ctx, supplierId: string, input: { amount: number; method: SupplierPayMethod; date?: string; reference?: string; note?: string }, purchaseId: string | null, suffix: string) {
@@ -157,10 +162,53 @@ define('suppliers', {
 })
 
 define('purchases', {
-  list: userRead(async (c, from?: string, to?: string) => {
-    const where = { business_id: c.businessId, branch_id: { in: c.scope() }, ...(from && DAY.test(from) ? { purchase_date: { gte: from, ...(to && DAY.test(to) ? { lte: to } : {}) } } : {}) }
-    const rows = await c.db.select('purchases', { where, orderBy: [['purchase_date', 'DESC'], ['ROWID', 'DESC']], limit: 1000 })
-    return loadPurchases(c, rows)
+  /**
+   * The Purchases screen page by page: 50 bills in the list's order (newest bill date first, then the database's id
+   * order), each with its lines; `count` for the pager; `month` = that month's final bills added up (the cards).
+   * `q` searches purchase no., supplier's bill no. and supplier name.
+   */
+  page: userRead(async (c, filter: { q?: string; month?: string } = {}, before?: unknown, limit = 50) => {
+    const n = Math.min(100, Math.max(1, Math.floor(Number(limit)) || 50))
+    const base: Where = { business_id: c.businessId, branch_id: { in: c.scope() } }
+    const order: [string, 'ASC' | 'DESC'][] = [['purchase_date', 'DESC'], ['ROWID', 'DESC']]
+    const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(filter?.month ?? '')) ? String(filter!.month) : bizDay(c).slice(0, 7)
+    const [y, mm] = month.split('-').map(Number)
+    const nextMonth = mm === 12 ? `${y + 1}-01` : `${y}-${String(mm + 1).padStart(2, '0')}`
+    const q = String(filter?.q ?? '').trim().slice(0, 60)
+    const cur = cursorArg(before)
+    const [monthRow] = await c.db.aggregate('purchases', { where: { ...base, status: E.PurchaseStatus.final, purchase_date: { gte: `${month}-01`, lt: `${nextMonth}-01` } }, fns: { n: ['COUNT', 'ROWID'], t: ['SUM', 'total_minor'], g: ['SUM', 'tax_minor'], p: ['SUM', 'paid_minor'] } })
+    const monthTotals = { total: fromMinor(monthRow?.t), tax: fromMinor(monthRow?.g), unpaid: fromMinor(Number(monthRow?.t ?? 0) - Number(monthRow?.p ?? 0)), bills: Number(monthRow?.n ?? 0) }
+    let rows: Row[], count: number
+    if (q) {
+      // A search is a short list: every match, newest first (at most 200 per field).
+      const sups = await c.db.select('suppliers', { where: { business_id: c.businessId, name: { contains: q } }, limit: 200 })
+      const alts: Where[] = [{ number: { contains: q } }, { supplier_bill_no: { contains: q } }, ...(sups.length ? [{ supplier_id: { in: sups.map((x) => x.ROWID) } }] : [])]
+      const found = await Promise.all(alts.map((w) => c.db.select('purchases', { where: { ...base, ...w }, orderBy: order, limit: 200 })))
+      const all = [...new Map(found.flat().map((r) => [r.ROWID, r])).values()]
+        .sort((a, b) => (str(a.purchase_date) < str(b.purchase_date) ? 1 : str(a.purchase_date) > str(b.purchase_date) ? -1 : idBefore(a.ROWID, b.ROWID) ? 1 : -1))
+      count = all.length
+      const k = cur ? all.findIndex((r) => r.ROWID === cur.id) : -1
+      rows = (k >= 0 ? all.slice(k + 1) : cur ? [] : all).slice(0, n + 1)
+    } else {
+      const [cnt] = await c.db.aggregate('purchases', { where: base, fns: { n: ['COUNT', 'ROWID'] } })
+      count = Number(cnt?.n ?? 0)
+      if (!cur) rows = await c.db.select('purchases', { where: base, orderBy: order, limit: n + 1 })
+      else {
+        // The rest of the cursor's date (in the database's own order), then older dates.
+        const same = await c.db.select('purchases', { where: { ...base, purchase_date: cur.at.slice(0, 10) }, orderBy: order })
+        const k = same.findIndex((r) => r.ROWID === cur.id)
+        const rest = k >= 0 ? same.slice(k + 1) : same.filter((r) => idBefore(r.ROWID, cur.id))
+        const older = rest.length > n ? [] : await c.db.select('purchases', { where: { ...base, purchase_date: { lt: cur.at.slice(0, 10) } }, orderBy: order, limit: n + 1 - rest.length })
+        rows = [...rest, ...older]
+      }
+    }
+    const pageRows = rows.slice(0, n)
+    const last = pageRows[n - 1]
+    return {
+      rows: await loadPurchases(c, pageRows),
+      next: rows.length > n && last ? { at: str(last.purchase_date), id: last.ROWID } : null,
+      count, month: monthTotals,
+    }
   }, perm),
 
   get: userRead(async (c, id: string) => {
@@ -195,16 +243,31 @@ define('purchases', {
       qty_milli: toMilli(l.qty), cost_minor: toMinor(l.cost), tax_bp: toBp(l.taxRate), taxable_minor: toMinor(l.taxable), tax_minor: toMinor(l.tax),
       batch_no: l.batchNo ?? null, expiry_date: l.expiry ?? null, sort_order: k,
     })))
-    // Stock in, and the latest cost price on the item (HSN too, when the item had none).
-    for (const [k, l] of plan.lines.entries()) {
-      let p = prows.find((x) => x.ROWID === l.productId)!
-      p = await c.db.update('products', p.ROWID, { cost_minor: toMinor(l.cost), track_stock: true, ...(l.hsn && !p.hsn_code ? { hsn_code: l.hsn } : {}) })
-      await moveStock(c, stockProduct(p), branchId, l.qty, 'purchase', { note: `Purchase ${num.text}${plan.supplierBillNo ? ` · bill ${plan.supplierBillNo}` : ''}`, refType: 'purchase', refId: row.ROWID, batch: l.expiry || l.batchNo ? { batchNo: l.batchNo, expiry: l.expiry } : undefined })
-      if (l.expiry || l.batchNo) {
-        const bt = await c.db.select('stock_batches', { where: { business_id: c.businessId, branch_id: branchId, product_id: l.productId, purchase_item_id: null } })
-        const mine = bt.filter((b) => str(b.batch_no) === (l.batchNo ?? '') && str(b.expiry_date) === (l.expiry ?? ''))
-        if (mine.length) await c.db.updateMany('stock_batches', mine.map((b) => ({ ROWID: b.ROWID, purchase_item_id: items[k].ROWID, cost_minor: toMinor(l.cost) })))
+    // The latest cost price on each item (HSN too, when the item had none): one write for all of them.
+    const prowById = new Map(prows.map((p) => [p.ROWID, p]))
+    const changes = new Map<string, NewRow & { ROWID: string }>()
+    for (const l of plan.lines) {
+      const p = prowById.get(l.productId)!
+      changes.set(p.ROWID, { ...changes.get(p.ROWID), ROWID: p.ROWID, cost_minor: toMinor(l.cost), track_stock: true, ...(l.hsn && !p.hsn_code ? { hsn_code: l.hsn } : {}) })
+    }
+    await c.db.updateMany('products', [...changes.values()])
+    // Stock in: every line in one go (plain items in one round trip; expiry items batch by batch, as before).
+    const note = `Purchase ${num.text}${plan.supplierBillNo ? ` · bill ${plan.supplierBillNo}` : ''}`
+    await moveStockMany(c, plan.lines.map((l) => ({
+      p: stockProduct({ ...prowById.get(l.productId)!, track_stock: true }), branchId, qty: l.qty, reason: 'purchase' as const,
+      opts: { note, refType: 'purchase' as const, refId: row.ROWID, batch: l.expiry || l.batchNo ? { batchNo: l.batchNo, expiry: l.expiry } : undefined },
+    })))
+    // Each new batch points at its bill line (cost of that batch): one read for all, linked in line order.
+    const batchLines = [...plan.lines.entries()].filter(([, l]) => l.expiry || l.batchNo)
+    if (batchLines.length) {
+      const open = await c.db.select('stock_batches', { where: { business_id: c.businessId, branch_id: branchId, product_id: { in: [...new Set(batchLines.map(([, l]) => l.productId))] }, purchase_item_id: null } })
+      const links: (NewRow & { ROWID: string })[] = []
+      const linked = new Set<string>()
+      for (const [k, l] of batchLines) {
+        const mine = open.filter((b) => !linked.has(b.ROWID) && str(b.product_id) === l.productId && str(b.batch_no) === (l.batchNo ?? '') && str(b.expiry_date) === (l.expiry ?? ''))
+        for (const b of mine) { linked.add(b.ROWID); links.push({ ROWID: b.ROWID, purchase_item_id: items[k].ROWID, cost_minor: toMinor(l.cost) }) }
       }
+      if (links.length) await c.db.updateMany('stock_batches', links)
     }
     if (plan.paid > 0) await pay(c, supplier.ROWID, { amount: plan.paid, method: input.method, date: plan.date, reference: input.reference }, row.ROWID, ':pp')
     await audit(c, 'purchase', row.ROWID, 'create', `${num.text} · ${str(supplier.name)} · ${plan.total}`.slice(0, 250), branchId)
@@ -222,17 +285,22 @@ define('purchases', {
     const items = await c.db.select('purchase_items', { where: { purchase_id: r.ROWID } })
     const prows = await selectIn(c, 'products', 'ROWID', items.map((i) => str(i.product_id)), { business_id: c.businessId })
     const branchId = str(r.branch_id)
+    // Still on the shelf? One read of the branch's stock for all the bill's items.
+    const stock = items.length ? await c.db.select('branch_stock', { where: { business_id: c.businessId, branch_id: branchId, product_id: { in: [...new Set(items.map((i) => str(i.product_id)))] } } }) : []
+    const have = new Map(stock.map((b) => [str(b.product_id), fromMilli(b.qty_milli)]))
     for (const i of items) {
-      const have = await stockOf(c, str(i.product_id), branchId)
-      if (have + 1e-9 < fromMilli(i.qty_milli)) throw new ApiError(`${str(i.product_name)}: only ${have} left in stock — the purchase can’t be voided`)
+      const left = have.get(str(i.product_id)) ?? 0
+      if (left + 1e-9 < fromMilli(i.qty_milli)) throw new ApiError(`${str(i.product_name)}: only ${left} left in stock — the purchase can’t be voided`)
     }
     if (!(await c.db.updateIfVersion('purchases', r.ROWID, Number(r.row_version), { status: E.PurchaseStatus.void, void_reason: String(reason).trim().slice(0, 255), voided_at: c.now.toISOString() }))) {
       throw new ApiError('This purchase was just changed on another device. Please try again.', 409, 'CONFLICT')
     }
-    for (const i of items) {
-      const p = prows.find((x) => x.ROWID === str(i.product_id))
-      if (p) await moveStock(c, stockProduct(p), branchId, -fromMilli(i.qty_milli), 'adjustment', { note: `Purchase ${str(r.number)} voided`, refType: 'purchase', refId: r.ROWID })
-    }
+    // Stock back out: all lines in one go.
+    const prowById = new Map(prows.map((p) => [p.ROWID, p]))
+    await moveStockMany(c, items.filter((i) => prowById.has(str(i.product_id))).map((i) => ({
+      p: stockProduct(prowById.get(str(i.product_id))!), branchId, qty: -fromMilli(i.qty_milli), reason: 'adjustment' as const,
+      opts: { note: `Purchase ${str(r.number)} voided`, refType: 'purchase' as const, refId: r.ROWID },
+    })))
     await audit(c, 'purchase', r.ROWID, 'void', `${str(r.number)}: ${reason}`.slice(0, 250), branchId)
     return (await loadPurchases(c, [await c.db.get('purchases', r.ROWID) as Row]))[0]
   }, perm),

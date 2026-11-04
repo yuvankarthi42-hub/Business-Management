@@ -114,3 +114,21 @@ test('gst: HSN (item / category), B2B tax invoice, IGST for other state, lines s
     await assert.rejects(s.call('reports.gst', '2026-13'), /Choose a month/)
   } finally { s.close() }
 })
+
+test('gst split in SQL (reports.gst on Turso) = splitTax, for every amount from ₹0 to ₹50,000', async () => {
+  const { sqlJs } = await import('../src/db/sql/sqljs')
+  const { withGstSplit } = await import('../src/domain/gstSql')
+  const { splitTax: split } = await import('../../src/core/gst')
+  const { r2 } = await import('../../src/core/pricing')
+  const SQL = await sqlJs(); const db = new SQL.Database()
+  const N = 5_000_000
+  db.exec(`CREATE TABLE x(t INTEGER); WITH RECURSIVE c(v) AS (SELECT 0 UNION ALL SELECT v + 1 FROM c WHERE v < ${N}) INSERT INTO x SELECT v FROM c;`)
+  const rows = db.exec(`SELECT t, cg, sg, igp FROM ${withGstSplit('x')}`)[0].values as number[][]
+  assert.equal(rows.length, N + 1)
+  let bad = 0
+  for (const [t, cg, sg, ig] of rows) {
+    const tax = r2(t / 100), a = split(tax, false), b = split(tax, true)
+    if (cg / 100 !== a.cgst || sg / 100 !== a.sgst || ig / 100 !== b.igst) bad++
+  }
+  assert.equal(bad, 0)
+})

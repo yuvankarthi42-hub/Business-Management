@@ -6,13 +6,13 @@ import { ApiError } from '../../core/errors'
 import { assertPassword, hashPassword } from '../../core/passwords'
 import { adminRead, adminWrite, define } from '../../core/registry'
 import type { Row } from '../../db/types'
-import { seedTaxRates } from '../../domain/business'
-import { seedRoles } from '../../domain/people'
-import { claimLogins, loginFree, saveUserWithLogins, syncOwner } from '../../domain/directory'
+import { seedTaxRates, taxRateSeedRows } from '../../domain/business'
+import { rolePermRows, roleSeedRows, seedRoles } from '../../domain/people'
+import { claimLogins, claimNewLogins, loginFree, saveUserWithLogins, syncOwner } from '../../domain/directory'
 import { bumpEpoch, featureFlags, loadPricing } from '../../domain/session'
 import { monthlyValue, PLAN_KEYS, PLAN_START, type PlanKey } from '@/core/plans'
 import { code, E, str, strOrNull } from '../../domain/util'
-import { addPeriod, adminLog, adminLogFrom, businessLite, customerPrice, checkBranches, checkUsername, findBiz, fmtDay, ownerOf, periodFor, periodFrom, type Validity } from './shared'
+import { addPeriod, adminLog, adminLogFrom, adminLogRow, periodRow, businessLite, customerPrice, checkBranches, checkUsername, findBiz, fmtDay, ownerOf, periodFor, periodFrom, type Validity } from './shared'
 
 function cleanEmail(input: string | undefined) {
   const email = String(input ?? '').trim().toLowerCase()
@@ -113,19 +113,49 @@ define('admin', {
         max_branches: maxBranches, subscription_start_at: startAt, subscription_end_at: endAt, admin_note: (input.note ?? '').trim().slice(0, 255) || null,
         owner_name: ownerName, owner_username: username, owner_phone: phone, owner_email: email || null, branches_used: 1,
       })
-      let claim: Awaited<ReturnType<typeof claimLogins>> | null = null
+      const logDetail = `Username ${username} · ${maxBranches} branch${maxBranches === 1 ? '' : 'es'} · valid till ${fmtDay(endAt)}`
+      // One database per shop (Turso): the same rows in a few round trips (batches) instead of ~40 requests.
+      const batched = !!(c.dbs.perShop && c.platform.writeBatch)
+      let claim: { undo: () => Promise<void>; bind: (userId: string) => Promise<void>; ids?: string[] | null } | null = null
       try {
-        claim = await claimLogins(c, biz.ROWID, null, { username, phone, email: email || null })
+        claim = batched ? await claimNewLogins(c, biz.ROWID, { username, phone, email: email || null }) : await claimLogins(c, biz.ROWID, null, { username, phone, email: email || null })
         await c.dbs.createShop(biz.ROWID)
         await c.useShop(biz.ROWID)
+        const ownerRow = (roleId: string, branchId: string) => ({
+          business_id: biz.ROWID, role_id: roleId, default_branch_id: branchId, name: ownerName, phone, email: email || null, username,
+          password_hash: hash, must_change_password: false, is_active: true,
+        })
+        if (batched && c.db.writeBatch) {
+          // The new shop's starting rows in one transaction, as before (all or none): branch, roles, GST rates; then
+          // permissions and the owner — two batches instead of one request per row.
+          const owner = await c.tx(async () => {
+            const [[branch], roles] = await c.db.writeBatch!([
+              { insert: 'branches', rows: [{ business_id: biz.ROWID, name: 'Main', is_default: true, is_active: true }] },
+              { insert: 'roles', rows: roleSeedRows(biz.ROWID) },
+              { insert: 'tax_rates', rows: taxRateSeedRows(biz.ROWID, 'food') },
+            ])
+            const [, [user]] = await c.db.writeBatch!([
+              { insert: 'role_permissions', rows: rolePermRows(roles) },
+              { insert: 'users', rows: [ownerRow(roles[0].ROWID, branch.ROWID)] },
+            ])
+            return user
+          })
+          // Platform: claims → the owner, owner on the business, the subscription period and the admin log — one batch.
+          const period = await periodRow(c, a, biz, maxBranches, 'new', startAt, endAt, months, input.note ?? '')
+          await c.platform.writeBatch!([
+            ...(claim.ids?.length ? [{ update: 'login_names' as const, rows: claim.ids.map((ROWID) => ({ ROWID, user_id: owner.ROWID })) }] : []),
+            { update: 'businesses', rows: [{ ROWID: biz.ROWID, owner_user_id: owner.ROWID }] },
+            { insert: 'subscription_periods', rows: [period] },
+            { insert: 'admin_audit_logs', rows: [adminLogRow(a, 'create', { id: biz.ROWID, name: businessName }, logDetail)] },
+          ])
+          if (!claim.ids) await claim.bind(owner.ROWID) // the names were claimed the step-by-step way
+          return { id: biz.ROWID, username }
+        }
         const owner = await c.tx(async () => {
           const branch = await c.db.insert('branches', { business_id: biz.ROWID, name: 'Main', is_default: true, is_active: true })
           const roles = await seedRoles(c.db, biz.ROWID)
           await seedTaxRates(c.db, biz.ROWID, 'food')
-          return c.db.insert('users', {
-            business_id: biz.ROWID, role_id: roles[0].id, default_branch_id: branch.ROWID, name: ownerName, phone, email: email || null, username,
-            password_hash: hash, must_change_password: false, is_active: true,
-          })
+          return c.db.insert('users', ownerRow(roles[0].id, branch.ROWID))
         })
         await claim.bind(owner.ROWID)
         await c.platform.update('businesses', biz.ROWID, { owner_user_id: owner.ROWID })
@@ -137,7 +167,7 @@ define('admin', {
         await c.platform.delete('businesses', biz.ROWID).catch((x) => console.error('[createCustomer] delete row', x))
         throw e
       }
-      await adminLog(c, a, 'create', { id: biz.ROWID, name: businessName }, `Username ${username} · ${maxBranches} branch${maxBranches === 1 ? '' : 'es'} · valid till ${fmtDay(endAt)}`)
+      await adminLog(c, a, 'create', { id: biz.ROWID, name: businessName }, logDetail)
       return { id: biz.ROWID, username }
     },
   },

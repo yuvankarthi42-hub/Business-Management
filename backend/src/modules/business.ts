@@ -1,11 +1,12 @@
 // Business settings, sign-up setup, branches, roles and staff logins.
 import { COUNTRIES, normalizePhone } from '@/core/phone'
 import { branchLimitMessage } from '@/core/subscription'
-import { setupDefaultsFor } from '@/core/config'
+import { modulesFor, setupDefaultsFor } from '@/core/config'
+import { FEATURE_MODULE, withFeatures, type FeatureKey } from '@/core/features'
 import { cleanStickers, stickerSettings } from '@/core/stickers'
 import { cleanGstin, GST_STATES, gstinError } from '@/core/gst'
 import { cleanLoyalty, loyaltyOf } from '@/core/loyalty'
-import type { BillingSettings, Branch, BranchPrinter, Business, OrderType, Permission, Role, User } from '@/core/types'
+import type { BillingSettings, Branch, BranchPrinter, Business, ModuleKey, OrderType, Permission, Role, User } from '@/core/types'
 import { PERMISSIONS } from '@/core/config'
 import type { Ctx } from '../core/context'
 import { ApiError, forbidden } from '../core/errors'
@@ -28,7 +29,8 @@ export function cleanPhone(input: string | null | undefined, iso: string | undef
 async function freshBusiness(c: Ctx): Promise<Business> {
   const b = await loadBusiness(c, c.businessId)
   if (!b) throw new ApiError('Business not found', 404)
-  return b.business
+  // As the customer gets it: modules whose feature isn't released count as off (like auth.me).
+  return { ...b.business, modules: withFeatures(b.business.modules, c.s.features) }
 }
 
 /** Next numbers can be raised but never lowered — a lower number would repeat bill numbers already printed. */
@@ -103,6 +105,19 @@ async function branchesWithCounts(c: Ctx) {
   })
 }
 
+/**
+ * Settings → Modules sends the modules as the customer sees them. A module whose feature isn't released to the
+ * customer shows as off there, so keep the shop's own saved choice for it (it comes back when the feature does).
+ */
+async function keepHiddenModules(c: Ctx, modules: Business['modules']): Promise<Business['modules']> {
+  const hidden = (Object.entries(FEATURE_MODULE) as [FeatureKey, ModuleKey][]).filter(([f]) => !c.s.features[f])
+  if (!hidden.length) return modules
+  const stored: Partial<Business['modules']> = { ...modulesFor(c.business.category), ...await getSetting<Partial<Business['modules']>>(c.db, c.businessId, 'modules', {}) }
+  const out = { ...modules }
+  for (const [, m] of hidden) { if (stored[m] === undefined) delete out[m]; else out[m] = stored[m]! }
+  return out
+}
+
 define('business', {
   update: userWrite(async (c, patch: Partial<Business>) => {
     const b = c.business
@@ -125,7 +140,7 @@ define('business', {
     if (patch.timezone !== undefined) row.timezone = patch.timezone.slice(0, 40)
     if (patch.phone !== undefined) row.phone = cleanPhone(patch.phone, patch.defaultCountry ?? b.defaultCountry) || null
     if (patch.terminology) await putSetting(c.db, b.id, 'terminology', patch.terminology, c.userId)
-    if (patch.modules) await putSetting(c.db, b.id, 'modules', patch.modules, c.userId)
+    if (patch.modules) await putSetting(c.db, b.id, 'modules', await keepHiddenModules(c, patch.modules), c.userId)
     if (patch.qr) await putSetting(c.db, b.id, 'qr', patch.qr, c.userId)
     if (patch.stateCode !== undefined) {
       if (patch.stateCode && !GST_STATES[patch.stateCode]) throw new ApiError('Choose a state')

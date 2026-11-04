@@ -3,9 +3,9 @@ import { normalizePhone } from '@/core/phone'
 import { subscriptionState, DEACTIVATED_MESSAGE } from '@/core/subscription'
 import { ALL_BRANCHES, type Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
-import { checkPassword, hashPassword } from '../core/passwords'
+import { checkPassword, hashPassword, needsRehash } from '../core/passwords'
 import { define, handler, publicRead, publicWrite, userRead, userWrite } from '../core/registry'
-import { signToken } from '../core/tokens'
+import { signToken, verifyToken } from '../core/tokens'
 import { loadBusiness } from '../domain/business'
 import { findLogin } from '../domain/directory'
 import { bumpEpoch } from '../domain/session'
@@ -22,7 +22,8 @@ export async function meFor(c: Ctx) {
   const s = c.s
   // Next bill / order numbers change with every bill, so they're read fresh (not from the cached session).
   const fresh = await loadBusiness(c, s.business.id)
-  const business = { ...(fresh?.business ?? s.business) }
+  // …with the session's modules (a module whose feature isn't released to the customer counts as off).
+  const business = { ...(fresh?.business ?? s.business), modules: s.business.modules }
   const branchesAll = fresh?.branches ?? s.allBranches
   const branches = branchesAll.filter((b) => s.allowed.includes(b.id))
   const isAll = s.branchId === ALL_BRANCHES
@@ -36,6 +37,9 @@ export async function meFor(c: Ctx) {
     permissions: s.permissions === 'all' ? ('all' as const) : [...s.permissions],
   }
 }
+
+/** How long a checkPassword proof can be used for changePassword. */
+const PW_PROOF_TTL = 5 * 60
 
 define('auth', {
   /** Sign in with the username from the product admin, or the mobile number / email. */
@@ -78,7 +82,9 @@ define('auth', {
     const bundle = await loadBusiness(c, str(row.business_id))
     if (!bundle) throw new ApiError('Wrong mobile number or password', 401, 'BAD_LOGIN')
     if (subscriptionState(bundle.business).blocked) throw new ApiError(DEACTIVATED_MESSAGE, 403, 'DEACTIVATED')
-    await c.db.update('users', row.ROWID, { failed_logins: 0, locked_until: null, last_login_at: c.now.toISOString() })
+    // An older or weaker hash (bcrypt, fewer iterations, no pepper yet) is replaced in the same write.
+    const rehash = needsRehash(str(row.password_hash)) ? { password_hash: await hashPassword(password) } : {}
+    await c.db.update('users', row.ROWID, { failed_logins: 0, locked_until: null, last_login_at: c.now.toISOString(), ...rehash })
     await c.platform.update('businesses', str(row.business_id), { last_login_at: c.now.toISOString() })
     const tv = Number(row.token_version ?? 1)
     return { token: signToken({ t: 'u', uid: row.ROWID, bid: str(row.business_id), tv }, USER_TOKEN_TTL), branchId: str(row.default_branch_id), mustChangePassword: !!row.must_change_password }
@@ -117,14 +123,33 @@ define('auth', {
   }, { readOnlyOk: true, quiet: true }),
 
   /** Change own password (also used for the first sign-in when the admin gave a temporary one). */
-  changePassword: userWrite(async (c, current: string, next: string) => {
+  /**
+   * Step 1 of a password change in two requests (each one password hash, so each stays small): checks the current
+   * password and returns a proof for changePassword — valid 5 minutes, for this user only, until their password or
+   * sign-in changes (it carries their token version).
+   */
+  checkPassword: userWrite(async (c, current: string) => {
     const row = await c.db.get('users', c.userId)
     if (!row || !(await checkPassword(current, str(row.password_hash)))) throw new ApiError('Current password is wrong')
+    return { proof: signToken({ t: 'pw', uid: c.userId, bid: c.businessId, tv: Number(row.token_version ?? 1) }, PW_PROOF_TTL) }
+  }, { readOnlyOk: true, quiet: true }),
+
+  /**
+   * Change your own password. With a proof from checkPassword (same user, still valid) the current password isn't
+   * hashed again; without one (or a stale one) it is checked here, as always. Other devices are signed out.
+   */
+  changePassword: userWrite(async (c, current: string, next: string, opts?: { proof?: string }) => {
+    const row = await c.db.get('users', c.userId)
+    if (!row) throw new ApiError('Current password is wrong')
+    const proof = verifyToken<{ t?: string; uid?: string; bid?: string; tv?: number }>(opts?.proof)
+    const proven = !!proof && proof.t === 'pw' && String(proof.uid) === c.userId && String(proof.bid) === c.businessId && Number(proof.tv) === Number(row.token_version ?? 1)
+    if (!proven && !(await checkPassword(current, str(row.password_hash)))) throw new ApiError('Current password is wrong')
     const { assertPassword, hashPassword } = await import('../core/passwords')
     assertPassword(next)
     const tv = Number(row.token_version ?? 1) + 1
     await c.db.update('users', c.userId, { password_hash: await hashPassword(next), must_change_password: false, password_changed_at: c.now.toISOString(), token_version: tv })
-    await bumpEpoch(c, c.businessId)
+    // Signs the other devices out (the shop's sign-in cache); the customers' QR menu is not affected.
+    await bumpEpoch(c, c.businessId, { menu: false })
     return { token: signToken({ t: 'u', uid: c.userId, bid: c.businessId, tv }, USER_TOKEN_TTL) }
   }, { readOnlyOk: true, quiet: true }),
 })

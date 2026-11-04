@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { withShop } from './fixtures'
 import { READ_MODULE } from '../../src/core/moduleGuards'
+import { listProducts } from './helpers'
 
 type P = { id: string }
 const line = (p: P, qty = 1) => ({ id: `tmp_${Math.random()}`, productId: p.id, name: '', variantId: null, variantName: null, addOns: [], qty, unit: 'pc', unitPrice: 0, taxRate: 0, notes: '', kotQty: 0 })
@@ -17,10 +18,10 @@ test('a module that is off: its reads answer empty (lists) or are refused — an
     await s.call('expenses.save', { amount: 100, category: 'rent', method: 'cash', notes: '' })
     assert.equal((await s.call<unknown[]>('tables.list')).length, 1)
     const today = new Date().toISOString().slice(0, 10)
-    const listArgs: Record<string, unknown[]> = { 'expenses.list': [new Date(Date.now() - 86_400_000).toISOString(), new Date(Date.now() + 86_400_000).toISOString()], 'payments.list': [new Date(Date.now() - 86_400_000).toISOString(), new Date().toISOString()], 'staff.day': [today], 'specials.list': [today] }
+    const listArgs: Record<string, unknown[]> = { 'expenses.list': [new Date(Date.now() - 86_400_000).toISOString(), new Date(Date.now() + 86_400_000).toISOString()], 'staff.day': [today], 'specials.list': [today], 'payments.page': [{ from: new Date(Date.now() - 86_400_000).toISOString(), to: new Date().toISOString() }, null] }
     for (const [action, r] of Object.entries(READ_MODULE)) {
       await s.call('business.update', { modules: { ...all, [r.module]: false } })
-      if (r.empty) assert.deepEqual(await s.call(action, ...(listArgs[action] ?? [])), [], `${action}: empty while ${r.module} is off`)
+      if (r.empty) assert.deepEqual(await s.call(action, ...(listArgs[action] ?? [])), r.empty, `${action}: empty while ${r.module} is off`)
       else await assert.rejects(s.call(action, '1'), (e: Error & { code?: string }) => e.code === 'MODULE_OFF', `${action}: refused while ${r.module} is off`)
     }
     // Back on: the real data again.
@@ -38,7 +39,7 @@ test('Inventory off: bills write no stock; Specials off: no special price; Kitch
     const today = new Date().toISOString().slice(0, 10)
     await s.call('specials.save', today, [{ productId: tea.id, specialPrice: 15, tag: 'Today', sort: 0 }])
     const moves = () => s.db.count('stock_movements', { business_id: s.businessId })
-    const stock = async () => (await s.call<{ id: string; stock: number }[]>('products.list')).find((p) => p.id === tea.id)!.stock
+    const stock = async () => (await listProducts<{ id: string; stock: number }>(s)).find((p) => p.id === tea.id)!.stock
 
     // All on: special price, stock goes down.
     const before = await moves()

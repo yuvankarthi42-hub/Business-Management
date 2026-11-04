@@ -12,7 +12,6 @@ Shops' phones / PCs / tablets
 Slate (web app)  ──►  Catalyst function "api"  ──►  Turso: 1 platform database + 1 database per shop (Mumbai)
                       Catalyst function "daily" (Cron 09:00)
                       Catalyst Stratus (photos, logos)
-                      AppSail "events" (optional: live updates)
 ```
 
 **Time needed:** about 2–2½ hours the first time (including running the tests).
@@ -31,21 +30,27 @@ Keep this list in a **password manager**. Never paste these in chat, email or Gi
 | 4 | `TURSO_ORG` | Your Turso organisation name | Turso, Step 2.5 | api, daily |
 | 5 | `TURSO_GROUP` | Group name, e.g. `kk-prod` | You choose, Step 2.1 | api, daily |
 | 6 | `TURSO_DB_PREFIX` | Name prefix for shop databases, e.g. `kk` → `kk-shop-1` | You choose | api, daily |
-| 7 | `AUTH_SECRET` | Signs every login (random, 64 hex) | Generate, Step 3 | api, daily, AppSail |
+| 7 | `AUTH_SECRET` | Signs every login (random, 64 hex) | Generate, Step 3 | api, daily |
 | 8 | `SETUP_KEY` | For setup/migrations/first admin (random) | Generate, Step 3 | api, daily |
 | 9 | `SECRETS_KEY` | Encrypts WhatsApp tokens (random). **Never change later** | Generate, Step 3 | api, daily |
 | 10 | `STRATUS_BUCKET` | Photo bucket name, e.g. `kk-media` | You choose, Step 4 | api, daily |
 | 11 | `STRATUS_PUBLIC_URL` | Bucket's public address | Catalyst, Step 4 | api, daily |
-| 12 | `ALLOWED_ORIGINS` | Web app address (Slate URL) | Catalyst, Step 8 | api, daily, AppSail |
+| 12 | `ALLOWED_ORIGINS` | Web app address (Slate URL) | Catalyst, Step 8 | api, daily |
 | 13 | `VAPID_PUBLIC_KEY` | Notifications public key | Generate, Step 3 (optional) | api |
 | 14 | `VAPID_PRIVATE_KEY` | Notifications private key (secret) | Generate, Step 3 (optional) | api |
 | 15 | `VAPID_SUBJECT` | `mailto:KadaiKalanjiyam@gmail.com` | — (optional) | api |
-| 16 | `EVENTS_SECRET` | Shared secret between api and the event hub (random) | Generate, Step 3 (optional) | api, AppSail |
-| 17 | `EVENTS_URL` | Event hub address | AppSail, Step 10 (optional) | api |
-| 18 | `EVENTS_PUBLIC_URL` | Same event hub address | AppSail, Step 10 (optional) | api |
 | 19 | Admin username + password | The first product-admin login | You choose, Step 7.3 | (not a variable) |
+| 20 | `PASSWORD_PEPPER` | Extra server secret mixed into every password hash (random, 32+ characters). **Never change or remove it once set** — every password would stop working | Generate, Step 3 (recommended) | api |
+| 21 | `PASSWORD_ITERATIONS` | Password hash strength (PBKDF2). Default `20000` (fits a 10 ms CPU budget); raise only on a bigger CPU budget — older hashes upgrade at the next sign-in | — (optional, leave unset) | api |
+| 22 | `DAILY_SHOPS_PER_RUN` | Daily jobs: shops handled per run (points expiry, Admin → Usage counts). Default `20`; a run also stops early to stay within the request budget, and the rest continue on the next run | — (optional, leave unset) | daily, api |
+| 23 | `DAILY_REMINDERS_PER_RUN` | Daily jobs: renewal reminders sent per run. Default `20` | — (optional, leave unset) | daily, api |
+| 24 | `DAILY_REQUEST_BUDGET` | Daily jobs: most outgoing requests one run may make. Default `40` (Cloudflare free allows 50 per run) | — (optional, leave unset) | daily, api |
+| 25 | `DAILY_CPU_BUDGET_MS` | Daily jobs: CPU time after which a run stops starting new shops. Default `7` | — (optional, leave unset) | daily, api |
+| 26 | `DAILY_REMINDER_HOUR` | Hourly runs only: renewal reminders go from this hour (IST). Default `9` | — (optional, leave unset) | api |
 
 Not needed in this setup: `CRON_KEY`, `CATALYST_TZ_OFFSET_MIN`, `TURSO_LOCATION` (leave them unset).
+(#16–#18 were the AppSail live-update settings `EVENTS_SECRET`, `EVENTS_URL`, `EVENTS_PUBLIC_URL` — removed: on Catalyst
+open screens check for changes every 30–60 s. If they are still set on `api` from an older setup, they are ignored.)
 
 ---
 
@@ -107,11 +112,10 @@ normal.)
 **0.5 Make the server zips** (the web app zip is made later, in Step 8):
 
 ```bash
-rm -f api.zip daily.zip events.zip && (cd catalyst/functions/api && zip -qr ../../../api.zip .) && (cd catalyst/functions/daily && zip -qr ../../../daily.zip .) && (cd catalyst/appsail/events && zip -qr ../../../events.zip .)
+rm -f api.zip daily.zip && (cd catalyst/functions/api && zip -qr ../../../api.zip .) && (cd catalyst/functions/daily && zip -qr ../../../daily.zip .)
 ```
 
-You now have `api.zip`, `daily.zip` and `events.zip` in the project folder. **`events.zip` is optional** — it's only
-for live updates (Step 10); skip it until you have about 15+ shops. The app works fully without it.
+You now have `api.zip` and `daily.zip` in the project folder.
 
 ## Step 1 — Create the Catalyst project (10 min)
 
@@ -142,8 +146,8 @@ Tokens are shown only once — save them right away.
 
 ## Step 3 — Generate the secrets (your computer, 5 min)
 
-Run this **four times** — one new value each for `AUTH_SECRET` (#7), `SETUP_KEY` (#8), `SECRETS_KEY` (#9) and
-`EVENTS_SECRET` (#16):
+Run this **four times** — one new value each for `AUTH_SECRET` (#7), `SETUP_KEY` (#8), `SECRETS_KEY` (#9)
+and `PASSWORD_PEPPER` (#20):
 
 ```bash
 openssl rand -hex 32
@@ -191,6 +195,7 @@ It prints `VAPID_PUBLIC_KEY=…` (#13) and `VAPID_PRIVATE_KEY=…` (#14). Skip i
 | `VAPID_PUBLIC_KEY` | #13 (optional) |
 | `VAPID_PRIVATE_KEY` | #14 (optional) |
 | `VAPID_SUBJECT` | `mailto:KadaiKalanjiyam@gmail.com` (optional) |
+| `PASSWORD_PEPPER` | #20 (recommended — **never change it later**) |
 
 4. **Memory: 128 MB** (function settings → Memory). The app is small; 128 MB halves the function cost. Step 7.4
    checks the speed — if "20 bills at the same time" takes more than ~5 seconds, set it back to 256 MB.
@@ -201,7 +206,7 @@ It prints `VAPID_PUBLIC_KEY=…` (#13) and `VAPID_PRIVATE_KEY=…` (#14). Skip i
 1. **Functions → Create Function** → type **Cron**, name **`daily`**, stack **Node.js 18** → upload **`daily.zip`**.
 2. **Environment Variables:** add the **same** values as `api` for: `AUTH_SECRET`, `SETUP_KEY`, `SECRETS_KEY`,
    `TURSO_PLATFORM_URL`, `TURSO_AUTH_TOKEN`, `TURSO_API_TOKEN`, `TURSO_ORG`, `TURSO_GROUP`, `TURSO_DB_PREFIX`,
-   `STRATUS_BUCKET`, `STRATUS_PUBLIC_URL`. (The `VAPID_*` and `EVENTS_*` ones are not needed here.)
+   `STRATUS_BUCKET`, `STRATUS_PUBLIC_URL`. (The `VAPID_*` ones are not needed here.)
 3. **Memory: 128 MB**, then **Save** and **Deploy**.
 4. **Cloud Scale → Triggers → Cron → Create:** every day at **09:00**, time zone **Asia/Kolkata**, target function **`daily`**.
    (Renewal reminders, expiring loyalty points, clean-ups.)
@@ -340,42 +345,7 @@ The web app has the API URL built in, so it must be built **now**, after Step 5.
    - [ ] Phone and tablet layout.
    - [ ] Admin page shows the shop, its usage and the audit log.
 
-## Step 10 — Optional: live updates (event hub on AppSail) — only from about 15 shops (15 min)
-
-**Skip this for now.** AppSail runs all the time (about $13 a month). Without it, urgent screens (Kitchen, QR orders,
-Tables, Billing) check for changes every 30 s and other screens every 60 s, which costs almost nothing. Add it when you
-have about 15+ shops: screens then update within a second.
-
-1. Catalyst console → **AppSail → Create App** → **Node.js 18** → name `events` → upload **`events.zip`**.
-   - Start command: `node index.js`
-   - **Instances: minimum 1, maximum 1** (required — the hub keeps open screens in memory)
-   - Memory: 256 MB
-2. AppSail **Environment Variables:**
-
-| Name | Value |
-|---|---|
-| `AUTH_SECRET` | #7 (same as api) |
-| `EVENTS_SECRET` | #16 |
-| `ALLOWED_ORIGINS` | #12 (same as api) |
-
-3. Deploy and copy the AppSail address (e.g. `https://events-xxxx.catalystappsail.in`). Check:
-   ```bash
-   curl -s <events-address>/health
-   ```
-   → `{"ok":true,"boot":"…","clients":0}`
-4. **Functions → api → Environment Variables:** add
-
-| Name | Value |
-|---|---|
-| `EVENTS_URL` | the AppSail address (#17) |
-| `EVENTS_PUBLIC_URL` | the same AppSail address (#18) |
-| `EVENTS_SECRET` | #16 (same as AppSail) |
-
-   Save and deploy `api`.
-5. Test: open **Kitchen** on one device, make a KOT on another → the ticket appears within 1–2 seconds.
-   If not, screens still update every 30 s — check the AppSail logs.
-
-## Step 11 — Before giving it to customers
+## Step 10 — Before giving it to customers
 
 | Item | What to do |
 |---|---|
@@ -396,7 +366,7 @@ have about 15+ shops: screens then update within a second.
    npm --prefix backend run build
    ```
    ```bash
-   rm -f api.zip daily.zip events.zip && (cd catalyst/functions/api && zip -qr ../../../api.zip .) && (cd catalyst/functions/daily && zip -qr ../../../daily.zip .) && (cd catalyst/appsail/events && zip -qr ../../../events.zip .)
+   rm -f api.zip daily.zip && (cd catalyst/functions/api && zip -qr ../../../api.zip .) && (cd catalyst/functions/daily && zip -qr ../../../daily.zip .)
    ```
    ```bash
    npm run build:prod
@@ -404,7 +374,7 @@ have about 15+ shops: screens then update within a second.
    ```bash
    rm -f web-prod.zip && (cd dist-prod && zip -qr ../web-prod.zip .)
    ```
-2. Upload `api.zip` → api, `daily.zip` → daily, `web-prod.zip` → Slate, (`events.zip` → AppSail if used).
+2. Upload `api.zip` → api, `daily.zip` → daily, `web-prod.zip` → Slate.
 3. If the release has a new migration:
    ```bash
    curl -s -X POST <api-url>/migrate -H "x-setup-key: <SETUP_KEY>"
@@ -421,5 +391,5 @@ have about 15+ shops: screens then update within a second.
 | Creating a customer fails: "refused TURSO_AUTH_TOKEN" | `TURSO_AUTH_TOKEN` is a database token — create a **group** token (Step 2.3). |
 | Creating a customer fails: Turso API error | `TURSO_API_TOKEN`, `TURSO_ORG` or `TURSO_GROUP` wrong. |
 | Photos / logo don't upload | `STRATUS_BUCKET` / `STRATUS_PUBLIC_URL` wrong, or bucket not public-read. |
-| Live updates not working | Check AppSail is running (1 instance), `EVENTS_*` on api, same `EVENTS_SECRET` and `AUTH_SECRET` on both. Remove the `EVENTS_*` variables to switch it off. |
+| Another device's change shows late | Normal on Catalyst: Billing, Tables, Kitchen, QR orders and Take Order check every 30 s, other screens every 60 s (only while the screen is in use). |
 | Wrong change in a shop's data | Turso point-in-time restore — `server/catalyst/PRODUCTION.md` → "Backups and restoring a shop". |

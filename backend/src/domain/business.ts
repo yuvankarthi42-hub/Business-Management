@@ -95,7 +95,10 @@ export function branchFrom(b: Row, seqs: Row[]): Branch {
 
 /** Default tax rates for a new business (same as the app's starter list). */
 export async function seedTaxRates(db: Db, businessId: string, category: Business['category']) {
+  return db.insertMany('tax_rates', taxRateSeedRows(businessId, category))
+}
+export function taxRateSeedRows(businessId: string, category: Business['category']) {
   const rates = [{ name: 'No Tax', rate: 0 }, { name: 'GST 5%', rate: 5 }, { name: 'GST 12%', rate: 12 }, { name: 'GST 18%', rate: 18 }]
   const def = category === 'retail' ? 0 : 5
-  return db.insertMany('tax_rates', rates.map((r) => ({ business_id: businessId, name: r.name, rate_bp: toBp(r.rate), is_inclusive: false, is_default: r.rate === def, is_active: true })))
+  return rates.map((r) => ({ business_id: businessId, name: r.name, rate_bp: toBp(r.rate), is_inclusive: false, is_default: r.rate === def, is_active: true }))
 }

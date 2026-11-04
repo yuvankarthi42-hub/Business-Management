@@ -3,7 +3,7 @@
 // including the single-database setups (Catalyst, tests) where it would otherwise go unnoticed.
 import type { DbKind } from './migrate'
 import { PLATFORM_TABLES, SHARED_TABLES, TABLES, type TableName } from './schema.gen'
-import type { Db } from './types'
+import type { Db, WriteOp } from './types'
 
 const ALL = Object.keys(TABLES) as TableName[]
 const ON: Record<DbKind, Set<string>> = {
@@ -11,7 +11,6 @@ const ON: Record<DbKind, Set<string>> = {
   shop: new Set(ALL.filter((t) => !PLATFORM_TABLES.includes(t))),
 }
 export const tablesOf = (kind: DbKind) => ALL.filter((t) => ON[kind].has(t))
-export const isOn = (kind: DbKind, table: TableName) => ON[kind].has(table)
 
 export function scoped(db: Db, kind: DbKind): Db {
   const check = (t: TableName) => {
@@ -22,6 +21,8 @@ export function scoped(db: Db, kind: DbKind): Db {
     transaction: (fn) => db.transaction((tx) => fn(scoped(tx, kind))),
     ...(db.sql ? { sql: (s: string, a?: (string | number | null)[]) => db.sql!(s, a) } : {}),
     ...(db.sqlMany ? { sqlMany: (x: { sql: string; args?: (string | number | null)[] }[]) => db.sqlMany!(x) } : {}),
+    ...(db.sqlReads ? { sqlReads: (x: { sql: string; args?: (string | number | null)[] }[]) => db.sqlReads!(x) } : {}),
+    ...(db.writeBatch ? { writeBatch: (ops: WriteOp[]) => (ops.forEach((o) => check('insert' in o ? o.insert : o.update)), db.writeBatch!(ops)) } : {}),
     ...(db.describe ? { describe: () => db.describe!() } : {}),
     aggregate: (t, o) => (check(t), db.aggregate(t, o)),
     select: (t, o) => (check(t), db.select(t, o)),

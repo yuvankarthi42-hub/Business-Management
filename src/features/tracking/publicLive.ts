@@ -1,12 +1,14 @@
 // Live updates for public screens (QR menu, TV specials board, customer order tracking): the event hub tells
 // them "menu changed" / "your order changed" — no names, phones or other data. Off when the server has no hub
-// (and in the demo app, whose screens already update themselves).
-import { useEffect, useRef } from 'react'
+// (Catalyst, and the demo app): then the screens check now and then by themselves (useCheckEvery).
+import { useEffect, useRef, useState } from 'react'
 import { api } from '@/data'
 
-export function usePublicLive(shop: string | null | undefined, order: string | null, on: { menu?: () => void; order?: () => void }) {
+/** Returns true while the server has live updates for public screens (a hub); false = none (check on a timer). */
+export function usePublicLive(shop: string | null | undefined, order: string | null, on: { menu?: () => void; order?: () => void }): boolean {
   const handlers = useRef(on)
   handlers.current = on
+  const [live, setLive] = useState(false)
   useEffect(() => {
     if (!shop) return
     let stopped = false
@@ -17,6 +19,7 @@ export function usePublicLive(shop: string | null | undefined, order: string | n
       let url: string | null = null
       try { url = (await api.public.live()).url } catch { /* no hub */ }
       if (!url || stopped) return
+      setLive(true)
       const base = new URL(url, location.href).href.replace(/\/$/, '')
       while (!stopped) {
         ctl = new AbortController()
@@ -55,6 +58,25 @@ export function usePublicLive(shop: string | null | undefined, order: string | n
       }
     }
     void run()
-    return () => { stopped = true; ctl?.abort() }
+    return () => { stopped = true; ctl?.abort(); setLive(false) }
   }, [shop, order])
+  return live
+}
+
+/**
+ * Without live updates: runs `check` every `ms` while the page is visible (and once when it becomes visible again
+ * after at least `ms`). Nothing while hidden, nothing when `on` is false. The server answers these from its cache.
+ */
+export function useCheckEvery(ms: number, on: boolean, check: () => void) {
+  const fn = useRef(check)
+  fn.current = check
+  useEffect(() => {
+    if (!on) return
+    let last = Date.now()
+    const visible = () => document.visibilityState === 'visible'
+    const tick = () => { if (visible() && Date.now() - last >= ms) { last = Date.now(); fn.current() } }
+    const id = setInterval(tick, Math.min(ms, 15_000))
+    document.addEventListener('visibilitychange', tick)
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', tick) }
+  }, [ms, on])
 }

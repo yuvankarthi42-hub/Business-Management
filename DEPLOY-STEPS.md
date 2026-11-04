@@ -11,10 +11,11 @@ All steps are in the **Catalyst console** (no command-line tools needed on the s
 | `api.zip` | Functions → `api` (Advanced I/O) | Yes |
 | `daily.zip` | Functions → `daily` (Cron) | Yes |
 | `web-prod.zip` | Slate → web app | Yes |
-| `events.zip` | AppSail → `events` | **Optional** — skip it. Only for live updates (Step 6), and not changed in this release |
 
-**`events.zip` is optional:** the app works fully without it (screens check for changes every 30–60 s). Upload it only if
-you already run the event hub on AppSail, or when you have about 15+ shops (Step 6).
+**No AppSail any more:** the live-update hub (`events.zip` on AppSail) is removed. Open screens check for changes every
+30 s (Billing, Tables, Kitchen, QR orders, Take Order, Customer Orders) or 60 s (other screens), only while in use. The
+TV specials board checks every minute, the QR menu every 5 minutes, and an open order-tracking page every 30 s.
+If you had set up AppSail earlier, remove it in Step 6.
 
 **No database changes in this release.** After deploying, open **Admin → Pricing**, check the prices
 (₹399 / ₹799 / ₹999 by business type) and press **Save prices**.
@@ -62,6 +63,8 @@ You'll put the new token and SETUP_KEY in the `api` function in Step 2.
 | `SETUP_KEY` | the **new** value from Step 1 |
 | `AUTH_SECRET` | keep as is (changing it signs everyone out) |
 | `SECRETS_KEY` | keep as is (never change) |
+| `PASSWORD_PEPPER` | **new, recommended:** 32+ random characters. Set it once and **never change or remove it** (passwords would stop working). Existing passwords keep working and are upgraded at the next sign-in |
+| `DAILY_SHOPS_PER_RUN` (and `DAILY_REMINDERS_PER_RUN`, `DAILY_REQUEST_BUDGET`, `DAILY_CPU_BUDGET_MS`) | **new, optional** on **daily** and **api**: leave unset for the defaults (20 shops, 20 reminders, 40 requests, 7 ms per run) |
 | `TURSO_PLATFORM_URL`, `TURSO_ORG`, `TURSO_API_TOKEN`, `TURSO_GROUP` | keep as is |
 | `STRATUS_BUCKET`, `STRATUS_PUBLIC_URL`, `ALLOWED_ORIGINS` | keep as is |
 
@@ -111,39 +114,14 @@ saves money).
 2. Open the app in the browser and press **Ctrl+Shift+R** (hard refresh). You should see the new **shop-front logo**
    and the name **Kadai Kalanjiyam**.
 
-## Step 6 — Optional: live updates (event hub on AppSail) — only from about 15 shops (15 min)
+## Step 6 — Only if you had set up AppSail earlier: remove it (5 min)
 
-**Skip this for now.** AppSail runs all the time (about $13 a month). Without it, urgent screens (Kitchen, QR orders,
-Tables, Billing) check every 30 s and other screens every 60 s — almost free. Add it at about 15+ shops.
+Skip this step if you never created the AppSail app `events`.
 
-1. Catalyst console → **AppSail** → **Create app** → Node.js 18 → name `events` → upload `events.zip`.
-   - Start command: `node index.js`
-   - **Instances: min 1, max 1** (important — the hub keeps open screens in memory)
-   - Memory: 256 MB
-2. AppSail **environment variables**:
-
-| Variable | Value |
-|---|---|
-| `AUTH_SECRET` | **same** as the `api` function |
-| `EVENTS_SECRET` | a new random value, 32+ characters |
-| `ALLOWED_ORIGINS` | **same** as the `api` function |
-
-3. Deploy it and copy its URL (e.g. `https://events-xxxx.catalystappsail.in`). Check it:
-   ```bash
-   curl -s <events-url>/health
-   ```
-   → `{"ok":true,"boot":"…","clients":0}`
-4. Go back to **Functions → `api`** → environment variables → add:
-
-| Variable | Value |
-|---|---|
-| `EVENTS_URL` | the AppSail URL |
-| `EVENTS_PUBLIC_URL` | the same AppSail URL |
-| `EVENTS_SECRET` | the **same** value as on AppSail |
-
-5. Save and **Deploy** the `api` function again.
-6. Test: open **Kitchen** on one device and bill a KOT item on another — the ticket should appear within 1–2 seconds.
-   If it doesn't, the screens still update the old way (every 30 s); check the AppSail logs.
+1. **Functions → `api`** → environment variables → delete `EVENTS_URL`, `EVENTS_PUBLIC_URL` and `EVENTS_SECRET`
+   (the new `api` ignores them anyway) → Save and **Deploy**.
+2. Catalyst console → **AppSail** → app `events` → **Stop**, then **Delete** (it is billed while it runs).
+3. Open screens switch to checking every 30–60 s by themselves after the next refresh.
 
 ## Step 7 — Check everything works (15 min)
 
@@ -155,7 +133,7 @@ Use a test shop (or your own) — not a customer's shop.
 - [ ] **KOT:** a dine-in / takeaway order with **KOT** → appears on **Kitchen**.
 - [ ] **QR order:** scan the table / shop QR on a phone → place an order → it shows in **QR Orders** with the chime.
 - [ ] **Track my order:** on the phone, **Track order** → enter the order number → status shows. Accept it on the
-      counter → tap **Refresh status** (or it updates by itself with live updates on).
+      counter → within about 30 s the status changes by itself (or tap **Refresh status**).
 - [ ] **Cancel** a bill → stock comes back; if it was paid with a credit note, the note gets its credit back.
 - [ ] **Staff rights:** sign in as a **Cashier** → billing works; **Reports / Expenses** are not shown, and product
       cost price is not visible.
@@ -179,9 +157,7 @@ Use a test shop (or your own) — not a customer's shop.
    old version — no database rollback needed.
 2. **Data problem (wrong bulk change):** Turso point-in-time restore — see **"Backups and restoring a shop"** in
    `server/catalyst/PRODUCTION.md`.
-3. **Live updates misbehaving:** remove `EVENTS_URL`, `EVENTS_PUBLIC_URL`, `EVENTS_SECRET` from the `api` function and
-   deploy — screens go back to the old 30 s updates. You can stop the AppSail app.
-4. **Notifications misbehaving:** remove the `VAPID_*` variables and deploy — the tracking page shows Refresh only.
+3. **Notifications misbehaving:** remove the `VAPID_*` variables and deploy — the tracking page shows Refresh only.
 
 ## Quick reference
 

@@ -17,6 +17,8 @@ const MOVE: Record<StockMovementType, { label: string; tone: Tone }> = {
   damage: { label: 'Damage', tone: 'red' }, wastage: { label: 'Wastage', tone: 'orange' }, adjustment: { label: 'Adjustment', tone: 'violet' }, return: { label: 'Return', tone: 'amber' },
 }
 
+const HISTORY_PAGE = 50
+
 export default function Inventory() {
   const { t } = useApp()
   const [tab, setTab] = useState<'stock' | 'expiry' | 'history' | 'purchases' | 'suppliers'>('stock')
@@ -27,9 +29,10 @@ export default function Inventory() {
   const [adjust, setAdjust] = useState<{ p: Product; type: StockMovementType } | null>(null)
   const [trackPick, setTrackPick] = useState(false)
   const { data: products = [] } = useData(() => api.products.list())
-  const { data: newest } = useData(() => api.inventory.movements())
-  // Stock history: the newest 3,000 first; "Load older" brings the next ones.
-  const history = useOlder(newest, 3000, (m) => m.createdAt, (before) => api.inventory.movements(null, before))
+  // History screen: 50 a time (a small, fast read); the Reports tab keeps its own 3,000.
+  const { data: newest } = useData(() => api.inventory.movements(null, null, HISTORY_PAGE))
+  // "Load older" brings the next 50.
+  const history = useOlder(newest, HISTORY_PAGE, (m) => m.createdAt, (before) => api.inventory.movements(null, before, HISTORY_PAGE))
   const moves = history.rows
   const tracked = products.filter((p) => p.trackStock && p.active)
   const low = tracked.filter((p) => p.stock > 0 && p.stock <= p.lowStockAt)

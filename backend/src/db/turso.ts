@@ -7,7 +7,7 @@ import { ApiError } from '../core/errors'
 import { column, columns } from './columns'
 import { type TableName, TABLES } from './schema.gen'
 import { SqlError, type SqlDriver, type SqlRunner, type SqlTx, type SqlValue, type Stmt } from './sql/driver'
-import { DuplicateError, type AggregateOptions, type Cond, type Db, type NewRow, type Row, type SchemaInfo, type SelectOptions, type SqlRow, type Value, type Where } from './types'
+import { DuplicateError, type AggregateOptions, type Cond, type Db, type NewRow, type Row, type SchemaInfo, type SelectOptions, type SqlRow, type Value, type Where, type WriteOp } from './types'
 
 const SYSTEM_SQL: Record<string, string> = { ROWID: 'id', CREATEDTIME: 'created_at', MODIFIEDTIME: 'updated_at' }
 const SQL_SYSTEM: Record<string, string> = { id: 'ROWID', created_at: 'CREATEDTIME', updated_at: 'MODIFIEDTIME' }
@@ -118,6 +118,11 @@ function condSql(table: TableName, name: string, cond: Cond, args: SqlValue[]): 
     if (!list.length) return '0'
     return `${c} IN (${list.map(one).join(', ')})`
   }
+  if ('contains' in o) {
+    // LIKE with % and _ escaped, so the text is matched as typed.
+    args.push(`%${String(o.contains).toLowerCase().replace(/[\\%_]/g, (m) => `\\${m}`)}%`)
+    return `LOWER(${c}) LIKE ? ESCAPE '\\'`
+  }
   const parts: string[] = []
   // "not equal" includes NULLs (same as the in-memory store): IS NOT compares NULL like a value.
   if ('ne' in o) parts.push(o.ne === null ? `${c} IS NOT NULL` : `${c} IS NOT ${one(o.ne as Value)}`)
@@ -195,6 +200,17 @@ export class TursoDb implements Db {
     return r.rows.map((row) => Object.fromEntries(r.columns.map((c, i) => [c, row[i]])))
   }
 
+  /**
+   * Several read-only statements in ONE round trip, with no transaction (no write lock — bills are never held up).
+   * Each gets its own answer, as sql() would give it. Only SELECT / WITH statements.
+   */
+  async sqlReads(stmts: { sql: string; args?: (string | number | null)[] }[]): Promise<SqlRow[][]> {
+    if (!stmts.length) return []
+    if (!stmts.every((x) => /^\s*(SELECT|WITH)\b/i.test(x.sql))) throw new Error('sqlReads: read-only statements only')
+    const results = await this.exec('businesses', stmts.map((x) => ({ sql: x.sql, args: x.args ?? [] })))
+    return results.map((r) => r.rows.map((row) => Object.fromEntries(r.columns.map((c, i) => [c, row[i]]))))
+  }
+
   async sqlMany(stmts: { sql: string; args?: (string | number | null)[] }[]): Promise<SqlRow[][]> {
     if (!stmts.length) return []
     const results = await this.execAll('businesses', stmts.map((x) => ({ sql: x.sql, args: x.args ?? [] })))
@@ -256,6 +272,37 @@ export class TursoDb implements Db {
   async insert(table: TableName, row: NewRow) { return (await this.insertMany(table, [row]))[0] }
   async insertMany(table: TableName, rows: NewRow[]): Promise<Row[]> {
     if (!rows.length) return []
+    const results = await this.execAll(table, this.insertStmts(table, rows))
+    // New ids only grow (AUTOINCREMENT), so sorting by id gives the rows back in the order they were given.
+    return results.flatMap((r) => r.rows.map((v) => rowFrom(table, r.columns, v))).sort((a, b) => Number(a.ROWID) - Number(b.ROWID))
+  }
+
+  /**
+   * Inserts and updates on several tables in ONE round trip, all or nothing (inside a transaction: part of it).
+   * Each op gives back its rows as insertMany / updateMany would.
+   */
+  async writeBatch(ops: WriteOp[]): Promise<Row[][]> {
+    const stmts: Stmt[] = [], spans: { op: WriteOp; from: number; to: number }[] = []
+    for (const op of ops) {
+      const from = stmts.length
+      if ('insert' in op) { if (op.rows.length) stmts.push(...this.insertStmts(op.insert, op.rows)) }
+      else stmts.push(...op.rows.map(({ ROWID, ...p }) => this.updateStmt(op.update, ROWID, p)))
+      spans.push({ op, from, to: stmts.length })
+    }
+    if (!stmts.length) return ops.map(() => [])
+    const first = 'insert' in ops[0] ? ops[0].insert : ops[0].update
+    const results = await this.execAll(first, stmts)
+    return spans.map(({ op, from, to }) => {
+      const part = results.slice(from, to)
+      if ('insert' in op) return part.flatMap((r) => r.rows.map((v) => rowFrom(op.insert, r.columns, v))).sort((a, b) => Number(a.ROWID) - Number(b.ROWID))
+      return part.map((r, i) => {
+        if (!r.rows.length) throw new Error(`${op.update} row ${op.rows[i].ROWID} not found`)
+        return rowFrom(op.update, r.columns, r.rows[0])
+      })
+    })
+  }
+
+  private insertStmts(table: TableName, rows: NewRow[]): Stmt[] {
     const prepared = rows.map((r) => forInsert(table, r))
     const names = Object.keys(prepared[0])
     const per = Math.max(1, Math.min(500, Math.floor(MAX_VARS / Math.max(1, names.length))))
@@ -268,9 +315,7 @@ export class TursoDb implements Db {
         args: chunk.flatMap((r) => names.map((n) => r[n])),
       })
     }
-    const results = await this.execAll(table, stmts)
-    // New ids only grow (AUTOINCREMENT), so sorting by id gives the rows back in the order they were given.
-    return results.flatMap((r) => r.rows.map((v) => rowFrom(table, r.columns, v))).sort((a, b) => Number(a.ROWID) - Number(b.ROWID))
+    return stmts
   }
 
   private updateStmt(table: TableName, id: string, patch: NewRow): Stmt {

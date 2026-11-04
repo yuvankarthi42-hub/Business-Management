@@ -157,6 +157,7 @@ function test(v: Value, cond: Cond): boolean {
   if (typeof cond !== 'object') return v === cond
   const c = cond as Record<string, Value | Value[]>
   if ('in' in c) return (c.in as Value[]).includes(v)
+  if ('contains' in c) return v !== null && String(v).toLowerCase().includes(String(c.contains).toLowerCase())
   if ('ne' in c) return v !== c.ne
   if (v === null) return false
   const x = v as string | number

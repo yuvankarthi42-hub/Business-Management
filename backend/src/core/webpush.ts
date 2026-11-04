@@ -14,13 +14,6 @@ export interface PushSender {
 const b64u = (b: Buffer) => b.toString('base64url')
 const fromB64u = (s: string) => Buffer.from(s, 'base64url')
 
-/** A new VAPID key pair (base64url): put them in the function's environment variables. */
-export function generateVapidKeys() {
-  const ecdh = createECDH('prime256v1')
-  ecdh.generateKeys()
-  return { publicKey: b64u(ecdh.getPublicKey()), privateKey: b64u(ecdh.getPrivateKey()) }
-}
-
 /** The encrypted body for one browser (RFC 8291). */
 export function encryptPayload(target: Pick<PushTarget, 'p256dh' | 'auth'>, payload: string): Buffer {
   const uaPublic = fromB64u(target.p256dh)

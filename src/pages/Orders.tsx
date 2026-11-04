@@ -1,5 +1,5 @@
 import { Printer, ReceiptText, RotateCcw, ShoppingBag, XCircle, MessageCircle } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useSaveOnce } from '@/features/billKey'
 import { useApp, useData } from '@/app/AppContext'
 import { Badge, Button, Card, Drawer, EmptyState, PageHeader, SearchInput, Segmented, Select, Table, Td, Th, useAction, type Tone } from '@/components/ui'
@@ -14,7 +14,7 @@ import { useWhatsApp } from '@/features/whatsapp/useWhatsApp'
 import { CancelOrderModal } from './Tables'
 import { BillReturns, ReturnModal } from '@/features/Returns'
 import { formatPhone } from '@/core/phone'
-import { Pager, usePage } from '@/components/Pager'
+import { Pager, useServerPages } from '@/components/Pager'
 
 export const statusBadge = (o: Order): { tone: Tone; label: string } =>
   o.status === 'cancelled' ? { tone: 'red', label: 'Cancelled' }
@@ -37,21 +37,18 @@ function OrdersList({ toggle }: { toggle?: React.ReactNode }) {
   const [q, setQ] = useState('')
   const [open, setOpen] = useState<string | null>(null)
   const r = rangeFor(range)
-  const { data: orders } = useData(() => api.orders.list({ from: r.from, to: r.to, status }), [range, status])
+  // The search is sent once typing pauses (not on every key).
+  const [search, setSearch] = useState('')
+  useEffect(() => { const id = setTimeout(() => setSearch(q.trim()), 300); return () => clearTimeout(id) }, [q])
+  // 50 bills a page from the server; status, type and search are applied there, totals cover the whole filter.
+  const filter = { from: r.from, to: r.to, status, type, q: search }
+  const { data: orders, rows: list, p: pg } = useServerPages((before) => api.orders.page(filter, before), [range, status, type, search])
   const { data: customers = [] } = useData(() => api.customers.list())
   const { data: tables = [] } = useData(() => (mod('tables') ? api.tables.list() : Promise.resolve([])), [mod('tables')])
   const cname = (id: string | null) => customers.find((c) => c.id === id)?.name
-  const list = useMemo(() => (orders ?? []).filter((o) => {
-    if (type !== 'all' && o.type !== type) return false
-    const s = q.trim().toLowerCase()
-    return !s || o.number.toLowerCase().includes(s) || (o.invoiceNumber ?? '').toLowerCase().includes(s) || (cname(o.customerId) ?? '').toLowerCase().includes(s)
-  }), [orders, type, q, customers]) // eslint-disable-line react-hooks/exhaustive-deps
-  const total = list.filter((o) => o.status === 'completed').reduce((a, o) => a + o.total, 0)
-
-  const pg = usePage(list, [range, status, type, q])
   return (
     <div className="mx-auto max-w-7xl">
-      <PageHeader title={t('order', true)} subtitle={`${list.length} ${t('order', true).toLowerCase()} · ${money(total)} billed`}
+      <PageHeader title={t('order', true)} subtitle={`${orders?.count ?? 0} ${t('order', true).toLowerCase()} · ${money(orders?.billed ?? 0)} billed`}
         actions={<>{toggle}<Segmented value={range} onChange={setRange} options={[{ value: 'today', label: 'Today' }, { value: 'yesterday', label: 'Yesterday' }, { value: 'week', label: 'This Week' }, { value: 'month', label: 'This Month' }]} /></>} />
       <Card>
         <div className="flex flex-col gap-2 border-b border-slate-100 p-3 sm:flex-row">
@@ -67,7 +64,7 @@ function OrdersList({ toggle }: { toggle?: React.ReactNode }) {
           <Table footer={<Pager p={pg} />}>
             <thead><tr><Th>{t('order')}</Th>{showBranch && <Th>Branch</Th>}<Th>{t('invoice')}</Th><Th>Time</Th><Th>Type</Th><Th className="hidden md:table-cell">{t('customer')}</Th><Th className="hidden lg:table-cell">Items</Th><Th className="text-right">Total</Th><Th>Status</Th></tr></thead>
             <tbody>
-              {pg.rows.map((o) => {
+              {list.map((o) => {
                 const b = statusBadge(o)
                 return (
                   <tr key={o.id} onClick={() => setOpen(o.id)} className="cursor-pointer hover:bg-slate-50">

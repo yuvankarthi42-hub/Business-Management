@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { templateFor } from '@/core/config'
 import type { ImportItem } from '@/core/productImport'
 import { cleanHsn, hsnError } from '@/core/gst'
+import { cleanDetails } from '@/core/stickers'
 import { planDesign, planDiscount, type DesignInput, type DiscountInput } from '@/core/textile'
 import type { Category, Product, Special } from '@/core/types'
 import { nextInStoreBarcode } from '@/lib/barcode'
@@ -10,9 +11,12 @@ import type { Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
 import { define, userRead, userWrite } from '../core/registry'
 import { DuplicateError, type Row } from '../db/types'
-import { categoryFrom, loadCategories, loadProducts, mediaMap, productColumns, syncOptions, wholesaleList, withCostFor } from '../domain/catalog'
-import { moveStock, stockProduct, type BatchInput } from '../domain/stock'
-import { audit, bizDay, E, fromMinorOrNull, isId, keyPart, own, str, toMilli, toMinor } from '../domain/util'
+import { categoryFrom, loadCategories, loadProductPage, loadProducts, mediaMap, productColumns, syncOptions, wholesaleList, withCostFor } from '../domain/catalog'
+import { moveStock, moveStockMany, stockProduct, type BatchInput } from '../domain/stock'
+import { audit, bizDay, E, fromMinor, fromMinorOrNull, isId, json, keyPart, own, str, toMilli, toMinor } from '../domain/util'
+
+/** Products per products.page answer (keeps one answer's CPU small for 2,000-item shops). */
+export const PRODUCT_PAGE = 300
 
 // ---------- photos ----------
 const LIMITS = { product: { main: 51_200, thumb: 20_480 }, category: { main: 51_200, thumb: 20_480 }, ticket: { main: 204_800, thumb: 0 }, poster: { main: 204_800, thumb: 0 }, logo: { main: 81_920, thumb: 0 } } as const
@@ -106,8 +110,72 @@ define('categories', {
   }, { perm: 'products.manage' }),
 })
 
+/**
+ * What a new design checks against, in one light read: the items with details (planDesign's duplicate check — same
+ * `active` and `details` as the full read) and the in-store codes (nextInStoreBarcode only looks at 20… codes, so the
+ * next code is the same as from every product's barcode).
+ */
+async function designChecks(c: Ctx) {
+  const rows = await c.db.sql!(`SELECT "is_active" AS active, "details_json" AS details, "barcode" AS barcode FROM "products"
+    WHERE "business_id" = ? AND ("details_json" IS NOT NULL OR "barcode" GLOB '20*')`, [Number(c.businessId)])
+  return {
+    existing: rows.filter((r) => r.details).map((r) => ({ active: r.active == null || Number(r.active) !== 0, details: cleanDetails(json(r.details as string, null)) ?? undefined })),
+    codes: rows.map((r) => str(r.barcode as string | null)),
+  }
+}
+
+/**
+ * The items a discount may touch, with only what planDiscount reads (id, category, MRP, price, sizes, active), in the
+ * product list's order (sort order, then id) — the same items and values as the full read. Narrowed in SQL to the
+ * chosen items or category (planDiscount picks the same ones again).
+ */
+async function discountItems(c: Ctx, input: DiscountInput) {
+  const sql = c.db.sql!.bind(c.db)
+  const bid = Number(c.businessId)
+  const only = input?.productIds?.length ? [...new Set(input.productIds.map(String).filter(isId))] : null
+  const head = `SELECT p."id" AS id, p."sort_order" AS so, p."category_id" AS cat, p."mrp_minor" AS mrp, p."price_minor" AS price, p."is_active" AS active,
+    (SELECT COUNT(*) FROM "product_variants" v WHERE v."business_id" = ? AND v."product_id" = p."id" AND v."is_active" = 1) AS sizes
+    FROM "products" p WHERE p."business_id" = ?`
+  const order = ` ORDER BY p."sort_order" ASC, p."id" ASC`
+  let rows: Record<string, unknown>[] = []
+  if (only) { for (let i = 0; i < only.length; i += 500) { const part = only.slice(i, i + 500).map(Number); rows.push(...await sql(`${head} AND p."id" IN (${part.map(() => '?').join(', ')})${order}`, [bid, bid, ...part])) } }
+  else if (input?.categoryId) rows = await sql(`${head} AND p."category_id" = ?${order}`, [bid, bid, Number(input.categoryId)])
+  else rows = await sql(`${head}${order}`, [bid, bid])
+  // More than 500 chosen items: read in parts, so put them back in the list's order (sort order, then id).
+  if (only && only.length > 500) rows.sort((a, b) => Number(a.so ?? 0) - Number(b.so ?? 0) || Number(a.id) - Number(b.id))
+  const items = rows.map((r) => ({
+    id: String(r.id), categoryId: r.cat == null ? null : String(r.cat), mrp: fromMinorOrNull(r.mrp as number | null), price: fromMinor(r.price as number | null),
+    variants: new Array(Number(r.sizes ?? 0)), active: Number(r.active) !== 0,
+  }))
+  return items
+}
+
+/** New prices, 100 items per UPDATE, all in one request (all or nothing; inside a transaction, part of it). */
+async function setPrices(c: Ctx, changes: { id: string; minor: number }[]) {
+  const bid = Number(c.businessId)
+  const stmts: { sql: string; args: (string | number | null)[] }[] = []
+  for (let i = 0; i < changes.length; i += 100) {
+    const part = changes.slice(i, i + 100)
+    stmts.push({
+      sql: `UPDATE "products" SET "price_minor" = CASE "id" ${part.map(() => 'WHEN ? THEN ?').join(' ')} END, "updated_at" = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE "business_id" = ? AND "id" IN (${part.map(() => '?').join(', ')})`,
+      args: [...part.flatMap((x) => [Number(x.id), x.minor]), bid, ...part.map((x) => Number(x.id))],
+    })
+  }
+  await c.db.sqlMany!(stmts)
+}
+
 define('products', {
-  list: userRead(async (c) => withCostFor(c, await loadProducts(c))),
+  /**
+   * The catalogue in pages (the browser joins them, so each answer stays small): `after` = where the last page
+   * ended (0 for the first). Catalyst Data Store: the whole list in one page.
+   */
+  page: userRead(async (c, after?: number) => {
+    if (!c.dbs.perShop) return { rows: withCostFor(c, await loadProducts(c)), next: null }
+    const at = Math.max(0, Math.floor(Number(after) || 0))
+    const page = await loadProductPage(c, at, PRODUCT_PAGE)
+    return { rows: withCostFor(c, page.rows), next: page.next }
+  }),
 
   save: userWrite(async (c, input: Partial<Product> & { name: string; openingBatch?: BatchInput }) => {
     if (!String(input.name ?? '').trim()) throw new ApiError('Name is required')
@@ -242,14 +310,26 @@ define('products', {
   saveDesign: userWrite(async (c, input: DesignInput) => {
     if (input?.categoryId) await own(c, 'categories', input.categoryId, 'Choose a category')
     if (input?.taxRateId) await own(c, 'tax_rates', input.taxRateId, 'Choose a tax rate')
-    const existing = await loadProducts(c, { withStock: false, withExpiry: false })
+    // Turso: one light read for the checks, and every item + its opening stock in a few round trips (not ~4 per
+    // colour / size); otherwise as before. Same items, codes, stock and history either way, all in one transaction.
+    const fast = !!(c.db.sql && c.db.sqlMany)
+    const checks = fast ? await designChecks(c) : null
+    const existing = checks ? checks.existing : await loadProducts(c, { withStock: false, withExpiry: false })
     let plan
     try { plan = planDesign(input, existing) } catch (e) { throw new ApiError((e as Error).message) }
     const img = input.imageUrl ? await mediaIdFor(c, input.imageUrl, 'product') : null
-    const codes = (await c.db.select('products', { where: { business_id: c.businessId } })).map((p) => str(p.barcode))
+    const codes = checks ? checks.codes : (await c.db.select('products', { where: { business_id: c.businessId } })).map((p) => str(p.barcode))
     const branch = c.writeBranch({ fallback: true })
     const ids: string[] = []
-    for (const p of plan) {
+    if (fast) {
+      const rows = await c.db.insertMany('products', plan.map((p) => {
+        const bc = nextInStoreBarcode(codes)
+        codes.push(bc)
+        return { business_id: c.businessId, sort_order: 0, track_batches: false, ...productColumns(p), barcode: bc, barcode_key: `${c.businessId}:${bc}`, image_media_id: img }
+      }))
+      await moveStockMany(c, rows.flatMap((row, i) => plan[i].stock > 0 ? [{ p: stockProduct(row), branchId: branch, qty: plan[i].stock, reason: 'opening' as const, opts: { note: 'Opening stock' } }] : []))
+      ids.push(...rows.map((r) => r.ROWID))
+    } else for (const p of plan) {
       const bc = nextInStoreBarcode(codes)
       codes.push(bc)
       const row = await c.db.insert('products', {
@@ -265,10 +345,15 @@ define('products', {
   /** New selling prices = MRP less a % for a category (or chosen items). 0% = back to MRP. */
   setDiscount: userWrite(async (c, input: DiscountInput) => {
     if (input?.categoryId) await own(c, 'categories', input.categoryId, 'Choose a category')
-    const products = await loadProducts(c, { withStock: false, withExpiry: false })
+    // Turso: only the fields the rule needs, and the new prices without reading the rows back; otherwise as before.
+    const fast = !!(c.db.sql && c.db.sqlMany)
+    const products = fast ? await discountItems(c, input) : await loadProducts(c, { withStock: false, withExpiry: false })
     let plan
     try { plan = planDiscount(input, products) } catch (e) { throw new ApiError((e as Error).message) }
-    if (plan.changes.length) await c.db.updateMany('products', plan.changes.map((x) => ({ ROWID: x.id, price_minor: toMinor(x.price) })))
+    if (plan.changes.length) {
+      if (fast) await setPrices(c, plan.changes.map((x) => ({ id: x.id, minor: toMinor(x.price) ?? 0 })))
+      else await c.db.updateMany('products', plan.changes.map((x) => ({ ROWID: x.id, price_minor: toMinor(x.price) })))
+    }
     const cat = input.productIds?.length ? `${input.productIds.length} items` : input.categoryId ? str((await c.db.get('categories', input.categoryId))?.name) : 'all items'
     await audit(c, 'product', null, 'update', `Discount ${Number(input.pct)}% on ${cat}: ${plan.changes.length} prices changed`.slice(0, 250))
     return { updated: plan.changes.length, ids: plan.ids, noMrp: plan.noMrp, withSizes: plan.withSizes }

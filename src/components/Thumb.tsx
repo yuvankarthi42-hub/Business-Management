@@ -2,7 +2,6 @@ import clsx from 'clsx'
 import { ImagePlus, Trash2 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { api } from '@/data'
-import { Button, Input } from './ui'
 
 const kb = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`)
 
@@ -26,50 +25,6 @@ export function Thumb({ item, className, alt, full }: {
           ? <span aria-hidden="true">{item.emoji}</span>
           : <span aria-hidden="true" className="text-[0.55em] font-semibold tracking-wide text-slate-600">{initials(item.name ?? alt ?? '')}</span>}
     </span>
-  )
-}
-
-/** Photo upload with emoji fallback, used in the item and category forms. */
-export function ImagePicker({ imageUrl, emoji, onChange, compact }: {
-  imageUrl: string | null | undefined; emoji: string; onChange: (v: { imageUrl?: string | null; thumbUrl?: string | null; emoji?: string }) => void; compact?: boolean
-}) {
-  const input = useRef<HTMLInputElement>(null)
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-  const pick = async (file?: File) => {
-    if (!file) return
-    setError(''); setBusy(true)
-    // The original goes to the upload API, which compresses it (≤ 50 KB) before storing.
-    try { const r = await api.media.upload(file); onChange({ imageUrl: r.url, thumbUrl: r.thumbUrl }) } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
-  }
-  return (
-    <div className={clsx('flex gap-3', compact ? 'items-center' : 'items-start')}>
-      <button
-        type="button" onClick={() => input.current?.click()} aria-label="Upload photo"
-        onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); pick(e.dataTransfer.files[0]) }}
-        className={clsx('group relative shrink-0 overflow-hidden rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 transition hover:border-brand-400',
-          compact ? 'h-12 w-12' : 'h-24 w-24')}
-      >
-        <Thumb item={{ emoji, imageUrl }} className={clsx('h-full w-full', compact ? 'text-2xl' : 'text-4xl')} />
-        <span className="absolute inset-0 flex items-center justify-center bg-slate-900/45 text-white opacity-0 transition group-hover:opacity-100"><ImagePlus className="h-5 w-5" /></span>
-        {busy && <span className="absolute inset-0 flex items-center justify-center bg-white/70 text-xs">…</span>}
-      </button>
-      <input ref={input} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => { pick(e.target.files?.[0]); e.target.value = '' }} />
-      {!compact && (
-        <div className="min-w-0 space-y-2">
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" size="sm" variant="secondary" icon={ImagePlus} onClick={() => input.current?.click()}>{imageUrl ? 'Change photo' : 'Upload photo'}</Button>
-            {imageUrl && <Button type="button" size="sm" variant="ghost" icon={Trash2} className="!text-red-600" onClick={() => onChange({ imageUrl: null, thumbUrl: null })}>Remove</Button>}
-          </div>
-          <div className="flex items-center gap-2 text-xs text-slate-500">
-            <span className="whitespace-nowrap">{imageUrl ? 'Fallback emoji' : 'Or emoji'}</span>
-            <Input value={emoji} onChange={(e) => onChange({ emoji: e.target.value })} className="h-8 w-14 text-center text-lg" maxLength={4} aria-label="Emoji" />
-          </div>
-          {error ? <p className="text-xs text-red-600">{error}</p> : <p className="text-[11px] text-slate-400">Any JPG, PNG or WebP up to 50 MB — saved small (under 50 KB). Drag & drop supported.</p>}
-        </div>
-      )}
-      {compact && error && <p className="text-xs text-red-600">{error}</p>}
-    </div>
   )
 }
 

@@ -1,5 +1,6 @@
 // Customer subscription rules — pure functions so the server can use the same logic.
 import type { Business } from './types'
+import { dateFormat } from './intl'
 
 export type SubState = 'active' | 'expiring' | 'expired' | 'deactivated'
 export const EXPIRING_DAYS = 7
@@ -20,11 +21,11 @@ export const PLATFORM_TZ = 'Asia/Kolkata'
 
 /** 'YYYY-MM-DD' of the moment `d` in the zone. */
 export function ymdIn(d: Date, tz = PLATFORM_TZ) {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d)
+  return dateFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d)
 }
 /** Minutes the zone is ahead of UTC at that moment (India: 330). */
 function offsetMinutes(at: Date, tz: string) {
-  const name = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'longOffset' }).formatToParts(at).find((p) => p.type === 'timeZoneName')?.value ?? ''
+  const name = dateFormat('en-US', { timeZone: tz, timeZoneName: 'longOffset' }).formatToParts(at).find((p) => p.type === 'timeZoneName')?.value ?? ''
   const m = /GMT([+-])(\d{2}):?(\d{2})?/.exec(name)
   return m ? (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3] ?? 0)) : 0
 }
@@ -50,13 +51,6 @@ export function subscriptionState(b: Pick<Business, 'status' | 'subscription'>, 
   const expired = !endAt || new Date(endAt).getTime() < now.getTime()
   const state: SubState = b.status === 'deactivated' ? 'deactivated' : expired ? 'expired' : daysLeft <= EXPIRING_DAYS ? 'expiring' : 'active'
   return { state, daysLeft: expired ? 0 : daysLeft, endAt, startAt: b.subscription?.startAt ?? null, readOnly: state === 'expired', blocked: state === 'deactivated' }
-}
-
-/** Price for a period: branches × months × price per branch per month (custom dates are charged per day). */
-export function periodAmount(branches: number, pricePerBranchMonth: number, months: number | null, startAt: string, endAt: string) {
-  if (months) return Math.round(branches * months * pricePerBranchMonth)
-  const days = Math.max(1, Math.round((new Date(endAt).getTime() - new Date(startAt).getTime()) / DAY))
-  return Math.round(branches * pricePerBranchMonth * (days / 30))
 }
 
 export const READ_ONLY_MESSAGE = 'Your subscription has expired, so the account is read-only. Contact the product admin to renew.'

@@ -27,7 +27,9 @@ export default function Reports() {
   const { t, mod, can, me } = useApp()
   const [range, setRange] = useState<RangeKey>('today')
   const [custom, setCustom] = useState({ from: toDateInput(addDays(new Date(), -6)), to: toDateInput(new Date()) })
-  const [tab, setTab] = useState<Tab>('income')
+  const [picked, setTab] = useState<Tab>('income')
+  // GST returns only while the GST report is released to this customer (it may be withdrawn while the page is open).
+  const tab: Tab = picked === 'gst' && !me?.features.gstReport ? 'income' : picked
   const r = rangeFor(range, custom)
   const { data: s } = useData(() => api.reports.summary(r.from, r.to), [range, custom.from, custom.to])
   const tabs: { value: Tab; label: string }[] = [
@@ -36,7 +38,7 @@ export default function Reports() {
     { value: 'products', label: t('product', true) },
     ...(mod('customers') ? [{ value: 'customers' as Tab, label: t('customer', true) }] : []),
     ...(mod('inventory') ? [{ value: 'inventory' as Tab, label: 'Inventory' }] : []),
-    ...(me?.business.billing.taxEnabled ? [{ value: 'gst' as Tab, label: 'GST returns' }] : []),
+    ...(me?.business.billing.taxEnabled && me.features.gstReport ? [{ value: 'gst' as Tab, label: 'GST returns' }] : []),
   ]
   const period = range === 'custom' ? `${fmtDate(r.from)} – ${fmtDate(r.to)}` : range === 'today' || range === 'yesterday' ? fmtDate(r.from) : `${fmtDate(r.from)} – ${fmtDate(r.to)}`
 
@@ -231,7 +233,8 @@ function CustomersReport() {
 
 function InventoryReport() {
   const { data: products = [] } = useData(() => api.products.list())
-  const { data: moves = [] } = useData(() => api.inventory.movements())
+  // Last 7 days, added up by the server per item and type (every movement counts).
+  const { data: week = [] } = useData(() => api.inventory.weekSummary())
   const tracked = products.filter((p) => p.trackStock)
   return (
     <Card>
@@ -240,8 +243,7 @@ function InventoryReport() {
         <thead><tr><Th>Item</Th><Th className="text-right">In stock</Th><Th className="text-right">Purchased</Th><Th className="text-right">Sold</Th><Th className="text-right">Wasted / damaged</Th><Th>Status</Th></tr></thead>
         <tbody>
           {tracked.map((p) => {
-            const since = addDays(new Date(), -7).toISOString()
-            const m = moves.filter((x) => x.productId === p.id && x.createdAt >= since)
+            const m = week.filter((x) => x.productId === p.id)
             const sum = (types: string[]) => Math.abs(m.filter((x) => types.includes(x.type)).reduce((a, x) => a + x.qty, 0))
             return (
               <tr key={p.id}>

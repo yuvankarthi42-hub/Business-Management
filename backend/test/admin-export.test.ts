@@ -15,7 +15,8 @@ test('feature releases flip the customer session', async () => {
     assert.equal((await s.call<Me>('auth.me')).features.whatsapp, false)
     s.setToken(s.adminToken)
     const list = await s.call<{ key: string; name: string; flag: Flag }[]>('admin.features')
-    assert.deepEqual(list.map((f) => [f.key, f.flag.mode]), [['whatsapp', 'off']])
+    // WhatsApp and Single device start off; the test environment releases QR Orders, Daily Specials and the GST report to everyone.
+    assert.deepEqual(list.map((f) => [f.key, f.flag.mode]), [['whatsapp', 'off'], ['qrOrders', 'all'], ['specials', 'all'], ['gstReport', 'all'], ['singleDevice', 'off']])
     await assert.rejects(s.call('admin.setFeature', 'nope', { mode: 'all', businessIds: [] }), /Unknown feature/)
     await assert.rejects(s.call('admin.setFeature', 'whatsapp', { mode: 'some', businessIds: [] }), /Choose who/)
 

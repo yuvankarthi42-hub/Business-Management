@@ -1,0 +1,145 @@
+Page,Action,APIs called,Total API calls,"Min CPU ms (sum of APIs, best case)","Max CPU ms (sum of APIs, worst case)","Measured CPU ms (this run, sum)",Large-data est. ms (sum of API large avg),Heaviest API ms,DB round trips
+Login,Sign in (owner),"auth.login×2, events.ticket×2, auth.boot×2, products.page×4, categories.list, sync.changes×2, reports.summary×3, orders.running, kitchen.list, orders.list, inventory.batches",20,14.31,178.77,51.54,73.45,products.page 8.9,203
+Onboarding,Step through wizard,"sync.changes×3, business.saveSetup, auth.boot×2, products.page×2, categories.list",9,7.44,49.02,28.02,11.85,products.page 11.9,104
+Dashboard,Page load,"business.finishOnboarding, auth.boot×2, sync.changes, reports.summary×3, kitchen.list, orders.running, orders.list, inventory.batches",11,3.83,110.62,31.11,53.48,reports.summary 9.8,156
+Dashboard,Range: Yesterday,reports.summary,1,0.51,29.03,6.10,16.70,reports.summary 6.1,23
+Dashboard,Range: This Week,reports.summary×2,2,1.02,58.05,10.24,33.40,reports.summary 5.5,45
+Dashboard,Range: This Month,reports.summary×2,2,1.02,58.05,8.19,33.40,reports.summary 4.8,45
+Dashboard,Range: Today,reports.summary,1,0.51,29.03,3.15,16.70,reports.summary 3.2,23
+Dashboard,Switch branch: All branches,"auth.switchBranch, auth.boot, reports.summary×3, orders.running, kitchen.list, products.page×2, orders.list, inventory.batches, reports.byBranch×2",13,8.69,247.90,39.86,138.00,reports.byBranch 7.5,196
+Dashboard,Switch branch: Annex,"auth.switchBranch, auth.boot, reports.byBranch×2, reports.summary×3, orders.running, kitchen.list, products.page×2, orders.list, inventory.batches",13,8.69,247.90,16.04,138.00,products.page 3.1,162
+Dashboard,Switch branch: Main,"auth.switchBranch, auth.boot, reports.summary×3, orders.running, products.page×2, kitchen.list, orders.list, inventory.batches",11,4.18,127.44,23.88,57.37,products.page 6.1,87
+Billing,Page load,"customers.list, users.list, tables.list, whatsapp.status, specials.list, categories.list, reports.topProducts",7,1.49,45.25,22.29,6.94,reports.topProducts 9.3,50
+Billing,Search customer,sync.changes,1,0.09,3.56,1.61,0.22,sync.changes 1.6,4
+Billing,"Checkout: Collect (cash, customer, discount)","orders.checkout, customers.list, whatsapp.status, orders.get, orders.running, qr.pending",6,2.35,27.84,12.28,6.92,orders.checkout 5.5,81
+Billing,"Checkout: Collect (UPI, takeaway)","orders.checkout, orders.get, orders.running, qr.pending",4,1.47,17.47,7.22,2.90,orders.checkout 5.1,62
+Billing,Item with add-on: add to cart,sync.changes,1,0.09,3.56,3.56,0.22,sync.changes 3.6,4
+Billing,Send KOT (dine-in),"orders.save, orders.running, whatsapp.status, qr.pending",4,0.95,16.54,7.00,1.71,orders.save 3.7,57
+Billing,Payment: Split,sync.changes,1,0.09,3.56,1.23,0.22,sync.changes 1.2,4
+Billing,Checkout running order: split cash + UPI,"orders.checkout, orders.get, whatsapp.status, qr.pending, orders.running",5,1.56,19.62,5.81,3.03,orders.checkout 3.6,73
+Billing,Checkout: credit bill,"orders.checkout, customers.list, orders.get, whatsapp.status, orders.running, qr.pending",6,2.35,27.84,13.14,6.92,orders.checkout 5.9,81
+Tables,Page load,kitchen.list,1,0.19,4.01,1.96,0.25,kitchen.list 2.0,6
+Tables,Transfer T1 → T3,"orders.transferTable, tables.list, orders.running, kitchen.list, qr.pending",5,1.02,17.94,8.08,1.81,orders.transferTable 4.2,38
+Tables,Merge T2 into T3,"orders.mergeTables, tables.list, orders.running, kitchen.list, qr.pending",5,1.32,19.01,10.85,1.84,orders.mergeTables 5.2,60
+Tables,Generate Bill: Collect cash,"orders.save, orders.settle, support.mine, orders.running×2, kitchen.list×2, qr.pending×2, customers.list, orders.get, tables.list, whatsapp.status",13,3.36,50.15,14.04,7.80,orders.save 3.0,137
+Tables,Cancel order: confirm,"orders.cancel, tables.list, orders.running, kitchen.list, qr.pending",5,1.13,16.54,7.28,1.80,qr.pending 2.0,42
+Tables,Tap free table to start order,"customers.list, reports.topProducts",2,0.96,38.25,19.19,6.04,reports.topProducts 14.2,32
+Take Order,Place order (send to kitchen),"orders.save, qr.pending, orders.running, kitchen.list",4,1.05,18.40,8.03,1.82,orders.save 5.6,58
+QR Orders,Page load,qr.recent,1,0.24,2.10,1.51,0.30,qr.recent 1.5,5
+QR Orders,Accept order,"qr.accept, qr.recent, tables.list, qr.pending",4,0.90,11.57,3.90,1.48,qr.accept 2.2,47
+QR Orders,Reject order: confirm,"qr.reject, qr.recent, qr.pending",3,0.63,10.31,4.52,0.99,qr.recent 2.1,25
+Customer Orders,Page load,orders.board,1,0.19,1.61,1.61,0.26,orders.board 1.6,6
+Kitchen (KOT),Page load,kitchen.list,1,0.19,4.01,4.01,0.25,kitchen.list 4.0,5
+Kitchen (KOT),Start preparing,"kitchen.setStatus, kitchen.list",2,0.43,6.79,2.96,0.67,kitchen.setStatus 1.9,17
+Kitchen (KOT),Mark ready,"kitchen.setStatus, kitchen.list",2,0.43,6.79,2.59,0.67,kitchen.setStatus 1.6,16
+Kitchen (KOT),Served / picked up,"kitchen.setStatus, kitchen.list, qr.pending",3,0.58,13.13,4.58,0.85,kitchen.setStatus 2.8,21
+Kitchen (KOT),Move back,"kitchen.setStatus, kitchen.list",2,0.43,6.79,1.96,0.67,kitchen.list 1.3,16
+Orders,Page load,orders.page,1,0.73,5.42,4.12,1.05,orders.page 4.1,9
+Orders,Pagination: next page,orders.page×2,2,1.46,10.84,7.65,2.11,orders.page 4.8,19
+Orders,Range: This Week,orders.page,1,0.73,5.42,3.51,1.05,orders.page 3.5,9
+Orders,Range: This Month,orders.page,1,0.73,5.42,3.03,1.05,orders.page 3.0,9
+Orders,Filter status: Billed,orders.page,1,0.73,5.42,3.26,1.05,orders.page 3.3,9
+Orders,Filter status: Cancelled,orders.page,1,0.73,5.42,1.41,1.05,orders.page 1.4,8
+Orders,Filter type: Takeaway,orders.page,1,0.73,5.42,4.06,1.05,orders.page 4.1,9
+Orders,Search: bill number,orders.page,1,0.73,5.42,4.61,1.05,orders.page 4.6,14
+Orders,Search: guest name,orders.page,1,0.73,5.42,5.42,1.05,orders.page 5.4,18
+Orders,Open order detail,"whatsapp.status, orders.get",2,0.25,4.88,2.48,0.44,orders.get 1.4,13
+Orders,Open billed order detail,"orders.get×2, returns.forOrder×2",4,0.56,8.76,5.28,0.96,orders.get 2.7,28
+Orders,Return: save (refund),"returns.create, returns.forOrder, orders.get, whatsapp.status, orders.page, customers.list, qr.pending",7,2.41,30.97,14.76,6.44,returns.create 4.5,71
+Orders,Void bill: confirm,"orders.cancel, support.mine, orders.get, returns.forOrder, orders.page, tables.list, customers.list, qr.pending",8,2.55,29.11,11.76,6.74,orders.cancel 2.8,82
+Menu items,Edit item: save,"products.save×2, products.page×2, categories.list",5,1.63,38.67,14.18,5.97,products.page 5.4,61
+Menu items,Add item: save,"products.save×3, products.page×2, categories.list, qr.pending",7,2.05,51.94,19.50,6.63,products.save 6.9,67
+Daily Specials,Page load,specials.list,1,0.11,0.75,0.72,0.20,specials.list 0.7,3
+Daily Specials,Save,"specials.save, specials.list",2,0.91,6.71,5.18,4.60,specials.save 4.7,17
+Daily Specials,Date: Tomorrow,specials.list,1,0.11,0.75,0.55,0.20,specials.list 0.6,3
+Inventory,Page load,"inventory.batches, inventory.movements",2,0.43,4.41,3.69,0.52,inventory.movements 1.9,12
+Inventory,Adjust stock: save,"inventory.adjust, inventory.batches, inventory.movements, qr.pending",4,0.75,12.77,4.77,0.97,inventory.adjust 2.0,31
+Inventory,Quick purchase (stock in): save,"inventory.adjust, inventory.batches, inventory.movements",3,0.60,6.43,3.87,0.80,inventory.adjust 1.8,27
+Inventory,Expiry: write off batch,"inventory.writeOffBatch×2, inventory.batches×2, inventory.movements×2",6,1.22,13.64,8.05,1.95,inventory.writeOffBatch 2.4,50
+Inventory,History: load older,inventory.movements,1,0.21,2.10,2.10,0.25,inventory.movements 2.1,3
+Inventory > Purchases,Tab load,purchases.list,1,1.33,18.89,7.28,12.55,purchases.list 7.3,6
+Inventory > Purchases,New purchase bill: open,suppliers.list,1,0.25,2.03,1.17,0.68,suppliers.list 1.2,5
+Inventory > Purchases,New item: add to bill (products.save),"products.save, support.mine, products.page×2, inventory.batches, inventory.movements, qr.pending",7,1.96,42.55,24.07,6.12,products.page 7.0,60
+Inventory > Purchases,Save purchase bill,"purchases.create, suppliers.list, products.page×2, purchases.list, inventory.batches, inventory.movements",7,3.68,52.54,16.61,19.95,purchases.list 4.9,59
+Inventory > Suppliers,Add supplier: save,"suppliers.save, suppliers.list",2,0.42,4.17,3.38,1.04,suppliers.save 2.1,18
+Inventory > Suppliers,Open supplier ledger,suppliers.ledger,1,0.19,1.48,1.48,0.42,suppliers.ledger 1.5,5
+Inventory > Suppliers,Record payment: save,"suppliers.pay, suppliers.ledger, suppliers.list, qr.pending",4,0.80,11.74,5.87,1.63,suppliers.list 2.0,29
+Guests (Customers),Page load,whatsapp.status,1,0.09,2.15,0.61,0.14,whatsapp.status 0.6,6
+Guests (Customers),Open profile,"customers.history, customers.points",2,0.32,5.50,5.47,0.59,customers.history 3.0,13
+Guests (Customers),Collect due: save,"customers.collectDue, customers.list, customers.points, customers.history, whatsapp.status, qr.pending",6,1.56,25.31,8.99,5.56,customers.collectDue 3.1,44
+Guests (Customers),Edit details: save,"customers.save, customers.points, customers.list, customers.history",4,1.27,15.44,10.05,4.74,customers.list 5.8,34
+Guests (Customers),Add guest: save,"customers.save, customers.list",2,0.94,9.95,4.11,4.15,customers.list 2.5,21
+Payments,Page load,payments.page,1,0.41,2.81,1.82,0.47,payments.page 1.8,6
+Payments,Range: Yesterday,payments.page,1,0.41,2.81,1.93,0.47,payments.page 1.9,6
+Payments,Range: This Week,payments.page,1,0.41,2.81,0.94,0.47,payments.page 0.9,6
+Payments,Range: This Month,payments.page,1,0.41,2.81,1.60,0.47,payments.page 1.6,6
+Payments,Pagination: next page,payments.page,1,0.41,2.81,2.81,0.47,payments.page 2.8,6
+Payments,Filter method: UPI,payments.page,1,0.41,2.81,1.59,0.47,payments.page 1.6,6
+Payments,Open bill from a payment,"orders.get, whatsapp.status, returns.forOrder",3,0.37,6.53,2.89,0.62,orders.get 1.8,19
+Expenses,Page load,expenses.list,1,0.25,2.88,2.02,0.66,expenses.list 2.0,5
+Expenses,Range: This Week,expenses.list,1,0.25,2.88,0.68,0.66,expenses.list 0.7,4
+Expenses,Add expense: save,"expenses.save, expenses.list, qr.pending",3,0.55,10.88,3.16,1.17,expenses.save 1.7,19
+Expenses,Void expense: open,"expenses.void, expenses.list",2,0.39,4.20,2.18,1.16,expenses.void 1.3,14
+Reports,Page load,reports.summary,1,0.51,29.03,3.81,16.70,reports.summary 3.8,20
+Reports > Daily Income,Range: Yesterday,reports.summary,1,0.51,29.03,2.67,16.70,reports.summary 2.7,24
+Reports > Daily Income,Range: This Week,reports.summary,1,0.51,29.03,7.29,16.70,reports.summary 7.3,21
+Reports > Daily Income,Range: This Month,reports.summary,1,0.51,29.03,7.33,16.70,reports.summary 7.3,21
+Reports > Menu Items,Tab load,categories.list,1,0.11,0.96,0.67,0.19,categories.list 0.7,3
+Reports > Guests,Tab load,"whatsapp.status, reports.receivables",2,0.32,5.81,4.38,1.16,reports.receivables 3.7,11
+Reports > Inventory,Tab load,inventory.weekSummary,1,0.39,9.23,3.48,2.37,inventory.weekSummary 3.5,4
+Reports > GST returns,Tab load,reports.gst,1,5.37,67.74,25.20,27.14,reports.gst 25.2,18
+Reports > Guests,Range: Custom,reports.summary,1,0.51,29.03,6.04,16.70,reports.summary 6.0,21
+Staff,Page load,"staff.list, staff.day",2,0.23,2.43,2.43,0.30,staff.list 1.6,10
+Staff,Mark one: Absent,"staff.mark, support.mine, staff.list, staff.day, qr.pending",5,0.67,12.16,5.46,0.88,staff.mark 2.4,30
+Staff,Mark one: Half day,"staff.mark, staff.list, staff.day",3,0.40,4.80,2.89,0.57,staff.mark 1.7,20
+Staff,Mark all present,"staff.markAll, staff.day, staff.list",3,0.43,4.07,3.00,0.54,staff.markAll 1.6,20
+Staff,Tab: Monthly summary,staff.month,1,0.24,2.37,2.37,0.44,staff.month 2.4,11
+Staff > Salary,Edit salary: save,"staff.setPay, auth.boot×2, staff.month, sync.changes×2",6,1.25,19.27,7.79,1.98,auth.boot 2.9,74
+Staff > Salary,Give advance: save,"staff.giveAdvance, staff.month",2,0.43,4.17,3.52,0.77,staff.giveAdvance 1.8,24
+Staff > Salary,Pay salary: save,"staff.paySalary, staff.month",2,0.91,4.74,3.79,1.27,staff.paySalary 2.2,33
+Settings > Integrations,Tab load,whatsapp.status,1,0.09,2.15,2.15,0.14,whatsapp.status 2.1,6
+Settings > Branches,Tab load,branches.list,1,0.18,1.95,1.95,0.24,branches.list 1.9,9
+Settings > Staff & Roles,Tab load,"roles.list, users.list",2,0.23,3.38,2.27,0.37,roles.list 1.2,8
+Settings > Audit & Data,Tab load,audit.list,1,0.21,3.09,3.09,0.25,audit.list 3.1,4
+Settings > Business Profile,Save,"business.update, auth.boot×2, sync.changes, whatsapp.status",5,1.03,16.79,7.11,1.56,business.update 3.0,73
+Settings > Tables,Add table,"tables.save, tables.list",2,0.29,2.17,1.71,0.58,tables.save 1.2,15
+Settings > Audit & Data,Load older,audit.list,1,0.21,3.09,1.85,0.25,audit.list 1.9,4
+Settings > Audit & Data,Export Excel (dataExport.mine),dataExport.mine,1,702.22,3435.56,857.65,3383.52,dataExport.mine 857.6,114
+Settings > Branches,Add branch: save,"branches.save, auth.boot×2, branches.list, sync.changes×2",6,1.33,20.41,12.43,2.16,auth.boot 4.0,83
+Settings > Staff & Roles,Add staff: save,"users.save, auth.boot×2, users.list, sync.changes×2",6,3.28,24.13,12.10,6.50,users.save 6.8,75
+Settings > Staff & Roles,Custom role: save,"roles.save, auth.boot×2, users.list, roles.list, sync.changes×2",7,1.30,21.07,7.96,1.99,roles.save 2.5,72
+Settings > Staff & Roles,Edit staff: save,"users.save, auth.boot×2, users.list, sync.changes×2",6,3.28,24.13,9.99,6.50,auth.boot 3.1,74
+Support,Reply to ticket,"support.reply, support.mine, qr.pending",3,0.43,9.88,4.19,0.57,support.reply 2.5,22
+Support,Report a problem: send,"support.reply, support.mine",2,0.27,3.54,3.28,0.40,support.reply 2.5,16
+Customer QR Menu,Page load (scan QR),"public.live, public.menu",2,0.37,28.93,8.91,4.60,public.menu 8.1,19
+Customer QR Menu,Place order (guest),"public.placeOrder, public.order×2, public.pushKey, public.menu",5,1.06,34.90,7.26,6.17,public.placeOrder 4.3,57
+Customer QR Menu,Refresh order status,public.order,1,0.07,1.08,0.86,0.12,public.order 0.9,4
+Customer Track Order,Check status,"public.track, public.order×2",3,0.23,3.08,2.04,0.43,public.track 0.9,14
+TV Specials Display,Page load,public.specials,1,0.07,25.31,8.01,1.50,public.specials 8.0,16
+Admin Login,Sign in (admin),"admin.login, admin.me, admin.tickets, admin.customers, admin.settings",5,4.58,12.68,8.36,5.62,admin.login 5.7,16
+Admin > Customer detail,Open customer,admin.customer,1,0.16,1.50,1.27,0.41,admin.customer 1.3,14
+Admin > Customer detail,Edit customer: confirm,"admin.updateCustomer, admin.customer, admin.settings, admin.tickets",4,0.54,8.39,5.04,1.56,admin.updateCustomer 2.4,28
+Admin > Customer detail,Extend subscription: confirm,"admin.renew, admin.customer, admin.settings, admin.tickets",4,0.59,9.19,5.32,1.72,admin.renew 3.2,33
+Admin > Customer detail,Toggle WhatsApp integration,"admin.setCustomerFeature, admin.customer, admin.settings, admin.tickets",4,0.55,7.57,5.35,1.67,admin.setCustomerFeature 1.6,39
+Admin > Customer detail,Deactivate: confirm,"admin.setStatus, admin.customer, admin.settings, admin.tickets",4,0.49,7.70,4.90,1.47,admin.setStatus 1.8,31
+Admin > Customer detail,Reactivate: confirm,"admin.setStatus, admin.customer, admin.settings, admin.tickets",4,0.49,7.70,3.18,1.47,admin.customer 1.0,31
+Admin > Customer detail,Set own price: save,"admin.setCustomPrice, admin.customer, admin.settings, admin.tickets",4,0.50,8.27,4.69,1.60,admin.setCustomPrice 2.3,32
+Admin > Customer detail,Export customer Excel (admin.exportCustomer),"admin.exportCustomer, admin.settings, admin.customer, admin.tickets",4,713.87,3313.53,827.66,3299.53,admin.exportCustomer 826.4,138
+Admin > Usage (Reports),Page load,admin.usage,1,0.49,2.98,2.98,1.10,admin.usage 3.0,5
+Admin > Renewals,Page load,admin.renewals×2,2,0.51,5.70,4.89,1.97,admin.renewals 2.6,28
+Admin > WhatsApp,Page load,admin.waStatus×2,2,0.27,3.00,2.37,0.76,admin.waStatus 1.4,16
+Admin > Features,Page load,"admin.features×2, admin.customers×2",4,0.43,5.09,4.26,1.00,admin.customers 1.9,12
+Admin > Team,Page load,admin.team×2,2,0.16,1.57,1.31,0.31,admin.team 0.8,4
+Admin > Audit log,Page load,admin.audit,1,0.10,0.85,0.85,0.24,admin.audit 0.9,2
+Admin > Support ticket,Open ticket,admin.ticket,1,0.11,1.85,1.85,0.26,admin.ticket 1.8,8
+Admin > Support ticket,Reply,"admin.replyTicket, admin.ticket, admin.tickets",3,0.34,7.68,3.99,1.17,admin.replyTicket 2.5,18
+Admin > Support ticket,Change status,"admin.updateTicket, admin.ticket, admin.tickets",3,0.32,7.80,4.44,1.20,admin.updateTicket 2.7,18
+Admin > Renewals,Pause reminders for a customer,"admin.pauseReminders, admin.renewals, admin.tickets",3,0.50,7.35,3.31,1.82,admin.renewals 1.7,26
+Admin > Pricing (Settings),Page load,admin.settings,1,0.09,1.14,0.50,0.20,admin.settings 0.5,4
+Admin > Pricing (Settings),Save prices,"admin.updateSettings, admin.settings, admin.tickets",3,0.34,5.81,2.36,1.23,admin.updateSettings 1.4,20
+Admin > WhatsApp,Connect,"admin.waConnect, admin.waStatus, admin.tickets",3,2.42,6.99,3.25,3.10,admin.waConnect 2.2,23
+Admin > WhatsApp,Test connection,"admin.waTest, admin.waStatus, admin.tickets",3,1.09,5.66,2.12,1.77,admin.waTest 0.9,21
+Admin > WhatsApp,Submit reminder template,"admin.waSaveTemplate, admin.waStatus, admin.tickets",3,2.12,6.69,3.97,2.80,admin.waSaveTemplate 1.9,23
+Admin > Customer detail,Open customer (Shop 7),"admin.customer, admin.settings",2,0.25,2.64,1.94,0.61,admin.customer 1.4,18
+Admin > Customer detail,Reset password: confirm,"admin.resetPassword, admin.customer, admin.settings, admin.tickets",4,4.51,12.20,7.65,6.26,admin.resetPassword 6.3,33
+Admin > Customer detail,Delete customer: confirm,"admin.deleteCustomer, admin.customer, admin.settings, admin.tickets, admin.customers",5,0.67,11.03,5.85,1.76,admin.deleteCustomer 3.1,26

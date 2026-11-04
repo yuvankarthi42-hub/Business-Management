@@ -27,7 +27,6 @@ const STATE: Record<SubState, { label: string; tone: 'green' | 'amber' | 'red' |
   deactivated: { label: 'Deactivated', tone: 'slate' },
 }
 export const StateBadge = ({ state }: { state: SubState }) => <Badge tone={STATE[state].tone} dot>{STATE[state].label}</Badge>
-export const STATE_LABEL = (s: SubState) => STATE[s].label
 
 export function validityText(state: SubState, daysLeft: number, endAt: string | null) {
   if (!endAt) return 'No subscription'

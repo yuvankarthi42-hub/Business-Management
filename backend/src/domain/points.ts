@@ -74,23 +74,26 @@ export async function expirePoints(db: Db, businessId: string, today: string) {
   const due = await db.select('customer_points', { where: { business_id: businessId, remaining: { gt: 0 }, expires_on: { lt: today } } })
   const customers = [...new Set(due.map((r) => str(r.customer_id)))]
   let total = 0
-  for (const customerId of customers) {
-    total += await db.transaction(async (t) => {
-      // Read again inside the transaction: what is still unexpired right now (another run may have taken it).
-      const rows = await t.select('customer_points', { where: { business_id: businessId, customer_id: customerId, remaining: { gt: 0 }, expires_on: { lt: today } } })
-      const pts = rows.reduce((a, r) => a + Number(r.remaining), 0)
-      if (pts <= 0) return 0
-      const cu = await t.first('customers', { ROWID: customerId, business_id: businessId })
-      if (!cu) return 0
-      // Zero the expired rows first so the expiry doesn't eat newer points.
-      await t.updateMany('customer_points', rows.map((r) => ({ ROWID: r.ROWID, remaining: 0 })))
-      const take = Math.min(pts, Number(cu.points_balance ?? 0))
-      if (take <= 0) return 0
-      const next = Number(cu.points_balance) - take
-      if (!(await t.updateIfVersion('customers', cu.ROWID, Number(cu.row_version), { points_balance: next }))) throw new Error('points changed — retried next run')
-      await t.insert('customer_points', { business_id: businessId, customer_id: customerId, kind: E.PointsKind.expire, points: -take, balance_after: next, remaining: 0, note: 'Expired' })
-      return take
-    }).catch((e) => { console.error('[expirePoints]', customerId, (e as Error).message); return 0 })
-  }
+  for (const customerId of customers) total += await expireCustomerPoints(db, businessId, customerId, today)
   return total
+}
+
+/** One customer's points past their expiry date, taken off in one transaction. Safe to run again (takes nothing). */
+export async function expireCustomerPoints(db: Db, businessId: string, customerId: string, today: string): Promise<number> {
+  return db.transaction(async (t) => {
+    // Read again inside the transaction: what is still unexpired right now (another run may have taken it).
+    const rows = await t.select('customer_points', { where: { business_id: businessId, customer_id: customerId, remaining: { gt: 0 }, expires_on: { lt: today } } })
+    const pts = rows.reduce((a, r) => a + Number(r.remaining), 0)
+    if (pts <= 0) return 0
+    const cu = await t.first('customers', { ROWID: customerId, business_id: businessId })
+    if (!cu) return 0
+    // Zero the expired rows first so the expiry doesn't eat newer points.
+    await t.updateMany('customer_points', rows.map((r) => ({ ROWID: r.ROWID, remaining: 0 })))
+    const take = Math.min(pts, Number(cu.points_balance ?? 0))
+    if (take <= 0) return 0
+    const next = Number(cu.points_balance) - take
+    if (!(await t.updateIfVersion('customers', cu.ROWID, Number(cu.row_version), { points_balance: next }))) throw new Error('points changed — retried next run')
+    await t.insert('customer_points', { business_id: businessId, customer_id: customerId, kind: E.PointsKind.expire, points: -take, balance_after: next, remaining: 0, note: 'Expired' })
+    return take
+  }).catch((e) => { console.error('[expirePoints]', customerId, (e as Error).message); return 0 })
 }

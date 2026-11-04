@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import '../src/modules/returns'
 import '../src/modules/staff'
 import { withShop } from './fixtures'
+import { listProducts } from './helpers'
 
 type P = { id: string; stock: number }
 type O = { id: string; total: number; balance: number; items: { id: string; qty: number }[] }
@@ -17,7 +18,7 @@ test('returns: refund + restock, due first, credit note used as payment, over-re
   try {
     await s.call('business.update', { billing: { taxEnabled: false } })
     const milk = await s.call<P>('products.save', { name: 'Milk 500 ml', price: 27, trackStock: true, stock: 10, unit: 'pc' })
-    const stockOf = async () => (await s.call<P[]>('products.list')).find((p) => p.id === milk.id)!.stock
+    const stockOf = async () => (await listProducts<P>(s)).find((p) => p.id === milk.id)!.stock
 
     // Refund by UPI, back on the shelf.
     const o1 = await s.call<O>('orders.checkout', draft([line(milk, 4)]), [{ method: 'cash', amount: 108 }])

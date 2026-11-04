@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { withShop } from './fixtures'
 import { expirePoints } from '../src/domain/points'
+import { listProducts } from './helpers'
 
 type P = { id: string; costPrice?: number }
 type O = { id: string; total: number; items: { id: string }[] }
@@ -32,7 +33,7 @@ test('staff without the right: no sales report, expenses, payments or cost price
   try {
     await s.call('business.update', { billing: { taxEnabled: false }, modules: { qrOrdering: true, products: true }, qr: { orderTypes: ['takeaway'], autoAccept: false, baseUrl: '' } })
     const tea = await s.call<P>('products.save', { name: 'Tea', price: 30, costPrice: 12 })
-    assert.equal((await s.call<P[]>('products.list'))[0].costPrice, 12, 'owner sees cost')
+    assert.equal((await listProducts<P>(s))[0].costPrice, 12, 'owner sees cost')
     const roles = await s.call<{ id: string; name: string }[]>('roles.list')
     await s.call('users.save', { name: 'Ravi', phone: '9800000901', roleId: roles.find((r) => r.name === 'Cashier')!.id, password: 'ravi1234' })
     const owner = s.ownerToken
@@ -42,8 +43,8 @@ test('staff without the right: no sales report, expenses, payments or cost price
       await assert.rejects(s.call(name, ...args), /permission/, `${name} needs a right`)
     }
     // A cashier has "payments.view" by default, so the payments list stays open to them.
-    await s.call('payments.list', from, to)
-    assert.equal((await s.call<P[]>('products.list'))[0].costPrice, 0, 'cashier: no cost price')
+    await s.call('payments.page', { from, to }, null)
+    assert.equal((await listProducts<P>(s))[0].costPrice, 0, 'cashier: no cost price')
     const top = await s.call<{ revenue: number }[]>('reports.topProducts', 7, 10)
     assert.ok(top.every((x) => x.revenue === 0), 'quick picks without sales amounts')
     // Billing still works for the cashier.

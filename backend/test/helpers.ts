@@ -17,7 +17,8 @@ import { PLATFORM_TABLES, type TableName } from '../src/db/schema.gen'
 import type { Db, Where } from '../src/db/types'
 import type { PushResult, PushSender, PushTarget } from '../src/core/webpush'
 import { Hub } from '../src/events/hub'
-import { LocalSink } from '../src/events/publish'
+import { FEATURES } from '@/core/features'
+import { code, E } from '../src/domain/util'
 
 /** Records browser pushes instead of sending them. */
 export class FakePush implements PushSender {
@@ -35,7 +36,17 @@ export async function testEnv(): Promise<Env & { prov: LocalProvisioner | null; 
   const hub = new Hub()
   // One database per shop (Turso setups): the shared cache is the kv_cache table, as in production.
   const shared = PER_SHOP ? new DbKv(() => env.dbs.platform()) : new MemoryKv()
-  return { ...env, shared, push: new FakePush(), events: new LocalSink(hub), hub, stop: () => { hub.stop(); env.stop() } }
+  await releaseFeatures(env)
+  // Live updates as a host with a hub has them (Cloudflare): the events go to a hub kept in memory.
+  return { ...env, shared, push: new FakePush(), events: { publish: async (list) => hub.publish(list) }, liveUrl: '/live', hub, stop: () => env.stop() }
+}
+
+/** Most tests use QR Orders, Daily Specials and the GST report: released to everyone, as the product admin would. */
+async function releaseFeatures(env: Env) {
+  const db = await env.dbs.platform()
+  for (const key of ['qrOrders', 'specials', 'gstReport'] as const) {
+    await db.insert('feature_flags', { feature_key: key, name: FEATURES[key].name, description: FEATURES[key].description, rollout: code(E.Rollout, 'all') })
+  }
 }
 
 async function baseEnv(): Promise<Env & { prov: LocalProvisioner | null; stop: () => void }> {
@@ -114,4 +125,12 @@ export async function startServer() {
     /** Which shop `db` reads for shop tables. */
     useShop: (id: string | null) => { shop = id },
   }
+}
+
+/** The whole catalogue, as the app reads it: products.page joined. */
+export async function listProducts<T = any>(s: { call: <R>(name: string, ...args: unknown[]) => Promise<R> }): Promise<T[]> {
+  const all: T[] = []
+  let after: number | null = 0
+  while (after !== null) { const p: { rows: T[]; next: number | null } = await s.call('products.page', after); all.push(...p.rows); after = p.next }
+  return all
 }

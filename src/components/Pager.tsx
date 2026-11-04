@@ -2,6 +2,7 @@
 // at a time, so long lists stay fast and nothing is cut off. Changing a filter goes back to page 1.
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { useData } from '@/app/AppContext'
 import { PAGE_SIZE, pageWindow, type Cursor } from '@/core/paging'
 
 export function usePage<T>(rows: readonly T[], resetKey: unknown = null, size = PAGE_SIZE) {
@@ -12,7 +13,7 @@ export function usePage<T>(rows: readonly T[], resetKey: unknown = null, size = 
   return { rows: rows.slice(w.from, w.to), page: w.page, pages: w.pages, from: w.from, to: w.to, total: rows.length, setPage }
 }
 
-export type Paged = Pick<ReturnType<typeof usePage>, 'page' | 'pages' | 'from' | 'to' | 'total' | 'setPage'>
+export type Paged = Pick<ReturnType<typeof usePage>, 'page' | 'pages' | 'from' | 'to' | 'total'> & { setPage: (n: number) => void }
 
 /** "1–50 of 1,240  ‹ ›" under a table; nothing when everything fits on one page. */
 export function Pager({ p, more }: { p: Paged; more?: React.ReactNode }) {
@@ -60,4 +61,35 @@ export function useOlder<T extends { id: string }>(base: readonly T[] | undefine
 export function LoadOlder({ o }: { o: { canMore: boolean; more: () => void; busy: boolean } }) {
   if (!o.canMore) return null
   return <button type="button" onClick={() => o.more()} disabled={o.busy} className="mr-2 rounded-lg px-2.5 py-1.5 font-medium text-brand-600 hover:bg-brand-50 disabled:opacity-50">{o.busy ? 'Loading…' : 'Load older'}</button>
+}
+
+/**
+ * Pages that come from the server (each answer = one page + the cursor for the next + the total count). The screen
+ * keeps the cursor of every page it has seen, so Previous / Next move one page at a time; a new filter starts again.
+ */
+export function useServerPages<D extends { rows: unknown[]; next: Cursor | null; count: number }>(load: (before: Cursor | null) => Promise<D>, resetKey: unknown, size = PAGE_SIZE) {
+  const key = JSON.stringify(resetKey ?? null)
+  const [state, setState] = useState<{ key: string; page: number; cursors: (Cursor | null)[] }>({ key, page: 0, cursors: [null] })
+  // A changed filter starts at page 1 straight away (no request with the old filter's cursor).
+  const s = state.key === key ? state : { key, page: 0, cursors: [null] as (Cursor | null)[] }
+  useEffect(() => { if (state.key !== key) setState({ key, page: 0, cursors: [null] }) }, [key, state.key])
+  const cursor = s.cursors[s.page] ?? null
+  const { data } = useData(() => load(cursor), [key, s.page, JSON.stringify(cursor)])
+  useEffect(() => {
+    if (!data || state.key !== key) return
+    setState((x) => {
+      if (x.key !== key || JSON.stringify(x.cursors[x.page + 1] ?? null) === JSON.stringify(data.next ?? null)) return x
+      const cursors = x.cursors.slice(0, x.page + 1)
+      if (data.next) cursors[x.page + 1] = data.next
+      return { ...x, cursors }
+    })
+  }, [data, key, state.key])
+  const total = data?.count ?? 0
+  const rows = (data?.rows ?? []) as D['rows']
+  const p: Paged = {
+    page: s.page, pages: Math.max(1, Math.ceil(total / size)), from: s.page * size, to: s.page * size + rows.length, total,
+    // Only to a page whose cursor is known (the next one appears once this page has loaded).
+    setPage: (n: number) => setState((x) => (n >= 0 && n < x.cursors.length && (n === 0 || x.cursors[n]) ? { ...x, page: n } : x)),
+  }
+  return { data, rows, p }
 }

@@ -15,7 +15,7 @@ import type {
   Branch, Business, Category, Customer, DiningTable, Expense, KitchenTicket, KotStatus, Order, OrderItem, OrderType, Payment,
   Campaign, ID, PaymentMethod, Permission, Product, Role, Special, StockMovement, StockMovementType, User,
   AdminAuditLog, AdminRole, PlatformAdmin, SubscriptionPeriod, WaMessage, WaTemplate, WhatsAppConfig, ReturnReason, SaleReturn, SaleReturnLine, AttendanceStatus, SalaryPayment, StaffPay, ReminderSettings, BranchPrinter, Ticket, TicketCategory, TicketPriority, TicketStatus,
-  LoyaltySettings, PointsEntry, PointsKind, Purchase, Supplier,
+  LoyaltySettings, ModuleKey, PointsEntry, PointsKind, Purchase, Supplier,
 } from '@/core/types'
 import { uid } from '@/lib/format'
 import { nextInStoreBarcode } from '@/lib/barcode'
@@ -35,7 +35,7 @@ const forCustomers = (p: Product): Product => ({ ...p, costPrice: 0, wholesalePr
 /** Demo rate limit for "Track my order" (one browser). */
 const trackTries = { minute: 0, n: 0 }
 import { ADMIN_ROLES, adminCan, type AdminPermission } from '@/core/adminRoles'
-import { FEATURES, featureOn, featuresFor, type FeatureFlag, type FeatureKey } from '@/core/features'
+import { FEATURE_ACTIONS, FEATURES, featureOffAction, featureOn, featuresFor, moduleReleased, withFeatures, type FeatureFlag, type FeatureKey } from '@/core/features'
 import { renderTemplate, templateErrors, WA_KIND, type WaLang, type WaTemplateKind } from '@/core/whatsapp'
 import type { ImportItem } from '@/core/productImport'
 import { daysText, REMINDER_SAMPLE, reminderTemplateErrors } from '@/core/reminders'
@@ -149,6 +149,8 @@ function audit(d: DB, entity: string, entityId: string, action: string, detail =
 }
 
 const biz = (d: DB) => d.businesses.find((b) => b.id === ctx().businessId)!
+/** The shop as its customers / staff get it: modules whose feature isn't released count as off (as on the server). */
+const released = (d: DB, b: Business): Business => ({ ...b, modules: withFeatures(b.modules, featuresFor(d.platform.features, b.id)) })
 
 /** Validate + normalise a mobile number to E.164 using the business's country as default. */
 function cleanPhone(input: string | null | undefined, defaultIso: string | undefined, opts: { required?: string } = {}): string {
@@ -965,7 +967,7 @@ export const api = {
       const subscription = subscriptionState(business)
       const branchLimit = { max: business.maxBranches ?? 1, used: d.branches.filter((b) => b.businessId === business.id).length }
       const features = featuresFor(d.platform.features, business.id)
-      return clone({ user, business: { ...business, whatsapp: undefined }, role, branch, branches, isAll, subscription, branchLimit, features, support: s.support ?? null, permissions: permissionsOf(d, user) === 'all' ? ('all' as const) : [...(permissionsOf(d, user) as Set<Permission>)] })
+      return clone({ user, business: { ...released(d, business), whatsapp: undefined }, role, branch, branches, isAll, subscription, branchLimit, features, support: s.support ?? null, permissions: permissionsOf(d, user) === 'all' ? ('all' as const) : [...(permissionsOf(d, user) as Set<Permission>)] })
     },
     /** Demo logins grouped by business (mock only — the real backend has no such endpoint). */
     demoUsers() {
@@ -989,6 +991,8 @@ export const api = {
         if (patch.stateCode && !GST_STATES[patch.stateCode]) throw new ApiError('Choose a state')
         if (patch.loyalty) { try { patch = { ...patch, loyalty: cleanLoyalty(patch.loyalty, loyaltyOf(b)) } } catch (e) { throw new ApiError((e as Error).message) } }
         if ('logoUrl' in patch) { const { logoUrl: _l, ...rest } = patch; void _l; patch = rest } // changed only through setLogo
+        // Settings → Modules sends what the customer sees: keep the shop's own choice for modules not released to it.
+        if (patch.modules) { const f = featuresFor(d.platform.features, b.id); const m = { ...patch.modules }; for (const k of Object.keys(m) as ModuleKey[]) if (!moduleReleased(k, f)) m[k] = b.modules[k]; patch = { ...patch, modules: m } }
         Object.assign(b, patch)
         audit(d, 'business', b.id, 'update', Object.keys(patch).join(', '))
         return clone(b)
@@ -1254,6 +1258,12 @@ export const api = {
       }
       return clone(mine(d.products).map((p): Product => ({ ...p, stock: p.trackStock ? stockIn(p, sc) : p.stock, nextExpiry: nextExpiry(p) })))
     },
+    /** The same list in pages of 300 (the real server's products.page; the app's remote client joins them). */
+    async page(after = 0) {
+      const all = await this.list()
+      const at = Math.max(0, Math.floor(Number(after) || 0))
+      return { rows: all.slice(at, at + 300), next: at + 300 < all.length ? at + 300 : null }
+    },
     async save(input: Partial<Product> & { name: string; openingBatch?: BatchInput }) {
       // Only compressed images (≤ 50 KB) are ever stored — whatever the client sends.
       assertCanWrite(getDB(), 'products.manage')
@@ -1506,7 +1516,29 @@ export const api = {
         if (filter.from && filter.to && !inRange(o.createdAt, filter.from, filter.to) && !inRange(o.billedAt, filter.from, filter.to)) return false
         return true
       }).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      // Without a range: the newest 50 at most — same as the server.
+      if (!filter.from || !filter.to) return clone(list.slice(0, Math.min(50, Math.max(1, Math.floor(filter.limit ?? 50)))))
       return clone(filter.limit ? list.slice(0, Math.max(1, Math.floor(filter.limit))) : list)
+    },
+    /** The Orders screen page by page — same rules as the server: 50 after `before`, totals for the whole filter. */
+    async page(filter: { from: Date | string; to: Date | string; status?: Order['status'] | 'all'; type?: OrderType | 'all'; q?: string }, before?: Cursor | null, limit = 50) {
+      const d = getDB()
+      const n = Math.min(100, Math.max(1, Math.floor(Number(limit)) || 50))
+      const from = new Date(filter.from), to = new Date(filter.to)
+      const q = String(filter.q ?? '').trim().toLowerCase().slice(0, 60)
+      const cname = (id: string | null) => (id ? d.customers.find((c) => c.id === id)?.name ?? '' : '').toLowerCase()
+      const all = here(d, d.orders).filter((o) => {
+        if (filter.status && filter.status !== 'all' && o.status !== filter.status) return false
+        if (filter.type && filter.type !== 'all' && o.type !== filter.type) return false
+        if (!inRange(o.createdAt, from, to) && !inRange(o.billedAt, from, to)) return false
+        return !q || o.number.toLowerCase().includes(q) || (o.invoiceNumber ?? '').toLowerCase().includes(q) || cname(o.customerId).includes(q)
+      }).sort(newestFirst((o) => o.createdAt))
+      const rest = afterCursor(all, (o) => o.createdAt, before)
+      const rows = rest.slice(0, n)
+      return clone({
+        rows, next: rest.length > n ? { at: rows[n - 1].createdAt, id: rows[n - 1].id } : null,
+        count: all.length, billed: r2(all.filter((o) => o.status === 'completed').reduce((a, o) => a + o.total, 0)),
+      })
     },
     async running() {
       return clone(here(getDB(), getDB().orders).filter((o) => o.status === 'open').sort((a, b) => a.createdAt.localeCompare(b.createdAt)))
@@ -1662,8 +1694,19 @@ export const api = {
   },
 
   payments: {
-    async list(from: Date, to: Date) {
-      return clone(here(getDB(), getDB().payments).filter((p) => inRange(p.createdAt, from, to)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)))
+    /** The Payments screen page by page — same rules as the server: 50 after `before`; count and per-method totals for the whole range. */
+    async page(filter: { from: Date | string; to: Date | string; method?: PaymentMethod | 'all' }, before?: Cursor | null, limit = 50) {
+      const d = getDB()
+      const n = Math.min(100, Math.max(1, Math.floor(Number(limit)) || 50))
+      const from = new Date(filter.from), to = new Date(filter.to)
+      const bill = (id: string | null) => { const o = id ? d.orders.find((x) => x.id === id) : null; return o ? o.invoiceNumber ?? o.number : null }
+      const inRangeAll = here(d, d.payments).filter((p) => inRange(p.createdAt, from, to))
+      const all = inRangeAll.filter((p) => !filter.method || filter.method === 'all' || p.method === filter.method).sort(newestFirst((p) => p.createdAt))
+      const rest = afterCursor(all, (p) => p.createdAt, before)
+      const rows = rest.slice(0, n)
+      const totals: Partial<Record<PaymentMethod, number>> = {}
+      for (const p of inRangeAll) if (!p.voided) totals[p.method] = r2((totals[p.method] ?? 0) + p.amount)
+      return clone({ rows: rows.map((p) => ({ ...p, billNumber: bill(p.orderId) })), next: rest.length > n ? { at: rows[n - 1].createdAt, id: rows[n - 1].id } : null, count: all.length, totals })
     },
   },
 
@@ -1800,11 +1843,27 @@ export const api = {
 
   /** Purchase bills from suppliers: stock in, cost price, input GST, part payment. */
   purchases: {
-    async list(from?: string, to?: string): Promise<Purchase[]> {
-      const d = getDB()
-      requirePerm(d, 'inventory.manage')
-      const sc = scope(d)
-      return clone(mine(d.purchases).filter((p) => sc.has(p.branchId) && (!from || p.date >= from) && (!to || p.date <= to)).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)))
+    /** The Purchases screen page by page — same rules as the server: 50 after `before`, `count`, the month's totals. */
+    async page(filter: { q?: string; month?: string } = {}, before?: Cursor | null, limit = 50) {
+      // Every purchase this user's branches can see, newest bill date first (what the server pages through).
+      const all = ((): Purchase[] => {
+        const d = getDB()
+        requirePerm(d, 'inventory.manage')
+        const sc = scope(d)
+        return clone(mine(d.purchases).filter((p) => sc.has(p.branchId)).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)))
+      })()
+      const n = Math.min(100, Math.max(1, Math.floor(Number(limit)) || 50))
+      const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(filter.month ?? '')) ? String(filter.month) : new Date().toISOString().slice(0, 7)
+      const fin = all.filter((p) => p.status === 'final' && p.date.startsWith(month))
+      const q = String(filter.q ?? '').trim().toLowerCase().slice(0, 60)
+      const list = q ? all.filter((p) => p.number.toLowerCase().includes(q) || p.supplierName.toLowerCase().includes(q) || p.supplierBillNo.toLowerCase().includes(q)) : all
+      const k = before ? list.findIndex((p) => p.id === before.id) : -1
+      const rest = before ? (k >= 0 ? list.slice(k + 1) : []) : list
+      const rows = rest.slice(0, n)
+      return clone({
+        rows, next: rest.length > n ? { at: rows[n - 1].date, id: rows[n - 1].id } : null, count: list.length,
+        month: { total: r2(fin.reduce((a, p) => a + p.total, 0)), tax: r2(fin.reduce((a, p) => a + p.tax, 0)), unpaid: r2(fin.reduce((a, p) => a + p.balance, 0)), bills: fin.length },
+      })
     },
     async get(id: string): Promise<Purchase> {
       const d = getDB()
@@ -1863,10 +1922,22 @@ export const api = {
   },
 
   inventory: {
+    /** Reports → Inventory: each item's stock moved in the last 7 days, by type — same as the server. */
+    async weekSummary() {
+      const since = new Date(Date.now() - 7 * 86_400_000).toISOString()
+      const out = new Map<string, { productId: string; type: StockMovementType; qty: number }>()
+      for (const m of here(getDB(), getDB().stockMovements)) {
+        if (m.createdAt < since) continue
+        const k = `${m.productId}|${m.type}`
+        const cur = out.get(k)
+        if (cur) cur.qty = Math.round((cur.qty + m.qty) * 1000) / 1000; else out.set(k, { productId: m.productId, type: m.type, qty: m.qty })
+      }
+      return clone([...out.values()])
+    },
     /** Newest 3,000; `before` (the last one the screen has) → the next older ones — same as the server. */
-    async movements(productId?: string | null, before?: Cursor | null) {
+    async movements(productId?: string | null, before?: Cursor | null, limit?: number) {
       const all = here(getDB(), getDB().stockMovements).filter((m) => !productId || m.productId === productId).sort(newestFirst((m) => m.createdAt))
-      return clone(afterCursor(all, (m) => m.createdAt, before).slice(0, 3000))
+      return clone(afterCursor(all, (m) => m.createdAt, before).slice(0, Math.min(3000, Math.max(1, Math.floor(Number(limit)) || 3000))))
     },
     async adjust(productId: string, type: StockMovementType, qty: number, note: string, cost?: number, batch?: BatchInput) {
       return tx((d) => {
@@ -2262,8 +2333,9 @@ export const api = {
     /** `_fresh`: a new number after a live "menu changed" event, so the browser doesn't reuse its copy. */
     async menu(businessId: string, branchId?: string | null, tableId?: string | null, _fresh?: number) {
       const d = getDB()
-      const b = d.businesses.find((x) => x.id === businessId)
-      if (!b) throw new ApiError('Menu not found')
+      const found = d.businesses.find((x) => x.id === businessId)
+      if (!found) throw new ApiError('Menu not found')
+      const b = released(d, found)
       // A table QR identifies its branch through the table.
       const tableBranchId = tableId ? d.tables.find((t) => t.id === tableId && t.businessId === businessId)?.branchId : null
       const br = publicBranch(d, businessId, tableBranchId ?? branchId)
@@ -2288,7 +2360,8 @@ export const api = {
         const ob = d.businesses.find((x) => x.id === businessId)
         if (ob && !subscriptionState(ob).blocked && subscriptionState(ob).readOnly) throw new ApiError('Online ordering is not available right now.')
         assertWritable(ob)
-        const b = d.businesses.find((x) => x.id === businessId)
+        const found = d.businesses.find((x) => x.id === businessId)
+        const b = found && released(d, found)
         if (!b || !b.modules.qrOrdering) throw new ApiError('Online ordering is not available right now')
         const qr = qrSettings(b)
         if (!qr.orderTypes.includes(input.type)) throw new ApiError('This order type is not available')
@@ -2376,18 +2449,25 @@ export const api = {
     },
     async specials(businessId: string, _fresh?: number) {
       const d = getDB()
-      const b = d.businesses.find((x) => x.id === businessId)
-      if (!b) throw new ApiError('Not found')
-      const sp = applySpecials(d.products.filter((p) => p.businessId === businessId && p.active), specialsFor(d, businessId))
+      const found = d.businesses.find((x) => x.id === businessId)
+      if (!found) throw new ApiError('Not found')
+      const b = released(d, found)
+      // Specials off (or not released): an empty board, as on the server.
+      const sp = b.modules.specials ? applySpecials(d.products.filter((p) => p.businessId === businessId && p.active), specialsFor(d, businessId)) : applySpecials([], [])
       return clone({
-        business: { name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, currencySymbol: b.currencySymbol, qr: qrSettings(b), qrOn: b.modules.qrOrdering },
+        business: { name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, currencySymbol: b.currencySymbol, qr: qrSettings(b), qrOn: b.modules.qrOrdering, specialsOn: !!b.modules.specials },
         items: sp.specials.map((p) => ({ product: forCustomers(p), ...sp.info.get(p.id)! })),
       })
     },
   },
 
   reports: {
-    async summary(from: Date, to: Date) { return summarize(getDB(), from, to) },
+    /** `top`: only the first N best sellers (the dashboard shows 5) — same rule as the server. */
+    async summary(from: Date, to: Date, opts?: { top?: number }) {
+      const s = summarize(getDB(), from, to)
+      const n = Math.floor(Number(opts?.top))
+      return n >= 1 && n <= 500 && s.topProducts.length > n ? { ...s, topProducts: s.topProducts.slice(0, n) } : s
+    },
     /** Best sellers of the last `days` finished days (the billing screen's quick picks). */
     async topProducts(days = 7, limit = 10) {
       const today = new Date(); today.setHours(0, 0, 0, 0)
@@ -3106,6 +3186,7 @@ export const api = {
       return clone({
         rows,
         months,
+        usageAt: new Date(now).toISOString(), // the demo counts live
         summary: {
           customers: rows.length,
           billing7: rows.filter((r) => r.bills7 > 0).length,
@@ -3197,6 +3278,27 @@ for (const action of Object.keys(READ_MODULE)) {
     const off = modules ? moduleOffRead(action, modules) : null
     if (off && 'error' in off) throw new ApiError(off.error)
     if (off) return []
+    return (fn as (...a: unknown[]) => unknown).apply(group, args)
+  }
+}
+
+// A feature the product admin hasn't released to the customer: its actions never run (core/features.ts), as on the server.
+for (const action of Object.keys(FEATURE_ACTIONS)) {
+  const [ns, m] = action.split('.')
+  const group = (api as unknown as Record<string, Record<string, unknown>>)[ns]
+  const fn = group?.[m]
+  if (typeof fn !== 'function') continue
+  group[m] = async (...args: unknown[]) => {
+    const d = getDB()
+    if (ns === 'public') {
+      if (!featureOn(d.platform.features, FEATURE_ACTIONS[action].feature, String(args[0] ?? ''))) throw new ApiError('Online ordering is not available right now')
+    } else {
+      let b: Business | undefined
+      try { b = biz(d) } catch { /* not signed in: the action itself says so */ }
+      const off = b ? featureOffAction(action, featuresFor(d.platform.features, b.id)) : null
+      if (off && 'error' in off) throw new ApiError(off.error)
+      if (off) return []
+    }
     return (fn as (...a: unknown[]) => unknown).apply(group, args)
   }
 }

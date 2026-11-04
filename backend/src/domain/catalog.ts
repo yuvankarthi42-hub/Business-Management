@@ -3,7 +3,7 @@
 import type { AddOn, Category, Product, Variant } from '@/core/types'
 import type { Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
-import type { Row, Where } from '../db/types'
+import type { Row, Value, Where } from '../db/types'
 import { cleanHsn, hsnError } from '@/core/gst'
 import { cleanDetails } from '@/core/stickers'
 import { E, fromMilli, fromMinor, fromMinorOrNull, json, nameOf, str, strOrNull, toMilli, toMinor } from './util'
@@ -15,7 +15,8 @@ export async function mediaMap(c: Ctx, ids: (string | null | undefined)[]) {
   for (let i = 0; i < want.length; i += 100) rows.push(...await c.db.select('media_files', { where: { ROWID: { in: want.slice(i, i + 100) }, business_id: c.businessId } }))
   return new Map(rows.map((r) => [r.ROWID, r]))
 }
-const imageOf = (c: Ctx, m: Row | undefined) => !m ? { imageUrl: null, thumbUrl: null }
+/** A product / category photo's links (as the app's Product has them). */
+export const imageOf = (c: Ctx, m: Row | undefined) => !m ? { imageUrl: null, thumbUrl: null }
   : m.bucket === 'external' ? { imageUrl: str(m.object_key), thumbUrl: null } // a photo link kept as is (CSV import)
   : { imageUrl: c.files.url(str(m.object_key)), thumbUrl: m.thumb_key ? c.files.url(str(m.thumb_key)) : null }
 
@@ -37,6 +38,8 @@ export interface LoadProductsOptions {
   withExpiry?: boolean
   /** false = no stock read (pricing a bill doesn't need it; `stock` is then 0). */
   withStock?: boolean
+  /** For customers' screens (QR menu, TV board): no cost and no wholesale prices (not even read). */
+  forCustomers?: boolean
 }
 
 /** The wholesale / contractor price list (the app has at most one besides retail). */
@@ -46,32 +49,57 @@ export async function loadProducts(c: Ctx, o: LoadProductsOptions = {}): Promise
   const biz = c.businessId
   const where = { business_id: biz, ...(o.ids ? { ROWID: { in: o.ids } } : {}), ...(o.activeOnly ? { is_active: true } : {}) }
   const rows = await c.db.select('products', { where, orderBy: [['sort_order', 'ASC'], ['ROWID', 'ASC']] })
+  return productsFrom(c, rows, o.ids ? rows.map((r) => r.ROWID) : null, o)
+}
+
+/** One page of the product list, in the list's order (sort order, then id): products.page for big shops. */
+export async function loadProductPage(c: Ctx, offset: number, limit: number) {
+  const rows = await c.db.select('products', { where: { business_id: c.businessId }, orderBy: [['sort_order', 'ASC'], ['ROWID', 'ASC']], limit: limit + 1, offset })
+  const more = rows.length > limit
+  const mine = more ? rows.slice(0, limit) : rows
+  return { rows: await productsFrom(c, mine, mine.map((r) => r.ROWID), {}), next: more ? offset + limit : null }
+}
+
+/** Product rows → the app's `Product`, with variants, add-ons, wholesale prices, stock, next expiry and photo. `ids` = read only these products' extras (null = the whole shop's). */
+async function productsFrom(c: Ctx, rows: Row[], ids: string[] | null, o: LoadProductsOptions): Promise<Product[]> {
   if (!rows.length) return []
-  const ids: Where = o.ids ? { product_id: { in: rows.map((r) => r.ROWID) } } : {}
-  const list = await wholesaleList(c)
+  const biz = c.businessId
+  const only: Where = ids ? { product_id: { in: ids } } : {}
+  const list = o.forCustomers ? null : await wholesaleList(c)
   const branches = o.branches ?? c.scope()
+  const inScope = new Set(branches)
+  // Expiry batches only matter for products that track them.
+  const anyBatches = o.withExpiry !== false && rows.some((r) => !!r.track_batches)
   const [variants, addons, prices, stock, batches, media] = await Promise.all([
-    c.db.select('product_variants', { where: { business_id: biz, is_active: true, ...ids }, orderBy: [['sort_order', 'ASC']] }),
-    c.db.select('product_addons', { where: { business_id: biz, is_active: true, ...ids }, orderBy: [['sort_order', 'ASC']] }),
-    list ? c.db.select('product_prices', { where: { business_id: biz, price_list_id: list.ROWID, ...ids } }) : Promise.resolve([] as Row[]),
-    o.withStock !== false ? c.db.select('branch_stock', { where: { business_id: biz, ...ids } }) : Promise.resolve([] as Row[]),
-    o.withExpiry !== false ? c.db.select('stock_batches', { where: { business_id: biz, qty_left_milli: { gt: 0 }, ...ids } }) : Promise.resolve([] as Row[]),
+    c.db.select('product_variants', { where: { business_id: biz, is_active: true, ...only }, orderBy: [['sort_order', 'ASC']] }),
+    c.db.select('product_addons', { where: { business_id: biz, is_active: true, ...only }, orderBy: [['sort_order', 'ASC']] }),
+    list ? c.db.select('product_prices', { where: { business_id: biz, price_list_id: list.ROWID, ...only } }) : Promise.resolve([] as Row[]),
+    o.withStock !== false ? c.db.select('branch_stock', { where: { business_id: biz, ...only } }) : Promise.resolve([] as Row[]),
+    anyBatches ? c.db.select('stock_batches', { where: { business_id: biz, qty_left_milli: { gt: 0 }, ...only } }) : Promise.resolve([] as Row[]),
     mediaMap(c, rows.map((r) => str(r.image_media_id))),
   ])
-  const by = <T extends Row>(xs: T[]) => { const m = new Map<string, T[]>(); for (const x of xs) { const k = str(x.product_id); m.set(k, [...(m.get(k) ?? []), x]) } return m }
-  const V = by(variants), A = by(addons), P = by(prices), S = by(stock), B = by(batches)
+  const by = <T extends Row>(xs: T[]) => { const m = new Map<string, T[]>(); for (const x of xs) { const k = str(x.product_id); const l = m.get(k); if (l) l.push(x); else m.set(k, [x]) } return m }
+  const V = by(variants), A = by(addons), S = by(stock), B = by(batches)
+  // Wholesale price by product, then by variant ('' = the product's own); the first row wins, as before.
+  const P = new Map<string, Map<string, Value>>()
+  for (const x of prices) {
+    const k = str(x.product_id), v = x.variant_id == null ? '' : str(x.variant_id)
+    let m = P.get(k); if (!m) P.set(k, (m = new Map()))
+    if (!m.has(v)) m.set(v, x.price_minor)
+  }
   return rows.map((r) => {
     const stockByBranch: Record<string, number> = {}
     for (const s of S.get(r.ROWID) ?? []) stockByBranch[str(s.branch_id)] = fromMilli(s.qty_milli)
-    const pp = P.get(r.ROWID) ?? []
+    const pp = P.get(r.ROWID)
     const trackExpiry = !!r.track_batches
-    const nextExpiry = trackExpiry ? (B.get(r.ROWID) ?? []).filter((b) => branches.includes(str(b.branch_id)) && b.expiry_date).map((b) => str(b.expiry_date)).sort()[0] ?? null : null
+    let nextExpiry: string | null = null
+    if (trackExpiry) for (const b of B.get(r.ROWID) ?? []) { const d = str(b.expiry_date); if (d && inScope.has(str(b.branch_id)) && (nextExpiry === null || d < nextExpiry)) nextExpiry = d }
     const p: Product = {
       id: r.ROWID, businessId: biz, name: str(r.name), categoryId: strOrNull(r.category_id), kind: nameOf(E.ProductKind, r.kind) as Product['kind'],
       emoji: str(r.emoji), ...imageOf(c, media.get(str(r.image_media_id))),
       sku: str(r.sku), barcode: str(r.barcode), unit: str(r.unit) || 'pc', price: fromMinor(r.price_minor), mrp: fromMinorOrNull(r.mrp_minor),
-      costPrice: fromMinor(r.cost_minor), wholesalePrice: fromMinorOrNull(pp.find((x) => x.variant_id == null)?.price_minor),
-      variants: (V.get(r.ROWID) ?? []).map((v): Variant => ({ id: v.ROWID, name: str(v.name), price: fromMinor(v.price_minor), wholesalePrice: fromMinorOrNull(pp.find((x) => x.variant_id === v.ROWID)?.price_minor) })),
+      costPrice: o.forCustomers ? 0 : fromMinor(r.cost_minor), wholesalePrice: fromMinorOrNull(pp?.get('')),
+      variants: (V.get(r.ROWID) ?? []).map((v): Variant => ({ id: v.ROWID, name: str(v.name), price: fromMinor(v.price_minor), wholesalePrice: fromMinorOrNull(pp?.get(v.ROWID)) })),
       addOns: (A.get(r.ROWID) ?? []).map((a): AddOn => ({ id: a.ROWID, name: str(a.name), price: fromMinor(a.price_minor) })),
       taxRateId: strOrNull(r.tax_rate_id), trackStock: !!r.track_stock, trackExpiry, nextExpiry,
       stockByBranch, stock: Math.round(branches.reduce((n, b) => n + (stockByBranch[b] ?? 0), 0) * 1000) / 1000,

@@ -12,8 +12,6 @@ import { DbEpochs, KvEpochs } from './core/epochs'
 import { LocalFiles } from './core/files'
 import { MemoryKv } from './core/kv'
 import { pushFromEnv } from './core/webpush'
-import { Hub, hubRoutes } from './events/hub'
-import { LocalSink } from './events/publish'
 import { SingleDatabases } from './db/databases'
 import { localDatabases } from './db/local'
 import { MemoryDb } from './db/memory'
@@ -31,17 +29,13 @@ mkdirSync(join(dir, 'uploads'), { recursive: true })
 const port = Number(process.env.PORT ?? 8787)
 const kv = new MemoryKv()
 const files = new LocalFiles(join(dir, 'uploads'), `/server/api/uploads`)
-// Live updates: the event hub runs inside the local server (production: its own AppSail service).
-const hub = new Hub()
-process.env.EVENTS_PUBLIC_URL ??= '/server/events'
-const events = new LocalSink(hub)
+// No live-update hub (as on Catalyst): open screens use the change feed (sync.changes).
 const env: Env = process.env.LOCAL_DB === 'memory'
-  ? { dbs: new SingleDatabases(new MemoryDb(join(dir, 'db.json'))), kv, files, epochs: new KvEpochs(kv), push: pushFromEnv(), events }
-  : { dbs: localDatabases(join(dir, 'sqlite')), kv, files, epochs: new DbEpochs(), push: pushFromEnv(), events }
+  ? { dbs: new SingleDatabases(new MemoryDb(join(dir, 'db.json'))), kv, files, epochs: new KvEpochs(kv), push: pushFromEnv() }
+  : { dbs: localDatabases(join(dir, 'sqlite')), kv, files, epochs: new DbEpochs(), push: pushFromEnv() }
 
 const server = express()
 server.use('/server/api/uploads', express.static(join(dir, 'uploads'), { maxAge: '7d' }))
-server.use('/server/events', hubRoutes(hub))
 server.use('/server/api', createApp(() => env))
 
 env.dbs.platform().then(ensureFirstAdmin).then((made) => {

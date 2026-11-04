@@ -43,13 +43,20 @@ export async function loadUsers(db: Db, businessId: string): Promise<User[]> {
 
 /** The five built-in roles for a new business. Returns them with the Owner first. */
 export async function seedRoles(db: Db, businessId: string): Promise<Role[]> {
-  const rows = await db.insertMany('roles', DEFAULT_ROLES.map((r) => ({
-    business_id: businessId, name: r.name, system_key: code(E.RoleKey, r.id), is_all_access: (r.permissions as string[]).includes('*'), uniq_key: `${businessId}:${keyPart(r.name)}`,
-  })))
-  const perms: { role_id: string; permission: string; uniq_key: string }[] = []
-  rows.forEach((row, i) => { for (const p of DEFAULT_ROLES[i].permissions) if (p !== '*') perms.push({ role_id: row.ROWID, permission: p, uniq_key: `${row.ROWID}:${p}` }) })
+  const rows = await db.insertMany('roles', roleSeedRows(businessId))
+  const perms = rolePermRows(rows)
   const permRows = perms.length ? await db.insertMany('role_permissions', perms) : []
   return rows.map((r) => roleFrom(r, permRows))
+}
+/** The built-in roles' rows (Owner first), as seedRoles writes them. */
+export const roleSeedRows = (businessId: string) => DEFAULT_ROLES.map((r) => ({
+  business_id: businessId, name: r.name, system_key: code(E.RoleKey, r.id), is_all_access: (r.permissions as string[]).includes('*'), uniq_key: `${businessId}:${keyPart(r.name)}`,
+}))
+/** The permission rows for the built-in roles just written (in roleSeedRows order). */
+export function rolePermRows(roleRows: Row[]) {
+  const perms: { role_id: string; permission: string; uniq_key: string }[] = []
+  roleRows.forEach((row, i) => { for (const p of DEFAULT_ROLES[i].permissions) if (p !== '*') perms.push({ role_id: row.ROWID, permission: p, uniq_key: `${row.ROWID}:${p}` }) })
+  return perms
 }
 
 /** Branches a user may open: all for full-access roles, otherwise their own list (or their default branch). */

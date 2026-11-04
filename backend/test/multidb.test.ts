@@ -10,7 +10,7 @@ import { SqlJsDriver, sqlJs } from '../src/db/sql/sqljs'
 import { TursoDb } from '../src/db/turso'
 import type { Provisioner } from '../src/db/databases'
 import { withShop } from './fixtures'
-import { PER_SHOP, TEST_DB } from './helpers'
+import { PER_SHOP, TEST_DB, listProducts } from './helpers'
 
 type P = { id: string; stock: number }
 type O = { id: string; status: string; invoiceNumber: string }
@@ -35,7 +35,7 @@ test('two shops: own data, sign-in names unique across shops, delete removes eve
     s.setToken(null)
     const loginB = await s.call<{ token: string }>('auth.login', '9876500001', 'shop1234')
     s.setToken(loginB.token)
-    assert.equal((await s.call<unknown[]>('products.list')).length, 0) // shop A's product is not here
+    assert.equal((await listProducts<unknown>(s)).length, 0) // shop A's product is not here
     // Staff of shop B can't take shop A's owner mobile number.
     const roles = await s.call<{ id: string }[]>('roles.list')
     await assert.rejects(s.call('users.save', { name: 'Kumar', phone: '9876543210', roleId: roles[0].id, password: 'staff123' }), /already used/)
@@ -59,7 +59,7 @@ test('two shops: own data, sign-in names unique across shops, delete removes eve
     s.setToken(s.adminToken)
     await s.call('admin.deleteCustomer', b.id, 'Shop B')
     s.setToken(loginB.token)
-    await assert.rejects(s.call('products.list'), (e: Error & { status: number }) => e.status === 401)
+    await assert.rejects(listProducts(s), (e: Error & { status: number }) => e.status === 401)
     s.setToken(s.adminToken)
     await s.call('admin.createCustomer', { businessName: 'Shop C', ownerName: 'Ravi', username: 'ravi01', password: 'shop1234', phone: '9876500001', validity: { months: 1 }, maxBranches: 1 })
     if (perShop) {
@@ -81,7 +81,7 @@ test('20 counters bill at the same moment: every bill saved once, numbers unique
     const ms = Date.now() - t0
     assert.equal(bills.filter((b) => b.status === 'completed').length, 20)
     assert.equal(new Set(bills.map((b) => b.invoiceNumber)).size, 20)
-    const list = await s.call<P[]>('products.list')
+    const list = await listProducts<P>(s)
     assert.equal(list.find((p) => p.id === milk.id)!.stock, 60)
     assert.equal(list.find((p) => p.id === bread.id)!.stock, 80)
     if (TEST_DB === 'sqlite') {

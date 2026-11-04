@@ -16,6 +16,8 @@ export type Cond =
   | { ne: Value }
   | { gt: Value } | { gte: Value } | { lt: Value } | { lte: Value }
   | { gte: Value; lt: Value } | { gte: Value; lte: Value } | { gt: Value; lt: Value }
+  /** Text contains this (case-insensitive) — for search boxes. */
+  | { contains: string }
 export type Where = Record<string, Cond>
 
 export interface SelectOptions {
@@ -45,6 +47,9 @@ export interface SchemaInfo { tables: { name: string; columns: { name: string; t
 /** A raw SQL row (only SQL databases: Turso / SQLite). */
 export type SqlRow = Record<string, string | number | null>
 
+/** One part of a writeBatch: rows to insert into a table, or rows (by ROWID) to update. */
+export type WriteOp = { insert: TableName; rows: NewRow[] } | { update: TableName; rows: (NewRow & { ROWID: string })[] }
+
 export interface Db {
   /**
    * Runs fn with a handle whose reads and writes are one transaction: all saved, or none if fn throws.
@@ -59,6 +64,10 @@ export interface Db {
   sql?(sql: string, args?: (string | number | null)[]): Promise<SqlRow[]>
   /** Several raw statements in one round trip (inside a transaction: part of it; otherwise all or nothing). */
   sqlMany?(stmts: { sql: string; args?: (string | number | null)[] }[]): Promise<SqlRow[][]>
+  /** Several read-only statements in one round trip, without a transaction (Turso / SQLite only). */
+  sqlReads?(stmts: { sql: string; args?: (string | number | null)[] }[]): Promise<SqlRow[][]>
+  /** Inserts / updates on several tables in one round trip, all or nothing (SQL databases only). Rows come back per op. */
+  writeBatch?(ops: WriteOp[]): Promise<Row[][]>
 
   /** Tables and columns as the Data Store reports them (Catalyst metadata API). */
   describe?(): Promise<SchemaInfo>

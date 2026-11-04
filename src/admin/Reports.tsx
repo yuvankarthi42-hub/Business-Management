@@ -36,7 +36,10 @@ export default function AdminReports() {
   return (
     <div>
       <h1 className="text-xl font-semibold">Usage</h1>
-      <p className="mb-5 text-sm text-slate-500">Which customers are billing, when they last signed in, and subscription revenue.</p>
+      <p className="mb-5 text-sm text-slate-500">
+        Which customers are billing, when they last signed in, and subscription revenue.
+        {data.usageAt && Date.now() - new Date(data.usageAt).getTime() > 10 * 60_000 && <span className="text-slate-400"> Bill counts as of {fmtDateTime(data.usageAt)} (counted daily).</span>}
+      </p>
 
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <Stat label="Billing in last 7 days" value={`${s.billing7} of ${s.customers}`} hint="made at least one bill" />

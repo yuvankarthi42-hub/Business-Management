@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useApp, useData } from '@/app/AppContext'
 import { Badge, Button, Card, Checkbox, Field, FieldLabel, Input, Modal, PageHeader, Select, Table, Td, Th, Toggle, useAction, useReadOnly } from '@/components/ui'
+import { moduleReleased } from '@/core/features'
 import { DEFAULT_TERMS, isHardware, modulesShownFor, productFormFor, usesRetailPos, ORDER_TYPE_LABEL, PAYMENT_LABEL, PERMISSIONS, TEMPLATES, TERM_LABELS, templateFor } from '@/core/config'
 import type { BillingSettings, Branch, Business, OrderType, PaymentMethod, Permission, Role, TermKey, User } from '@/core/types'
 import { api, BACKEND } from '@/data'
@@ -243,7 +244,7 @@ function ModuleSettings() {
   return (
     <Section title="Modules" subtitle="Turn features on as your business grows. Hidden modules keep their data." onSave={() => f.save((v) => ({ modules: v }))} dirty={f.dirty}>
       <div className="grid gap-3 sm:grid-cols-2">
-        {modulesShownFor(me!.business).map((m) => (
+        {modulesShownFor(me!.business).filter((m) => moduleReleased(m.key, me!.features)).map((m) => (
           <div key={m.key} className={clsx('flex items-start gap-3 rounded-xl border p-4', f.v[m.key] ? 'border-brand-200 bg-brand-50/30' : 'border-slate-200')}>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold">{m.name} {m.core && <Badge className="ml-1">Core</Badge>}{m.comingSoon && <Badge tone="amber" className="ml-1">Coming soon</Badge>}</p>

@@ -84,7 +84,7 @@ export async function moveStock(c: Ctx, p: StockProduct, branchId: string, qty: 
     ref_type: opts.refType ? refTypes[opts.refType] : null, ref_id: opts.refId ?? null, note: (opts.note ?? '').slice(0, 255), created_by: c.actorId,
   })
   const balance = fromMilli(balanceMilli)
-  c.addStock(p.id, branchId, balance)
+  c.addStock(p.id, branchId, balance, fromMilli(milli))
   return { balance, batches }
 }
 
@@ -99,7 +99,7 @@ export async function writeOffBatch(c: Ctx, batch: Row, reason: string) {
     reason: E.StockReason.wastage, qty_milli: -qty, balance_milli: balanceMilli, ref_type: null, ref_id: batch.ROWID, // like the app: the movement points at the batch
     note: `${reason} — batch ${str(batch.batch_no) || '—'} (exp ${str(batch.expiry_date) || '—'})`.slice(0, 255), created_by: c.actorId,
   })
-  c.addStock(str(batch.product_id), str(batch.branch_id), fromMilli(balanceMilli))
+  c.addStock(str(batch.product_id), str(batch.branch_id), fromMilli(balanceMilli), -fromMilli(qty))
   return fromMilli(qty)
 }
 
@@ -128,6 +128,6 @@ export async function moveStockMany(c: Ctx, moves: StockMove[]) {
     reason: code(E.StockReason, m.reason), qty_milli: toMilli(m.qty), balance_milli: balances[k],
     ref_type: m.opts?.refType ? refTypes[m.opts.refType] : null, ref_id: m.opts?.refId ?? null, note: (m.opts?.note ?? '').slice(0, 255), created_by: c.actorId,
   })))
-  fast.forEach(({ m, i }, k) => { const balance = fromMilli(balances[k]); out[i] = { balance, batches: [] }; c.addStock(m.p.id, m.branchId, balance) })
+  fast.forEach(({ m, i }, k) => { const balance = fromMilli(balances[k]); out[i] = { balance, batches: [] }; c.addStock(m.p.id, m.branchId, balance, fromMilli(toMilli(m.qty))) })
   return out
 }

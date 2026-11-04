@@ -90,9 +90,6 @@ export function formatPhone(e164?: string | null) {
   return `+${country.dial} ${grouped.trim()}`
 }
 
-/** Digits only, for wa.me links ("+919876543210" → "919876543210"). */
-export const waNumber = (e164?: string | null) => (e164 ? digits(e164) : '')
-
 /** True when a search term (any format) matches a stored number. */
 export const phoneMatches = (e164: string | null | undefined, term: string) => {
   const t = digits(term)

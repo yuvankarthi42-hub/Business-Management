@@ -4,32 +4,46 @@
 // per day), and it is under 5 minutes old (a safety net in case a cache write was lost). Ordering is never
 // trusted to the copy: placeOrder re-checks prices, stock and the account on every order.
 import type { Ctx } from '../core/context'
+import { dateFormat } from '@/core/intl'
+import { RawJson } from '../core/rawJson'
 
 const MAX_AGE = 5 * 60_000
 const verKey = (bid: string) => `menuv:${bid}`
 
+/** Every shop's copies at once (the product admin released or withdrew QR Orders / Daily Specials). */
+const ALL_KEY = 'menuv:*'
+
 export async function bumpMenu(c: Ctx, bid: string) {
   await c.shared.set(verKey(bid), Date.now().toString(36) + Math.random().toString(36).slice(2, 6), 24)
 }
+export async function bumpAllMenus(c: Ctx) {
+  await c.shared.set(ALL_KEY, Date.now().toString(36) + Math.random().toString(36).slice(2, 6), 24)
+}
 
 const dayIn = (tz: string, d = new Date()) => {
-  try { return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d) }
+  try { return dateFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d) }
   catch { return d.toISOString().slice(0, 10) }
 }
 
-/** The cached copy, or `build()` once (and keep it). `key` must only contain checked ids. */
-export async function cachedPublic<T>(c: Ctx, bid: string, key: string, build: () => Promise<{ value: T; tz: string }>): Promise<T> {
-  const k = `pub:${bid}:${key}`
-  const [ver, raw] = await Promise.all([c.shared.get(verKey(bid)), c.shared.get(k)])
-  if (raw) {
+/**
+ * The cached copy, or `build()` once (and keep it). `key` must only contain checked ids. Kept as one line of
+ * checks (version, time, day) and then the answer's JSON text, which is sent as it is (no read-back, no re-encode).
+ */
+export async function cachedPublic<T>(c: Ctx, bid: string, key: string, build: () => Promise<{ value: T; tz: string }>): Promise<RawJson> {
+  const k = `pubj:${bid}:${key}`
+  const [own, all, raw] = await Promise.all([c.shared.get(verKey(bid)), c.shared.get(ALL_KEY), c.shared.get(k)])
+  const ver = all ? `${own ?? ''}|${all}` : own
+  const nl = raw ? raw.indexOf('\n') : -1
+  if (raw && nl > 0) {
     try {
-      const s = JSON.parse(raw) as { v: string | null; at: number; tz: string; day: string; value: T }
-      if (s.v === ver && Date.now() - s.at < MAX_AGE && s.day === dayIn(s.tz)) return s.value
+      const s = JSON.parse(raw.slice(0, nl)) as { v: string | null; at: number; tz: string; day: string }
+      if (s.v === ver && Date.now() - s.at < MAX_AGE && s.day === dayIn(s.tz)) return new RawJson(raw.slice(nl + 1))
     } catch { /* rebuild */ }
   }
   const { value, tz } = await build()
-  await c.shared.set(k, JSON.stringify({ v: ver, at: Date.now(), tz, day: dayIn(tz), value }), 1)
-  return value
+  const text = JSON.stringify(value === undefined ? null : value)
+  await c.shared.set(k, `${JSON.stringify({ v: ver, at: Date.now(), tz, day: dayIn(tz) })}\n${text}`, 1)
+  return new RawJson(text)
 }
 
 /** Which branch a table belongs to (so every table of a branch shares one cached menu). Checked against the version. */

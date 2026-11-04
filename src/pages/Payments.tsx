@@ -1,5 +1,5 @@
 import { CreditCard } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { useApp, useData } from '@/app/AppContext'
 import { Badge, Card, EmptyState, PageHeader, Segmented, Select, Table, Td, Th } from '@/components/ui'
 import { PAYMENT_LABEL } from '@/core/config'
@@ -8,7 +8,7 @@ import { api } from '@/data'
 import { fmtDateTime, money, rangeFor, type RangeKey } from '@/lib/format'
 import { METHOD_COLOR } from '@/lib/chart'
 import { OrderDetail } from './Orders'
-import { Pager, usePage } from '@/components/Pager'
+import { Pager, useServerPages } from '@/components/Pager'
 
 export default function Payments() {
   const { t, me } = useApp()
@@ -17,18 +17,12 @@ export default function Payments() {
   const [method, setMethod] = useState<'all' | PaymentMethod>('all')
   const [open, setOpen] = useState<string | null>(null)
   const r = rangeFor(range)
-  const { data: pays } = useData(() => api.payments.list(r.from, r.to), [range])
-  const { data: orders = [] } = useData(() => api.orders.list())
+  // Page by page from the server (50 at a time); the method totals are for the whole range.
+  const { data: pays, rows: list, p: pg } = useServerPages((before) => api.payments.page({ from: r.from, to: r.to, method }, before), [range, method])
   const { data: customers = [] } = useData(() => api.customers.list())
-  const list = useMemo(() => (pays ?? []).filter((p) => method === 'all' || p.method === method), [pays, method])
-  const totals = useMemo(() => {
-    const m: Partial<Record<PaymentMethod, number>> = {}
-    for (const p of pays ?? []) if (!p.voided) m[p.method] = (m[p.method] ?? 0) + p.amount
-    return m
-  }, [pays])
+  const totals: Partial<Record<PaymentMethod, number>> = pays?.totals ?? {}
   const grand = Object.values(totals).reduce((a, v) => a + (v ?? 0), 0)
 
-  const pg = usePage(list, [range, method])
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader title={t('payment', true)} subtitle={`${money(grand)} received`}
@@ -51,13 +45,12 @@ export default function Payments() {
           <Table footer={<Pager p={pg} />}>
             <thead><tr><Th>Time</Th>{showBranch && <Th>Branch</Th>}<Th>{t('invoice')}</Th><Th className="hidden sm:table-cell">{t('customer')}</Th><Th>Method</Th><Th className="hidden md:table-cell">Type</Th><Th className="text-right">Amount</Th></tr></thead>
             <tbody>
-              {pg.rows.map((p) => {
-                const o = orders.find((x) => x.id === p.orderId)
+              {list.map((p) => {
                 return (
                   <tr key={p.id} onClick={() => p.orderId && setOpen(p.orderId)} className="cursor-pointer hover:bg-slate-50">
                     <Td className="whitespace-nowrap text-slate-500">{fmtDateTime(p.createdAt)}</Td>
                     {showBranch && <Td><Badge>{me?.branches.find((b) => b.id === p.branchId)?.name ?? '—'}</Badge></Td>}
-                    <Td className="font-medium">{o?.invoiceNumber ?? o?.number ?? '—'}</Td>
+                    <Td className="font-medium">{p.billNumber ?? '—'}</Td>
                     <Td className="hidden sm:table-cell">{customers.find((c) => c.id === p.customerId)?.name ?? <span className="text-slate-400">Walk-in</span>}</Td>
                     <Td><Badge>{PAYMENT_LABEL[p.method]}</Badge>{p.reference && <span className="ml-1.5 text-xs text-slate-400">{p.reference}</span>}</Td>
                     <Td className="hidden md:table-cell">{p.voided ? <Badge tone="red">Voided</Badge> : p.kind === 'due_collection' ? <Badge tone="violet">Due collected</Badge> : <Badge tone="green">Sale</Badge>}</Td>

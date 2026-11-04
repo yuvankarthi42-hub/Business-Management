@@ -48,20 +48,21 @@ export const WRITE_MODULE: Record<string, ModuleKey> = {
 
 /**
  * Reads that belong to one module. While it is off the server answers them without touching the database:
- * lists come back empty (`[]`, so an older screen still shows "nothing here"); the rest are refused.
+ * lists come back empty (`[]`, or an empty page, so an older screen still shows "nothing here"); the rest are refused.
  * Screens don't ask for these while the module is off; this is the server-side guarantee.
  * Not listed (they serve billing too): products / customers / orders.running / orders.list / reports.summary,
  * reports.topProducts (billing quick picks), reports.byBranch (dashboard).
  */
-export const READ_MODULE: Record<string, { module: ModuleKey; empty?: [] }> = {
+export const READ_MODULE: Record<string, { module: ModuleKey; empty?: [] | { rows: []; next: null; count: 0; [extra: string]: unknown } }> = {
   'kitchen.list': { module: 'kitchen', empty: [] },
   'tables.list': { module: 'tables', empty: [] },
   'specials.list': { module: 'specials', empty: [] },
   'qr.pending': { module: 'qrOrdering', empty: [] },
   'qr.recent': { module: 'qrOrdering', empty: [] },
   'inventory.movements': { module: 'inventory', empty: [] },
+  'inventory.weekSummary': { module: 'inventory', empty: [] },
   'inventory.batches': { module: 'inventory', empty: [] },
-  'purchases.list': { module: 'inventory', empty: [] },
+  'purchases.page': { module: 'inventory', empty: { rows: [], next: null, count: 0, month: { total: 0, tax: 0, unpaid: 0, bills: 0 } } },
   'purchases.get': { module: 'inventory' },
   'suppliers.list': { module: 'inventory', empty: [] },
   'suppliers.ledger': { module: 'inventory' },
@@ -69,17 +70,17 @@ export const READ_MODULE: Record<string, { module: ModuleKey; empty?: [] }> = {
   'staff.list': { module: 'employees', empty: [] },
   'staff.day': { module: 'employees', empty: [] },
   'staff.month': { module: 'employees' },
-  'payments.list': { module: 'payments', empty: [] },
+  'payments.page': { module: 'payments', empty: { rows: [], next: null, count: 0, totals: {} } },
   'orders.board': { module: 'customerOrders', empty: [] },
   'reports.gst': { module: 'reports' },
   'reports.receivables': { module: 'reports', empty: [] },
 }
 
 /** For a module-owned read while its module is off: `{ empty }` to answer with, or `{ error }`. Null = run it. */
-export function moduleOffRead(action: string, modules: Partial<Record<ModuleKey, boolean>> | undefined): { empty: [] } | { error: string } | null {
+export function moduleOffRead(action: string, modules: Partial<Record<ModuleKey, boolean>> | undefined): { empty: NonNullable<(typeof READ_MODULE)[string]['empty']> } | { error: string } | null {
   const r = READ_MODULE[action]
   if (!r || modules?.[r.module]) return null
-  return r.empty ? { empty: [] } : { error: offMessage(r.module) }
+  return r.empty ? { empty: structuredClone(r.empty) } : { error: offMessage(r.module) }
 }
 
 const LABEL: Partial<Record<ModuleKey, string>> = {

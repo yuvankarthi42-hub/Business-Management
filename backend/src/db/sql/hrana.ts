@@ -1,6 +1,7 @@
 // Turso over HTTPS — the "Hrana over HTTP" pipeline protocol (POST <db>/v2/pipeline), with plain fetch.
 // Every pipeline without a baton runs on a fresh connection, so each one starts with PRAGMA foreign_keys = ON.
 // An interactive transaction keeps its connection with the baton the server returns.
+import { countRequest } from '../../core/meter'
 import { sqlError, SqlError, type SqlDriver, type SqlResult, type SqlTx, type SqlValue, type Stmt } from './driver'
 
 type HValue = { type: 'null' } | { type: 'integer'; value: string } | { type: 'float'; value: number } | { type: 'text'; value: string } | { type: 'blob'; base64: string }
@@ -45,6 +46,7 @@ export class HranaDriver implements SqlDriver {
   async pipeline(requests: HRequest[], baton: string | null, base = this.base, safe = false): Promise<{ results: HResult[]; baton: string | null; base: string }> {
     for (let attempt = 0; ; attempt++) {
       let res: Response
+      countRequest()
       try {
         res = await fetch(`${base}/v2/pipeline`, {
           method: 'POST',

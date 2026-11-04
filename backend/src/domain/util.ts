@@ -7,6 +7,7 @@ import type { Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
 import type { TableName } from '../db/schema.gen'
 import { DuplicateError, type Db, type Row, type Value } from '../db/types'
+import { dateFormat } from '@/core/intl'
 
 export { E, r2 }
 
@@ -165,7 +166,7 @@ export const isId = (v: unknown): v is string => typeof v === 'string' && /^\d{1
 /** 'YYYY-MM-DD' in the business's time zone. */
 export function bizDay(c: Ctx, d = c.now) {
   const tz = c.session?.business.timezone || 'Asia/Kolkata'
-  const p = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d)
+  const p = dateFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d)
   const g = (t: string) => p.find((x) => x.type === t)!.value
   return `${g('year')}-${g('month')}-${g('day')}`
 }
@@ -174,7 +175,7 @@ export function bizDayStart(c: Ctx, d = c.now) {
   const tz = c.session?.business.timezone || 'Asia/Kolkata'
   const day = bizDay(c, d)
   // Offset of the zone at that moment, e.g. +05:30 → 330 minutes.
-  const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'longOffset' }).formatToParts(d)
+  const parts = dateFormat('en-US', { timeZone: tz, timeZoneName: 'longOffset' }).formatToParts(d)
   const off = parts.find((x) => x.type === 'timeZoneName')?.value.match(/GMT([+-])(\d{2}):?(\d{2})?/)
   const mins = off ? (off[1] === '-' ? -1 : 1) * (Number(off[2]) * 60 + Number(off[3] ?? 0)) : 0
   return new Date(Date.parse(`${day}T00:00:00Z`) - mins * 60_000).toISOString()

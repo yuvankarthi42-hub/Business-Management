@@ -1,6 +1,6 @@
 // Product admin: feature releases, the admin team, support view, usage report, platform settings and the admin audit log.
 import { ADMIN_ROLES } from '@/core/adminRoles'
-import { FEATURES, type FeatureFlag, type FeatureKey } from '@/core/features'
+import { FEATURE_MODULE, FEATURES, type FeatureFlag, type FeatureKey } from '@/core/features'
 import type { AdminRole } from '@/core/types'
 import type { AdminSession, Ctx } from '../../core/context'
 import { ApiError } from '../../core/errors'
@@ -9,9 +9,10 @@ import { adminRead, adminWrite, define } from '../../core/registry'
 import { signToken } from '../../core/tokens'
 import type { Row } from '../../db/types'
 import { bumpEpoch, featureFlags, loadPricing, type UserClaims } from '../../domain/session'
+import { bumpAllMenus } from '../../domain/menuCache'
 import { cleanPlanPrice, monthlyValue, PLAN_KEYS, PLAN_LABEL, type PlanPrice, type PlanKey } from '@/core/plans'
 import { code, E, fromMinor, getPlatformSetting, nameOf, putPlatformSetting, r2, str, strOrNull } from '../../domain/util'
-import { acrossShops } from '../../domain/directory'
+import { usageFor } from '../../domain/usage'
 import { adminView } from './auth'
 import { adminLog, adminLogFrom, businessLite, checkUsernameFormat, customerPrice, findBiz, ownerOf } from './shared'
 
@@ -58,6 +59,8 @@ async function applyFeature(c: Ctx, key: FeatureKey, flag: FeatureFlag) {
   await adminLog(c, a, 'feature', null, `${f.name}: ${who}${added.length ? ` · added ${added.join(', ')}` : ''}${removed.length ? ` · removed ${removed.join(', ')}` : ''}`)
   // Features are part of every cached customer session.
   await bumpEpoch(c, 'global')
+  // QR Orders / Daily Specials change what the customers' QR menus and TV boards may show.
+  if (FEATURE_MODULE[key]) c.afterCommit(() => bumpAllMenus(c))
 }
 
 // ---------- usage report ----------
@@ -65,7 +68,6 @@ async function applyFeature(c: Ctx, key: FeatureKey, flag: FeatureFlag) {
 async function usage(c: Ctx) {
   const now = c.now.getTime()
   const businesses = await c.platform.select('businesses', { where: { deleted_at: null } })
-  const iso = (ms: number) => new Date(ms).toISOString()
   // Subscription money by the month it was recorded, last 12 months (calendar months in UTC).
   const months: { key: string; label: string; amount: number; customers: number }[] = []
   const base = new Date(Date.UTC(c.now.getUTCFullYear(), c.now.getUTCMonth(), 1))
@@ -74,25 +76,22 @@ async function usage(c: Ctx) {
     months.push({ key: `${m.getUTCFullYear()}-${String(m.getUTCMonth() + 1).padStart(2, '0')}`, label: m.toLocaleDateString('en-IN', { month: 'short', year: '2-digit', timeZone: 'UTC' }), amount: 0, customers: 0 })
   }
   const firstMonth = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() - 11, 1)).toISOString()
-  const completed = { status: E.OrderStatus.completed }
   const ids = businesses.map((b) => b.ROWID)
-  // Per shop: 3 small GROUP BY reads. Branches and the last sign-in come from the directory copies.
-  const [b30, b7, lastBills, periods, price] = await Promise.all([
-    acrossShops(c, ids, 'orders', { where: { ...completed, billed_at: { gte: iso(now - 30 * DAY) } }, fns: { n: ['COUNT', 'ROWID'], sales: ['SUM', 'total_minor'] } }),
-    acrossShops(c, ids, 'orders', { where: { ...completed, billed_at: { gte: iso(now - 7 * DAY) } }, fns: { n: ['COUNT', 'ROWID'] } }),
-    acrossShops(c, ids, 'orders', { where: completed, fns: { last: ['MAX', 'billed_at'] } }),
+  // Bill counts: Turso keeps a daily copy (no request per shop); one database for all shops reads live.
+  const [usage, periods, price] = await Promise.all([
+    usageFor(c, ids),
     c.platform.select('subscription_periods', { where: { CREATEDTIME: { gte: firstMonth } } }),
     loadPricing(c.platform),
   ])
-  const of = (rows: Record<string, unknown>[], id: string) => rows.find((x) => String(x.business_id) === id)
   const rows = businesses.map((r) => {
     const b = businessLite(r)
-    const lastBill = strOrNull(of(lastBills, b.id)?.last as string)
+    const u = usage.shops.get(b.id)
+    const lastBill = strOrNull(u?.last)
     return {
       id: b.id, name: b.name || '(setup not finished)', subType: b.subType, state: b.st.state,
-      bills7: Number(of(b7, b.id)?.n ?? 0),
-      bills30: Number(of(b30, b.id)?.n ?? 0),
-      sales30: fromMinor(of(b30, b.id)?.sales as number | undefined),
+      bills7: u?.b7 ?? 0,
+      bills30: u?.b30 ?? 0,
+      sales30: fromMinor(u?.s30),
       lastBillAt: lastBill ? new Date(lastBill).toISOString() : null,
       lastLoginAt: strOrNull(r.last_login_at),
       branches: Number(r.branches_used ?? 0),
@@ -105,6 +104,8 @@ async function usage(c: Ctx) {
   return {
     rows,
     months,
+    /** When the bill counts were counted (Turso: the daily job; otherwise now). */
+    usageAt: usage.at,
     summary: {
       customers: rows.length,
       billing7: rows.filter((r) => r.bills7 > 0).length,

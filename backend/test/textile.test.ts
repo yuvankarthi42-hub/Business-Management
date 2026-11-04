@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { withShop } from './fixtures'
+import { listProducts } from './helpers'
 
 type P = { id: string; name: string; sku: string; barcode: string; price: number; mrp: number | null; stock: number; categoryId: string | null; details?: { design?: string; fabric?: string; colour?: string; size?: string } | null }
 type O = { id: string; total: number; salespersonId?: string | null; items: { id: string; unitPrice: number; mrp?: number }[] }
@@ -29,7 +30,7 @@ test('textile: design in sizes × colours, codes, stock, details, duplicates ref
     await assert.rejects(s.call('products.saveDesign', { ...base, rows: [] }), /at least one/)
     await assert.rejects(s.call('products.saveDesign', { ...base, rows: [{ colour: 'Blue', size: '', stock: 1.5 }] }), /whole pieces/)
     // Nothing half-made by the refused calls.
-    assert.equal((await s.call<P[]>('products.list')).length, 3)
+    assert.equal((await listProducts<P>(s)).length, 3)
     // Details can be edited with the normal form, and are trimmed / limited.
     const ed = await s.call<P>('products.save', { id: made[2].id, name: made[2].name, details: { design: 'KS-101', colour: '  Antique  gold ', size: '', fabric: 'x'.repeat(80) } })
     assert.deepEqual(ed.details, { design: 'KS-101', colour: 'Antique gold', fabric: 'x'.repeat(40) })
@@ -51,7 +52,7 @@ test('textile: category discount, MRP on bill lines, discounts off bills at MRP'
     assert.equal(r.updated, 2)
     assert.equal(r.noMrp, 1)
     assert.deepEqual(r.ids.sort(), [a.id, b.id].sort())
-    const list = await s.call<P[]>('products.list')
+    const list = await listProducts<P>(s)
     const price = (id: string) => list.find((p) => p.id === id)!.price
     assert.equal(price(a.id), 1200) // 1499 × 0.8 = 1199.2 → nearest ₹10
     assert.equal(price(b.id), 800)
@@ -73,12 +74,12 @@ test('textile: category discount, MRP on bill lines, discounts off bills at MRP'
     const o2 = await s.call<O>('orders.checkout', draft([line(a, 1)]), [{ method: 'cash', amount: 1499 }])
     assert.equal(o2.total, 1499)
     assert.equal(o2.items[0].mrp, undefined)
-    assert.equal((await s.call<P[]>('products.list')).find((p) => p.id === a.id)!.price, 1200)
+    assert.equal((await listProducts<P>(s)).find((p) => p.id === a.id)!.price, 1200)
     await s.call('business.update', { billing: { mrpDiscounts: true } })
 
     // 0% → back to MRP.
     await s.call('products.setDiscount', { categoryId: null, productIds: [a.id], pct: 0, round: 1 })
-    assert.equal((await s.call<P[]>('products.list')).find((p) => p.id === a.id)!.price, 1499)
+    assert.equal((await listProducts<P>(s)).find((p) => p.id === a.id)!.price, 1499)
   } finally { s.close() }
 })
 

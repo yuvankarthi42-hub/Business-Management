@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { withShop } from './fixtures'
+import { listProducts } from './helpers'
 
 type P = { id: string; price: number; stock: number; stockByBranch: Record<string, number>; variants: { id: string; name: string; price: number }[] }
 type O = { id: string; status: string; invoiceNumber: string; total: number; paid: number; balance: number; items: { id: string; qty: number; unitPrice: number; kotQty: number }[] }
@@ -23,7 +24,7 @@ test('billing: re-pricing, stock, numbers, idempotency, dues, cancel', async () 
     assert.equal(o1.invoiceNumber, 'INV-10001')
     const o2 = await s.call<O>('orders.checkout', draft([line(milk, 1)]), [{ method: 'upi', amount: 27 }])
     assert.equal(o2.invoiceNumber, 'INV-10002')
-    const list = await s.call<P[]>('products.list')
+    const list = await listProducts<P>(s)
     assert.equal(list.find((p) => p.id === milk.id)!.stock, 7)
     await assert.rejects(s.call('orders.checkout', draft([line(milk, 1)]), [{ method: 'cash', amount: 100 }]), /exceeds/)
     await assert.rejects(s.call('orders.checkout', draft([line(milk, 1)]), [{ method: 'cash', amount: 10 }]), /Select a customer/)
@@ -41,9 +42,9 @@ test('billing: re-pricing, stock, numbers, idempotency, dues, cancel', async () 
 
     // Cancel a bill: stock comes back, payments are voided.
     await s.call('orders.cancel', o2.id, 'wrong item')
-    const list2 = await s.call<P[]>('products.list')
+    const list2 = await listProducts<P>(s)
     assert.equal(list2.find((p) => p.id === milk.id)!.stock, 6) // 10 − 2 − 1 − 2 + 1
-    const pays = await s.call<{ orderId: string; voided: boolean }[]>('payments.list', new Date(Date.now() - 3600e3).toISOString(), new Date(Date.now() + 3600e3).toISOString())
+    const pays = (await s.call<{ rows: { orderId: string; voided: boolean }[] }>('payments.page', { from: new Date(Date.now() - 3600e3).toISOString(), to: new Date(Date.now() + 3600e3).toISOString() }, null, 100)).rows
     assert.ok(pays.filter((p) => p.orderId === o2.id).every((p) => p.voided))
   } finally { s.close() }
 })
@@ -62,7 +63,7 @@ test('checkout retried with the same request id makes one bill', async () => {
     const a = await call(), b = await call()
     assert.equal(a.data.id, b.data.id)
     assert.equal(a.effects!.stock[0].stock, 4)
-    const prods = await s.call<P[]>('products.list')
+    const prods = await listProducts<P>(s)
     assert.equal(prods[0].stock, 4) // sold once
   } finally { s.close() }
 })

@@ -86,10 +86,28 @@ const cleanCategory = (k: unknown): ExpenseCategory => {
 export const MOVES_PAGE = 3000
 
 define('inventory', {
-  /** Newest 3,000; `before` (the last one the screen has) → the next older ones ("Load older"). */
-  movements: userRead(async (c, productId?: string | null, before?: unknown) => {
+  /**
+   * Reports → Inventory: each item's stock moved in the last 7 days, by type (purchase, sale, wastage…) — added up
+   * by the database (every movement counts, however many), instead of sending the movements themselves.
+   */
+  weekSummary: userRead(async (c) => {
+    const since = new Date(c.now.getTime() - 7 * 86_400_000).toISOString()
+    const rows = await c.db.aggregate('stock_movements', { where: { ...inScope(c), CREATEDTIME: { gte: since } }, groupBy: ['product_id', 'reason'], fns: { q: ['SUM', 'qty_milli'] } })
+    // Several stored reasons can show as one type (expired → wastage): added together.
+    const out = new Map<string, { productId: string; type: StockMovementType; qty: number }>()
+    for (const r of rows) {
+      const productId = str(r.product_id), type = movementType(r.reason as Row['reason']), k = `${productId}|${type}`
+      const cur = out.get(k)
+      if (cur) cur.qty = fromMilli(toMilli(cur.qty) + Number(r.q ?? 0)); else out.set(k, { productId, type, qty: fromMilli(Number(r.q ?? 0)) })
+    }
+    return [...out.values()]
+  }),
+
+  /** Newest 3,000 (or `limit`); `before` (the last one the screen has) → the next older ones ("Load older"). */
+  movements: userRead(async (c, productId?: string | null, before?: unknown, limit?: number) => {
     if (productId && !isId(productId)) return []
-    const rows = await selectOlder(c, 'stock_movements', { ...inScope(c), ...(productId ? { product_id: productId } : {}) }, before, MOVES_PAGE)
+    const n = Math.min(MOVES_PAGE, Math.max(1, Math.floor(Number(limit)) || MOVES_PAGE))
+    const rows = await selectOlder(c, 'stock_movements', { ...inScope(c), ...(productId ? { product_id: productId } : {}) }, before, n)
     return rows.map(movementFrom)
   }),
 

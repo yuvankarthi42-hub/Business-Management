@@ -39,16 +39,17 @@ const ttlOf = (e: { ttl: number; tags: string[] }) => {
 
 const keyOf = (name: string, args: unknown[]) => `${name}|${auth.branch ?? ''}|${JSON.stringify(args)}`
 
-/** A read: from memory when fresh, otherwise one request (shared by everyone asking at the same time). */
-export async function cachedRead<T>(name: string, args: unknown[], token: TokenKind): Promise<T> {
+/** A read: from memory when fresh, otherwise one request (shared by everyone asking at the same time). `fetch` = how to read it, when not one plain request. */
+export async function cachedRead<T>(name: string, args: unknown[], token: TokenKind, fetch?: () => Promise<T>): Promise<T> {
   const pol = readPolicy(name)
-  if (!pol) return (await rpc<T>(name, args, token)).data
+  const read = fetch ?? (async () => (await rpc<T>(name, args, token)).data)
+  if (!pol) return read()
   const key = keyOf(name, args)
   const e = entries.get(key)
   if (e?.pending) return e.pending as Promise<T>
   if (e && 'value' in e && Date.now() - e.at < ttlOf(e)) return structuredClone(e.value) as T
   const entry: Entry = { at: Date.now(), ttl: pol.ttl, tags: pol.tags }
-  const p = rpc<T>(name, args, token).then((r) => { entry.value = r.data; entry.at = Date.now(); delete entry.pending; return structuredClone(r.data) as T })
+  const p = read().then((data) => { entry.value = data; entry.at = Date.now(); delete entry.pending; return structuredClone(data) as T })
   entry.pending = p
   entries.set(key, entry)
   try { return await p } catch (err) { if (entries.get(key) === entry) entries.delete(key); throw err }

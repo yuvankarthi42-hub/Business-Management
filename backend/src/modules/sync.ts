@@ -7,8 +7,6 @@ import { signToken } from '../core/tokens'
 
 /** Who may receive the changed orders / kitchen tickets inside events (the same people who can open those screens). */
 const RECORD_PERMS = ['orders.view', 'billing.create', 'tables.manage', 'kitchen.view'] as const
-/** The hub's address as browsers see it (EVENTS_PUBLIC_URL); null = live updates are off (screens use the change feed). */
-const hubUrl = () => process.env.EVENTS_PUBLIC_URL || null
 
 const MAX = 200
 
@@ -49,8 +47,9 @@ define('events', {
    * ticket here — so a removed user is refused at once.
    */
   ticket: userRead(async (c) => {
-    const url = hubUrl()
-    if (!url || !c.events) return { url: null, ticket: null, feed: !!c.dbs.perShop }
+    // Live updates' address (Cloudflare); none on Catalyst → the screens keep the change feed.
+    const url = c.liveUrl
+    if (!url) return { url: null, ticket: null, feed: !!c.dbs.perShop }
     const s = c.s
     const ticket = signToken({ t: 'ev', bid: c.businessId, uid: c.userId, br: s.allowed, rec: RECORD_PERMS.some((p) => c.can(p)) }, 3600)
     // This shop has open staff screens: events carry the changed orders / tickets (app.ts) — else they skip that read.
@@ -61,6 +60,6 @@ define('events', {
 
 define('public', {
   /** Live updates for the QR menu, TV board and order tracking (null = off). */
-  live: publicRead(async (c) => ({ url: c.events ? hubUrl() : null })),
+  live: publicRead(async (c) => ({ url: c.liveUrl })),
 })
 

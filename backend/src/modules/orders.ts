@@ -3,25 +3,28 @@ import { cleanPartyGst } from '@/core/gst'
 import { r2 } from '@/core/pricing'
 import { qrSettings } from '@/core/config'
 import { applySpecials } from '@/core/specials'
+import { featuresFor, withFeatures } from '@/core/features'
 import { subscriptionState } from '@/core/subscription'
 import type { Customer, DiningTable, KotStatus, Order, OrderType, PaymentMethod } from '@/core/types'
 import type { Ctx, Session } from '../core/context'
 import { ApiError } from '../core/errors'
 import { define, publicRead, publicWrite, userRead, userWrite } from '../core/registry'
-import { DuplicateError, type Row, type Where } from '../db/types'
+import { DuplicateError, type Cond, type Row, type Where } from '../db/types'
 import { DEFAULT_SEQ, loadBusiness } from '../domain/business'
-import { forCustomers, loadCategories, loadProducts, wholesaleList } from '../domain/catalog'
+import { loadCategories, loadProducts, wholesaleList } from '../domain/catalog'
 import {
   customerFrom, kitchenDelta, kotsFrom, loadOrder, loadOrders, paymentFrom, priceItems, selectIn, settle, tableFrom, withItems, writeOrder, clientUuid,
   type OrderDraft, type PaymentInput,
 } from '../domain/orders'
 import { movePoints, pointsFrom } from '../domain/points'
 import { moveStock, stockProduct } from '../domain/stock'
-import { audit, bizDay, bizDayStart, code, moduleOn, E, fromMinor, isId, keyPart, own, readSequence, str, toMinor } from '../domain/util'
+import { audit, bizDay, bizDayStart, code, cursorArg, moduleOn, E, fromMinor, isId, keyPart, nameOf, own, readSequence, str, toMinor } from '../domain/util'
+import { idBefore } from '@/core/paging'
 import { cleanPhone } from './business'
 import { buildView, markPushOn, rateLimit, trackedView } from '../domain/tracking'
 import { cachedPublic, rememberTableBranch, tableBranch } from '../domain/menuCache'
 import { cachedStats } from '../domain/statsCache'
+import { featureFlags } from '../domain/session'
 import { isPushEndpoint } from '../core/webpush'
 import { orderNumberCandidates, trackStage, trackStamp, TRACK_WINDOW_MS } from '@/core/tracking'
 import { createHash } from 'node:crypto'
@@ -62,8 +65,11 @@ async function acceptQr(c: Ctx, orderId: string) {
 async function guestSession(c: Ctx, businessId: string, branchId?: string | null, tableId?: string | null): Promise<{ branch: Row }> {
   if (!isId(businessId)) throw new ApiError('Menu not found', 404)
   try { await c.useShop(businessId) } catch { throw new ApiError('Menu not found', 404) }
-  const bundle = await loadBusiness(c, businessId)
+  const [bundle, flags] = await Promise.all([loadBusiness(c, businessId), featureFlags(c.platform)])
   if (!bundle) throw new ApiError('Menu not found', 404)
+  // QR ordering / specials not released to this shop: the menu and TV board see them as off (core/features.ts).
+  const features = featuresFor(flags, businessId)
+  bundle.business.modules = withFeatures(bundle.business.modules, features)
   let wanted = branchId ?? null
   if (tableId && isId(tableId)) { const t = await c.db.first('dining_tables', { ROWID: tableId, business_id: businessId }); if (t) wanted = str(t.branch_id) }
   const open = bundle.branches.filter((b) => b.active !== false)
@@ -72,7 +78,7 @@ async function guestSession(c: Ctx, businessId: string, branchId?: string | null
   const s: Session = {
     user: { id: '', businessId, branchId: br.id, name: 'Guest', phone: '', email: '', password: '', roleId: '', active: true, createdAt: '', createdBy: '', updatedAt: '', updatedBy: '' },
     role: { id: '', businessId, name: 'Guest', system: true, permissions: [] }, business: bundle.business, allBranches: bundle.branches,
-    allowed: [br.id], permissions: new Set(), branchId: br.id, support: null, features: {},
+    allowed: [br.id], permissions: new Set(), branchId: br.id, support: null, features,
   }
   c.session = s
   return { branch: (await c.db.get('branches', br.id))! }
@@ -110,12 +116,16 @@ async function restoreCreditNote(c: Ctx, returnId: string, amount: number) {
   throw new ApiError('Busy — please try again', 409, 'CONFLICT')
 }
 
+/** orders.list without a date range: at most this many (newest first). */
+const LIST_NEWEST = 50
+
 define('orders', {
   /** `limit`: only the newest n (e.g. the dashboard's last 6 bills) — never more than 500 without a date range. */
   list: userRead(async (c, filter: { from?: string; to?: string; status?: Order['status'] | 'all'; limit?: number } = {}) => {
     const st: Where = filter.status && filter.status !== 'all' ? { status: code(E.OrderStatus, filter.status) } : {}
     const want = filter.limit != null && Number.isFinite(Number(filter.limit)) ? Math.min(Math.max(1, Math.floor(Number(filter.limit))), 500) : null
-    if (!filter.from || !filter.to) return loadOrders(c, { ...inScope(c), ...st }, { limit: want ?? 500 })
+    // Without a range: the newest 50 at most (the dashboard asks for 6); the Orders screen pages with orders.page.
+    if (!filter.from || !filter.to) return loadOrders(c, { ...inScope(c), ...st }, { limit: Math.min(want ?? LIST_NEWEST, LIST_NEWEST) })
     const range = { gte: isoArg(filter.from), lte: isoArg(filter.to) }
     // Orders created or billed in the range: each row once, then their items in one go (not twice).
     const rowsWhere = (w: Where) => c.db.select('orders', { where: { ...inScope(c), ...st, ...w, business_id: c.businessId }, orderBy: [['CREATEDTIME', 'DESC']], limit: 2000 })
@@ -123,6 +133,57 @@ define('orders', {
     const rows = [...new Map([...created, ...billed].map((r) => [r.ROWID, r])).values()]
     const list = (await withItems(c, rows)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     return want ? list.slice(0, want) : list
+  }),
+  /**
+   * The Orders screen, page by page: `limit` (50) bills created or billed in the range, newest first, after `before`
+   * (the last bill the screen has). `count` / `billed` are for the whole filter (the header), not just this page.
+   * Same rows and order as orders.list; status, type and search are applied here instead of in the browser.
+   */
+  page: userRead(async (c, filter: { from: string; to: string; status?: Order['status'] | 'all'; type?: OrderType | 'all'; q?: string }, before?: unknown, limit = 50) => {
+    const n = Math.min(100, Math.max(1, Math.floor(Number(limit)) || 50))
+    const range = { gte: isoArg(filter?.from), lte: isoArg(filter?.to) }
+    const base: Where = { ...inScope(c) }
+    if (filter?.status && filter.status !== 'all') base.status = code(E.OrderStatus, filter.status)
+    if (filter?.type && filter.type !== 'all' && filter.type in E.OrderType) base.order_type = code(E.OrderType, filter.type)
+    // Search: order number, bill number or the customer's name (any of them).
+    const q = String(filter?.q ?? '').trim().slice(0, 60)
+    let alts: Where[] = [{}]
+    if (q) {
+      const custs = await c.db.select('customers', { where: { business_id: c.businessId, name: { contains: q } }, limit: 200 })
+      alts = [{ order_number: { contains: q } }, { invoice_number: { contains: q } }, ...(custs.length ? [{ customer_id: { in: custs.map((r) => r.ROWID) } }] : [])]
+    }
+    const cur = cursorArg(before)
+    // Some stores compare times to the second: ask up to a second later, then keep exactly the rows after the cursor.
+    const upTo = cur ? new Date(Date.parse(cur.at) + 1000).toISOString() : null
+    const after = (r: Row) => !cur || r.CREATEDTIME < cur.at || (r.CREATEDTIME === cur.at && idBefore(r.ROWID, cur.id))
+    const newest = (a: Row, b: Row) => (a.CREATEDTIME < b.CREATEDTIME ? 1 : a.CREATEDTIME > b.CREATEDTIME ? -1 : idBefore(a.ROWID, b.ROWID) ? 1 : -1)
+    // Two parts that never overlap: made in the range, and billed in the range but made before it.
+    const sets = alts.flatMap((alt) => [{ ...base, ...alt, CREATEDTIME: upTo ? { gte: range.gte, lte: upTo < range.lte ? upTo : range.lte } : range },
+      { ...base, ...alt, billed_at: range, CREATEDTIME: { lt: range.gte, ...(upTo ? { lte: upTo } : {}) } as Cond }] as Where[])
+    // One more than a page tells whether there is a next page; after a cursor, a few extra for bills saved in the same second.
+    const found = await Promise.all(sets.map((w) => c.db.select('orders', { where: w, orderBy: [['CREATEDTIME', 'DESC'], ['ROWID', 'DESC']], limit: n + 1 + (cur ? 50 : 0) })))
+    const merged = [...new Map(found.flat().filter(after).map((r) => [r.ROWID, r])).values()].sort(newest)
+    const pageRows = merged.slice(0, n)
+    const next = merged.length > n ? { at: pageRows[n - 1].CREATEDTIME, id: pageRows[n - 1].ROWID } : null
+
+    // Header totals for the whole filter, from the same two parts: bills per status and the billed amount.
+    let count = 0, billedMinor = 0
+    if (!q) {
+      const parts: Where[] = [{ CREATEDTIME: range }, { billed_at: range, CREATEDTIME: { lt: range.gte } }]
+      const groups = await Promise.all(parts.map((w) => c.db.aggregate('orders', { where: { ...base, ...w }, groupBy: ['status'], fns: { n: ['COUNT', 'ROWID'], s: ['SUM', 'total_minor'] } })))
+      for (const g of groups.flat()) {
+        count += Number(g.n ?? 0)
+        if (Number(g.status) === E.OrderStatus.completed) billedMinor += Number(g.s ?? 0)
+      }
+    } else {
+      // A search is a short list: add up the matching bills (at most 200 per part).
+      const all = await Promise.all(alts.flatMap((alt) => [{ ...base, ...alt, CREATEDTIME: range }, { ...base, ...alt, billed_at: range, CREATEDTIME: { lt: range.gte } }] as Where[])
+        .map((w) => c.db.select('orders', { where: w, limit: 200 })))
+      const uniq = [...new Map(all.flat().map((r) => [r.ROWID, r])).values()]
+      count = uniq.length
+      billedMinor = uniq.filter((r) => Number(r.status) === E.OrderStatus.completed).reduce((a, r) => a + Number(r.total_minor ?? 0), 0)
+    }
+    return { rows: await withItems(c, pageRows), next, count, billed: fromMinor(billedMinor) }
   }),
   running: userRead(async (c) => loadOrders(c, { ...inScope(c), status: E.OrderStatus.open }, { orderBy: [['CREATEDTIME', 'ASC']] })),
   get: userRead(async (c, id: string) => {
@@ -272,9 +333,37 @@ define('orders', {
 })
 
 define('payments', {
-  list: userRead(async (c, from: string, to: string) => {
-    const rows = await c.db.select('payments', { where: { ...inScope(c), CREATEDTIME: { gte: isoArg(from), lte: isoArg(to) } }, orderBy: [['CREATEDTIME', 'DESC']], limit: 3000 })
-    return rows.map(paymentFrom)
+  /**
+   * The Payments screen page by page: 50 payments (newest first) after `before`, each with its bill number, plus
+   * for the whole range the number of payments (for the pager) and the total per method (voided ones left out).
+   * Totals are added up by the database, so they are right however many payments there are.
+   */
+  page: userRead(async (c, filter: { from: string; to: string; method?: PaymentMethod | 'all' }, before?: unknown, limit = 50) => {
+    const n = Math.min(100, Math.max(1, Math.floor(Number(limit)) || 50))
+    const range = { gte: isoArg(filter?.from), lte: isoArg(filter?.to) }
+    const base: Where = { ...inScope(c) }
+    const shown: Where = { ...base, ...(filter?.method && filter.method !== 'all' && filter.method in E.PayMethod ? { method: code(E.PayMethod, filter.method) } : {}) }
+    const cur = cursorArg(before)
+    // Some stores compare times to the second: ask up to a second later, then keep exactly the rows after the cursor.
+    const upTo = cur ? new Date(Date.parse(cur.at) + 1000).toISOString() : null
+    const after = (r: Row) => !cur || r.CREATEDTIME < cur.at || (r.CREATEDTIME === cur.at && idBefore(r.ROWID, cur.id))
+    const [found, counted, byMethod] = await Promise.all([
+      c.db.select('payments', { where: { ...shown, CREATEDTIME: upTo ? { gte: range.gte, lte: upTo < range.lte ? upTo : range.lte } : range }, orderBy: [['CREATEDTIME', 'DESC'], ['ROWID', 'DESC']], limit: n + 1 + (cur ? 50 : 0) }),
+      c.db.aggregate('payments', { where: { ...shown, CREATEDTIME: range }, fns: { n: ['COUNT', 'ROWID'] } }),
+      c.db.aggregate('payments', { where: { ...base, CREATEDTIME: range, is_voided: false }, groupBy: ['method'], fns: { s: ['SUM', 'amount_minor'] } }),
+    ])
+    const rest = found.filter(after)
+    const rows = rest.slice(0, n)
+    const next = rest.length > n ? { at: rows[n - 1].CREATEDTIME, id: rows[n - 1].ROWID } : null
+    const ids = [...new Set(rows.map((r) => str(r.order_id)).filter(Boolean))]
+    const bills = ids.length ? await selectIn(c, 'orders', 'ROWID', ids, { business_id: c.businessId }) : []
+    const number = new Map(bills.map((o) => [o.ROWID, str(o.invoice_number) || str(o.order_number) || null]))
+    const totals: Partial<Record<PaymentMethod, number>> = {}
+    for (const g of byMethod) { const m = nameOf(E.PayMethod, g.method) as PaymentMethod; totals[m] = r2((totals[m] ?? 0) + fromMinor(g.s)) }
+    return {
+      rows: rows.map((r) => ({ ...paymentFrom(r), billNumber: r.order_id ? number.get(str(r.order_id)) ?? null : null })),
+      next, count: Number(counted[0]?.n ?? 0), totals,
+    }
   }, { perm: 'payments.view' }),
 })
 
@@ -447,13 +536,13 @@ async function buildMenu(c: Ctx, businessId: string, branchId?: string | null, t
   // QR ordering off: the page only says so (CustomerMenu) — no catalogue, table or specials reads.
   const on = !!b.modules.qrOrdering
   const [products, cats, tables, specials] = !on ? [[], [], [], []] as never : await Promise.all([
-    loadProducts(c, { activeOnly: true, branches: [branch.ROWID], withExpiry: false, withStock: !!b.modules.inventory }), loadCategories(c),
+    loadProducts(c, { activeOnly: true, branches: [branch.ROWID], withExpiry: false, withStock: !!b.modules.inventory, forCustomers: true }), loadCategories(c),
     b.modules.tables ? c.db.select('dining_tables', { where: { business_id: b.id, branch_id: branch.ROWID, is_active: true } }) : [], b.modules.specials ? specialsFor(c, b.id, bizDay(c)) : [],
   ])
   const sp = applySpecials(b.modules.inventory ? products.filter((p) => !(p.trackStock && p.stock <= 0)) : products, specials)
   return {
     business: { id: b.id, name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, address: b.address, phone: b.phone, defaultCountry: b.defaultCountry ?? 'IN', currencySymbol: b.currencySymbol, billing: b.billing, modules: b.modules, terminology: b.terminology, qr: qrSettings(b) },
-    categories: cats, products: sp.products.map(forCustomers), specials: sp.specials.map(forCustomers),
+    categories: cats, products: sp.products, specials: sp.specials, // read for customers: no cost, no wholesale prices
     specialInfo: [...sp.info.entries()].map(([productId, v]) => ({ productId, tag: v.special.tag, originalPrice: v.originalPrice, specialPrice: v.special.specialPrice })),
     tables: tables.map((t) => ({ id: t.ROWID, label: str(t.label) })),
     branch: { id: branch.ROWID, name: str(branch.name), address: str(branch.address), phone: str(branch.phone) },
@@ -466,8 +555,8 @@ async function buildSpecials(c: Ctx, businessId: string) {
   await guestSession(c, businessId)
   const b = c.business
   // Specials off: an empty board, without reading the catalogue.
-  const sp = b.modules.specials ? applySpecials(await loadProducts(c, { activeOnly: true, withExpiry: false }), await specialsFor(c, b.id, bizDay(c))) : applySpecials([], [])
-  return { business: { name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, currencySymbol: b.currencySymbol, qr: qrSettings(b), qrOn: b.modules.qrOrdering }, items: sp.specials.map((p) => ({ product: forCustomers(p), ...sp.info.get(p.id)! })) }
+  const sp = b.modules.specials ? applySpecials(await loadProducts(c, { activeOnly: true, withExpiry: false, forCustomers: true }), await specialsFor(c, b.id, bizDay(c))) : applySpecials([], [])
+  return { business: { name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, currencySymbol: b.currencySymbol, qr: qrSettings(b), qrOn: b.modules.qrOrdering, specialsOn: !!b.modules.specials }, items: sp.specials.map((p) => ({ product: p, ...sp.info.get(p.id)! })) }
 }
 
 define('public', {

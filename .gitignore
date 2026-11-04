@@ -19,4 +19,3 @@ catalyst/functions/daily/index.js
 *.zip
 .env.prod
 dist-prod
-catalyst/appsail/events/index.js

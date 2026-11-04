@@ -23,6 +23,21 @@ export async function migrate(driver: SqlDriver, kind: DbKind): Promise<string[]
   if (files.every((m) => /^\d{4}_[a-z0-9_]+$/.test(m.version)) === false) throw new Error('Bad migration file name')
   const before = await applied(driver)
   if (files.every((m) => before.has(m.version))) return []
+  // A brand-new database (nothing applied yet): every file and its schema_migrations row in ONE request, in one
+  // transaction — the same statements, in the same order, as the step-by-step path below (a new shop's database
+  // otherwise takes ~16 round trips). All or nothing: on Turso a failed statement stops the sequence and closing
+  // the connection rolls it back; in-process SQLite is rolled back here. If it fails for ANY reason (another
+  // instance migrated first, busy, a bad file) the step-by-step path below runs as before: it takes the lock,
+  // re-checks what is applied, and gives the same result or the same error as it always did.
+  if (!before.size) {
+    const sql = ['BEGIN IMMEDIATE;', ...files.flatMap((m) => [m.sql, `;\nINSERT INTO "schema_migrations" ("version") VALUES ('${m.version}');`]), 'COMMIT;'].join('\n')
+    try {
+      await driver.script(sql)
+      return files.map((m) => m.version)
+    } catch {
+      await driver.script('ROLLBACK').catch(() => {}) // nothing open (Turso) = nothing to undo
+    }
+  }
   const tx = await driver.begin()
   try {
     const now = await applied(tx)

@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { gstinCheckChar } from '../../src/core/gst'
 import { withShop } from './fixtures'
+import { listProducts } from './helpers'
 
 const gstin = (state: string, pan = 'AAATW1234Q') => { const first = `${state}${pan}1Z`; return first + gstinCheckChar(first) }
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
@@ -40,7 +41,7 @@ test('purchases: suppliers, purchase bill → stock + cost + input GST, part pai
     assert.equal(p1.total, Math.round(43445 + 2150.25))
     assert.equal(p1.roundOff, -0.25)
     assert.deepEqual([p1.paid, p1.balance, p1.igst], [30000, p1.total - 30000, false])
-    const list = await s.call<P[]>('products.list')
+    const list = await listProducts<P>(s)
     const sar = list.find((p) => p.id === saree.id)!
     assert.deepEqual([sar.stock, sar.costPrice, sar.hsn], [12, 4300.5, '5007'], 'stock in, latest cost, HSN filled')
     assert.equal(list.find((p) => p.id === milk.id)!.stock, 20)
@@ -71,13 +72,14 @@ test('purchases: suppliers, purchase bill → stock + cost + input GST, part pai
     // Void: stock goes back out; not possible once the stock is sold.
     const v = await s.call<Pur>('purchases.void', p2.id, 'Wrong supplier')
     assert.equal(v.status, 'void')
-    assert.equal((await s.call<P[]>('products.list')).find((p) => p.id === saree.id)!.stock, 12)
+    assert.equal((await listProducts<P>(s)).find((p) => p.id === saree.id)!.stock, 12)
     await assert.rejects(s.call('purchases.void', p2.id, 'again'), /already voided/)
     assert.equal((await s.call<Sup[]>('suppliers.list')).find((x) => x.id === other.id)!.balance, 0)
     await s.call('inventory.adjust', milk.id, 'wastage', 15, 'spoilt')
     await assert.rejects(s.call('purchases.void', p1.id, 'test'), /only 5 left/)
 
-    const all = await s.call<Pur[]>('purchases.list')
-    assert.equal(all.length, 2)
+    const all = await s.call<{ rows: Pur[]; count: number }>('purchases.page', { month: today().slice(0, 7) }, null)
+    assert.equal(all.count, 2)
+    assert.equal(all.rows.length, 2)
   } finally { s.close() }
 })

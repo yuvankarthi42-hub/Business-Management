@@ -1,7 +1,7 @@
 // Inventory → Purchases (supplier bills: stock in + input GST) and Inventory → Suppliers (balance, statement, payments).
 import clsx from 'clsx'
 import { Ban, FileText, IndianRupee, Pencil, Plus, Printer, ScanLine, Trash2, Truck, Users } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useApp, useData } from '@/app/AppContext'
 import { Badge, Button, Card, Drawer, EmptyState, Field, Input, Modal, SearchInput, Select, Table, Td, Textarea, Th, useAction } from '@/components/ui'
 import { PhoneInput } from '@/components/PhoneInput'
@@ -15,7 +15,7 @@ import { api } from '@/data'
 import { fmtDate, money } from '@/lib/format'
 import { GstinInput, StateSelect } from '../gst/GstFields'
 import { LabelPrintModal } from '../Labels'
-import { Pager, usePage } from '@/components/Pager'
+import { Pager, usePage, useServerPages } from '@/components/Pager'
 import { NewItemPanel } from './NewItem'
 
 const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)
@@ -24,21 +24,22 @@ const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000
 
 export function PurchasesView() {
   const { me } = useApp()
-  const { data: purchases } = useData(() => api.purchases.list())
   const [q, setQ] = useState('')
   const [creating, setCreating] = useState(false)
   const [open, setOpen] = useState<Purchase | null>(null)
-  const list = useMemo(() => (purchases ?? []).filter((p) => { const s = q.trim().toLowerCase(); return !s || p.number.toLowerCase().includes(s) || p.supplierName.toLowerCase().includes(s) || p.supplierBillNo.toLowerCase().includes(s) }), [purchases, q])
+  // 50 bills a page from the server (search there too, sent once typing pauses); the cards are this month's bills.
+  const [search, setSearch] = useState('')
+  useEffect(() => { const id = setTimeout(() => setSearch(q.trim()), 300); return () => clearTimeout(id) }, [q])
   const month = today().slice(0, 7)
-  const thisMonth = (purchases ?? []).filter((p) => p.status === 'final' && p.date.startsWith(month))
-  const pg = usePage(list, [q])
+  const { data: purchases, rows: list, p: pg } = useServerPages((before) => api.purchases.page({ q: search, month }, before), [search, month])
+  const thisMonth = purchases?.month ?? { total: 0, tax: 0, unpaid: 0, bills: 0 }
   return (
     <>
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Mini k="Purchases this month" v={money(thisMonth.reduce((a, p) => a + p.total, 0))} />
-        <Mini k="Input GST this month" v={money(thisMonth.reduce((a, p) => a + p.tax, 0))} />
-        <Mini k="Bills this month" v={String(thisMonth.length)} />
-        <Mini k="Unpaid on these bills" v={money(thisMonth.reduce((a, p) => a + p.balance, 0))} tone="amber" />
+        <Mini k="Purchases this month" v={money(thisMonth.total)} />
+        <Mini k="Input GST this month" v={money(thisMonth.tax)} />
+        <Mini k="Bills this month" v={String(thisMonth.bills)} />
+        <Mini k="Unpaid on these bills" v={money(thisMonth.unpaid)} tone="amber" />
       </div>
       <Card>
         <div className="flex flex-col gap-2 border-b border-slate-100 p-3 sm:flex-row">
@@ -51,7 +52,7 @@ export function PurchasesView() {
           <Table footer={<Pager p={pg} />}>
             <thead><tr><Th>Purchase</Th><Th>Supplier</Th><Th className="hidden sm:table-cell">Date</Th><Th className="text-right">Total</Th><Th className="hidden text-right md:table-cell">GST</Th><Th className="text-right">Unpaid</Th></tr></thead>
             <tbody>
-              {pg.rows.map((p) => (
+              {list.map((p) => (
                 <tr key={p.id} onClick={() => setOpen(p)} className="cursor-pointer hover:bg-slate-50">
                   <Td><p className="font-medium">{p.number}{p.status === 'void' && <Badge tone="red" className="ml-2">Voided</Badge>}</p><p className="text-xs text-slate-500">{p.supplierBillNo ? `Bill ${p.supplierBillNo} · ` : ''}{p.lines.length} item{p.lines.length === 1 ? '' : 's'}</p></Td>
                   <Td>{p.supplierName}{p.igst && <Badge tone="violet" className="ml-1.5">IGST</Badge>}</Td>
@@ -258,8 +259,9 @@ export function NewPurchaseModal({ onClose, supplierId: preset }: { onClose: () 
 
 function PurchaseDetail({ purchase: p0, onClose, textile }: { purchase: Purchase; onClose: () => void; textile: boolean }) {
   const run = useAction()
-  const { data: list = [] } = useData(() => api.purchases.list())
-  const p = list.find((x) => x.id === p0.id) ?? p0
+  // This bill, read again (fresh after a void).
+  const { data: fresh } = useData(() => api.purchases.get(p0.id), [p0.id])
+  const p = fresh ?? p0
   const [voiding, setVoiding] = useState(false)
   const [reason, setReason] = useState('')
   const [printing, setPrinting] = useState(false)

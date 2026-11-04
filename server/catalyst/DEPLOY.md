@@ -99,12 +99,15 @@ two secrets and keep them private. Set the same `STRATUS_*` values on **daily** 
 | `AUTH_SECRET` | 40+ random characters — signs every login. Changing it signs everyone out. |
 | `SETUP_KEY` | 24+ random characters — only for the schema check, migrations and creating the first admin. |
 | `SECRETS_KEY` | 32+ random characters — encrypts WhatsApp access tokens in Turso. Keep it forever (changing it means re-entering the tokens). |
+| `PASSWORD_PEPPER` | Optional, recommended: 32+ random characters mixed into every password hash (PBKDF2-SHA256). Never change or remove it once set. |
+| `PASSWORD_ITERATIONS` | Optional: password hash strength, default `20000` (about 4 ms of CPU). Raise it only with a bigger CPU budget; older hashes upgrade at the next sign-in. |
+| `DAILY_SHOPS_PER_RUN` | Optional (on **daily** and **api**): daily jobs, shops per run, default `20`. The 09:00 cron repeats runs until every shop is done; an hourly scheduler (`system.runDailyBatch`) does one run each time. |
+| `DAILY_REMINDERS_PER_RUN`, `DAILY_REQUEST_BUDGET`, `DAILY_CPU_BUDGET_MS`, `DAILY_REMINDER_HOUR` | Optional: reminders per run (`20`), outgoing requests per run (`40`), CPU per run (`7` ms), first hour for reminders on hourly runs (`9`, IST). |
 | `STRATUS_BUCKET` | `billpoodum-media` |
 | `STRATUS_PUBLIC_URL` | the bucket URL from step 4 |
 | `ALLOWED_ORIGINS` | the web app address when it is on another domain (Slate), e.g. `https://web-xxxx.onslate.com`. Comma-separate several. Each one also allows its `.in` ⇄ `.com` twin. |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | optional — order tracking “Notify me” (browser push). Make a pair with `npm --prefix backend run vapid`. Without them the tracking page shows only Refresh. Keep the private key secret. |
 | `VAPID_SUBJECT` | optional, e.g. `mailto:KadaiKalanjiyam@gmail.com` (who to contact about the pushes). |
-| `EVENTS_URL`, `EVENTS_PUBLIC_URL`, `EVENTS_SECRET` | optional — live updates (see “Live updates: event hub” below). Without them everything works as before (screens use the 30 s change feed). |
 | `CRON_KEY` | optional — only if you call `system.runDailyJobs` from outside |
 | **Turso (3A)** | |
 | `TURSO_PLATFORM_URL` | the platform database URL (`libsql://…`). Setting it switches the API to Turso. |
@@ -181,7 +184,10 @@ Note: if refreshing a page like `/app/billing` shows "not found", use Slate inst
 ## 11. Daily renewal reminders
 
 Console → **Cloud Scale → Triggers → Cron → New**: every day at **09:00 IST**, target function **daily**. It runs
-once per day (a second run the same day does nothing).
+once per day (a second run the same day does nothing). Inside, the work goes in batches of `DAILY_SHOPS_PER_RUN`
+shops, repeated until every shop is done; a run that stops midway is picked up by the next one (nothing is skipped).
+On a host with a per-run limit (e.g. Cloudflare free: 10 ms CPU, 50 requests) schedule `system.runDailyBatch`
+**every hour** instead (with the `CRON_KEY`): each run does one batch within the budgets.
 
 ---
 
@@ -208,18 +214,11 @@ A table change: edit `server/catalyst/schema.sql` and run `npm --prefix backend 
   `curl -s -X POST https://<your-function-domain>/server/api/migrate -H "x-setup-key: <SETUP_KEY>"`
 - **Data Store:** add the column in the console and check with step 7.
 
-## Live updates: event hub (optional, recommended)
+## How open screens get other devices' changes
 
-Open screens (Kitchen, QR orders, billing, tables, the customer's tracking page, QR menu, TV board) get changes the
-moment they happen, instead of asking the server every 30 s. The hub never touches a database.
-
-1. Build: `npm --prefix backend run build` → `catalyst/appsail/events/` (index.js, package.json, app-config.json).
-2. Catalyst console → **AppSail** → create a Node.js 18 app named `events`, upload a zip of that folder. Start command `node index.js`.
-   **Instances: min 1, max 1** (the hub keeps the open screens in memory; one instance is enough for many shops).
-3. AppSail environment variables: `AUTH_SECRET` (same as the api function), `EVENTS_SECRET` (a new random value, 32+ characters),
-   `ALLOWED_ORIGINS` (same as the api function).
-4. api function environment variables: `EVENTS_URL` = the AppSail URL (the API posts events there),
-   `EVENTS_PUBLIC_URL` = the same URL (browsers connect there), `EVENTS_SECRET` = the same value as step 3.
-5. No database migration is needed. If the hub is stopped or unreachable, screens fall back to the old change feed by
-   themselves within 20 s, and the API skips the hub for 30 s after a failure (billing is never slowed down).
+Catalyst has no live-update hub (the AppSail event hub was removed). Open screens ask the change feed
+(`sync.changes`): every 30 s on Billing, Tables, Kitchen, QR orders, Take Order and Customer Orders, every 60 s on the
+others — only while the screen is in use (not when hidden or idle for 5 minutes). The TV specials board checks every
+minute, the QR menu every 5 minutes, and an open order-tracking page every 30 s while the order is on its way (up to
+30 minutes). Old `EVENTS_URL`, `EVENTS_PUBLIC_URL`, `EVENTS_SECRET` settings are ignored and can be deleted.
 

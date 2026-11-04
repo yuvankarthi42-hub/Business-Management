@@ -1,6 +1,8 @@
 // Product admin: renewal reminders (sent to shop owners from Kadai Kalanjiyam's own WhatsApp number), the platform
 // WhatsApp setup, and system.runDailyJobs (called once a day by a Catalyst Cron).
 //
+//  · platform_settings 'dailyJobs' = the hourly daily-jobs state (lease, round, batch in progress — see runDailyBatch)
+//
 // Storage (no reminder log table):
 //  · platform_settings 'reminders' = { enabled, daysBefore, supportContact, template, lastRunOn }
 //  · platform_settings 'whatsapp'  = { businessNumber, wabaId, phoneNumberId, verified, updatedAt }; its token in
@@ -14,15 +16,18 @@ import type { AdminSession, Ctx } from '../../core/context'
 import { ApiError } from '../../core/errors'
 import { adminRead, adminWrite, define, publicWrite } from '../../core/registry'
 import type { Row } from '../../db/types'
-import { eachShop } from '../../domain/directory'
 import { selectIn } from '../../domain/orders'
-import { expirePoints } from '../../domain/points'
+import { expireCustomerPoints } from '../../domain/points'
+import { mergeUsageCopy, usageFromRow, usageQuery, type ShopUsage } from '../../domain/usage'
+import { outgoing, countRequest } from '../../core/meter'
+import { idBefore } from '@/core/paging'
 import { bumpEpoch, loadPricing, type Pricing } from '../../domain/session'
 import { DEFAULT_PLANS, monthlyValue } from '@/core/plans'
 import { bizDay, bizDayStart, E, getPlatformSetting, putPlatformSetting, str, strOrNull } from '../../domain/util'
 import { cleanPhone } from '../business'
 import { checkAccount, dropToken, formatNumberForLog, liveTemplateStatus, saveToken, sendWhatsApp, tokenRow, VALID_WA } from '../whatsapp'
 import { adminLog, businessLite, customerPrice, findBiz } from './shared'
+import { dateFormat } from '@/core/intl'
 
 const DAY = 86_400_000
 const TZ = 'Asia/Kolkata' // the platform's calendar day (the daily job, "once a day")
@@ -57,7 +62,7 @@ async function platformWa(c: Ctx): Promise<{ config: PlatformWhatsApp; tpl: Row 
 const isReady = (w: Awaited<ReturnType<typeof platformWa>>) => !!w?.config.verified && w.config.template?.status === 'approved'
 
 const daysLeftOf = (endAt: string | null, now: Date) => (endAt ? Math.ceil((new Date(endAt).getTime() - now.getTime()) / DAY) : -1)
-const istDay = (iso: string) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso))
+const istDay = (iso: string) => dateFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso))
 
 /** The owner of each business, from the directory copies in the platform database (name, mobile). */
 async function ownersOf(c: Ctx, ids: string[]) {
@@ -106,32 +111,64 @@ async function candidates(c: Ctx, cfg: ReminderSettings, trigger: 'auto' | 'manu
 
 /** Sends reminders from the platform number (simulated in this phase, see sendWhatsApp) and records them. */
 async function sendReminders(c: Ctx, opts: { trigger: 'auto' | 'manual'; business?: Row; admin?: AdminSession }) {
+  return (await sendReminderBatch(c, opts)).sent
+}
+
+/**
+ * The reminders due now, up to `limit` (and while `canSend()` says there is room in this run's request budget).
+ * Never twice: the message row is saved as "queued" BEFORE the WhatsApp request, so a run that stops between the
+ * two leaves a row that already counts as today's reminder (see resolveStuckReminders) — it is not sent again.
+ * `more` = reminders still due after this batch.
+ */
+async function sendReminderBatch(c: Ctx, opts: { trigger: 'auto' | 'manual'; business?: Row; admin?: AdminSession; limit?: number; canSend?: () => boolean }) {
   const [cfg, w] = await Promise.all([loadSettings(c), platformWa(c)])
   if (!isReady(w)) {
     if (opts.trigger === 'manual') throw new ApiError('Set up WhatsApp first (Admin → WhatsApp): connect, test, and get the reminder template approved')
-    return 0
+    return { sent: 0, more: false, ready: false }
   }
-  const list = opts.business ? [opts.business] : await candidates(c, cfg, opts.trigger)
-  if (!list.length) return 0
+  const due = opts.business ? [opts.business] : await candidates(c, cfg, opts.trigger)
+  const list = due.slice(0, opts.limit ?? due.length)
+  if (!list.length) return { sent: 0, more: false, ready: true }
   const [owners, price, token] = await Promise.all([ownersOf(c, list.map((b) => b.ROWID)), loadPricing(c.platform), tokenRow(c, 'platform', null)])
-  let sent = 0
+  let sent = 0, handled = 0
   for (const b of list) {
+    if (opts.canSend && handled > 0 && !opts.canSend()) break
+    handled++
     const owner = owners.get(b.ROWID) ?? null
     const to = str(owner?.phone)
     const valid = VALID_WA.test(to)
     if (!valid && opts.trigger === 'manual') throw new ApiError('Not sent — the owner has no valid mobile number')
     const body = fillReminder(cfg.template, cfg, price, c.now, b, owner)
-    const res = valid
-      ? await sendWhatsApp({ phoneNumberId: w!.config.phoneNumberId, token: str(token?.value), to, template: { name: 'renewal_reminder', language: w!.config.template!.language }, body, attachment: null })
-      : { status: 'failed' as const, messageId: null, error: 'No valid mobile number for the owner' }
-    const msg = await c.platform.insert('whatsapp_messages', {
+    const row = {
       business_id: b.ROWID, sender: E.WaSender.platform, kind: E.WaMessageKind.renewal_reminder, to_number: to.slice(0, 16), template_id: w!.tpl?.ROWID ?? null,
-      body, meta_message_id: res.messageId, status: E.WaMessageStatus[res.status], error: res.error, status_at: c.now.toISOString(), created_by: null,
-    })
+      body, created_by: null,
+    }
+    let msg: Row
+    let status: 'sent' | 'failed'
+    if (!valid) {
+      msg = await c.platform.insert('whatsapp_messages', { ...row, meta_message_id: null, status: E.WaMessageStatus.failed, error: 'No valid mobile number for the owner', status_at: c.now.toISOString() })
+      status = 'failed'
+    } else {
+      // Saved first ("queued"), then sent, then the result: a stop in between never sends a second message.
+      msg = await c.platform.insert('whatsapp_messages', { ...row, meta_message_id: null, status: E.WaMessageStatus.queued, error: null, status_at: c.now.toISOString() })
+      countRequest()
+      const res = await sendWhatsApp({ phoneNumberId: w!.config.phoneNumberId, token: str(token?.value), to, template: { name: 'renewal_reminder', language: w!.config.template!.language }, body, attachment: null })
+      await c.platform.update('whatsapp_messages', msg.ROWID, { meta_message_id: res.messageId, status: E.WaMessageStatus[res.status], error: res.error, status_at: c.now.toISOString() })
+      status = res.status
+    }
     if (opts.admin) await adminLog(c, opts.admin, 'reminder', { id: b.ROWID, name: str(b.name) }, `Renewal reminder sent on WhatsApp to ${formatNumberForLog(to)} · msg ${msg.ROWID}`)
-    if (res.status === 'sent') sent++
+    if (status === 'sent') sent++
   }
-  return sent
+  return { sent, more: due.length > handled, ready: true }
+}
+
+/**
+ * Reminders left "queued" by a run that stopped while sending (over 15 minutes ago): we can't know whether
+ * WhatsApp got them, so they are marked failed with a note — never sent again automatically (no duplicates).
+ */
+async function resolveStuckReminders(c: Ctx) {
+  const stuck = await c.platform.select('whatsapp_messages', { where: { sender: E.WaSender.platform, kind: E.WaMessageKind.renewal_reminder, status: E.WaMessageStatus.queued, CREATEDTIME: { lt: new Date(Date.now() - 15 * 60_000).toISOString() } }, limit: 50 })
+  if (stuck.length) await c.platform.updateMany('whatsapp_messages', stuck.map((m) => ({ ROWID: m.ROWID, status: E.WaMessageStatus.failed, error: 'Not confirmed — the server stopped while sending. Not sent again automatically; send it by hand if needed.', status_at: new Date().toISOString() })))
 }
 
 /** whatsapp_messages rows → the admin screens' ReminderLog. `known` = businesses already loaded. */
@@ -160,24 +197,226 @@ async function reminderLogs(c: Ctx, rows: Row[], known: Row[] = []): Promise<Rem
 const recentReminders = (c: Ctx, limit: number) => c.platform.select('whatsapp_messages', { where: { sender: E.WaSender.platform, kind: E.WaMessageKind.renewal_reminder }, orderBy: [['CREATEDTIME', 'DESC'], ['ROWID', 'DESC']], limit })
 
 /** The daily job: today's automatic reminders, at most once per (IST) day. Returns how many were sent. */
-export async function runDailyJobs(c: Ctx) {
-  // Sign-in names claimed by a new-user save that never finished (user_id 0) are freed after a day.
-  const stale = await c.platform.select('login_names', { where: { user_id: '0', CREATEDTIME: { lt: new Date(c.now.getTime() - DAY).toISOString() } }, limit: 500 })
-  if (stale.length) await c.platform.deleteMany('login_names', stale.map((r) => r.ROWID))
-  const today = bizDay(c)
-  // Loyalty points past their expiry date (safe to run more than once a day).
-  const shops = await c.platform.select('businesses', { where: { deleted_at: null } })
-  await eachShop(c, shops.map((b) => b.ROWID), async (bid, db) => { await expirePoints(db, bid, today) })
-  if ((await loadSettings(c)).lastRunOn === today) return 0
-  if (!isReady(await platformWa(c))) return 0
-  // Claim the day first, inside one transaction, so a second run (retry, overlapping cron) doesn't send again.
-  const claimed = await c.platformTx(async () => {
-    const cfg = await loadSettings(c)
-    if (cfg.lastRunOn === today) return false
-    await putPlatformSetting(c.platform, 'reminders', { ...cfg, lastRunOn: today })
+// ---------- daily jobs, in hourly batches ----------
+//
+// Each run (hourly; Catalyst: the 09:00 cron repeats runs until all is done) takes a lease so only one run works at
+// a time, then: frees unused sign-in names, sends due renewal reminders (from DAILY_REMINDER_HOUR, IST), and visits
+// the next shops (expire points + count bills for Admin → Usage). Nothing is skipped:
+//   • The claimed shops are saved as the run's batch BEFORE any work; a shop is marked done only after its work
+//     succeeded. A run that stops (crash, time limit) leaves the batch; the next run (after the lease runs out)
+//     does the shops not marked done. The work is safe to repeat, so redoing a shop is harmless.
+//   • A shop that fails is tried again on the next runs; after 3 failed runs it is set aside (logged in the state's
+//     `failed` list) so one broken shop can't hold up the others, and the next round tries it again.
+//   • A run stops before the request budget (Cloudflare free: 50 outgoing requests per run) or the CPU budget runs
+//     out; the shops left wait for the next run.
+// Settings (env): DAILY_SHOPS_PER_RUN (20), DAILY_REMINDERS_PER_RUN (20), DAILY_REQUEST_BUDGET (40),
+// DAILY_CPU_BUDGET_MS (7), DAILY_REMINDER_HOUR (9, IST).
+
+const envInt = (name: string, def: number, min: number, max: number) => {
+  const n = Math.floor(Number(process.env[name]))
+  return Number.isFinite(n) && n >= min && n <= max ? n : def
+}
+export const dailySettings = () => ({
+  shopsPerRun: envInt('DAILY_SHOPS_PER_RUN', 20, 1, 500),
+  remindersPerRun: envInt('DAILY_REMINDERS_PER_RUN', 20, 1, 500),
+  requestBudget: envInt('DAILY_REQUEST_BUDGET', 40, 10, 100_000),
+  cpuBudgetMs: envInt('DAILY_CPU_BUDGET_MS', 7, 1, 600_000),
+  reminderHour: envInt('DAILY_REMINDER_HOUR', 9, 0, 23),
+})
+const LEASE_MS = 10 * 60_000
+const MAX_TRIES = 3
+/** Requests a run keeps for its end: saving the batch, the usage copy and giving the lease back. */
+const END_RESERVE = 8
+/** Requests one customer's points expiry takes (one transaction). */
+const PER_CUSTOMER = 7
+
+interface DailyState {
+  lease: { id: string; until: number } | null
+  /** One pass over every shop: started (day + time), the last shop of the batches finished, finished (day). */
+  round: { startedOn: string; startedAt: string; after: string | null; finishedOn: string | null }
+  /** The shops claimed by the current (or a stopped) run; `done` only after a shop's work succeeded. */
+  batch: { shops: string[]; done: string[]; tries: Record<string, number> } | null
+  /** Shops set aside after MAX_TRIES failed runs (newest first, at most 50). */
+  failed: { id: string; on: string; error: string }[]
+  /** The day the renewal reminders were all sent (or WhatsApp wasn't set up). */
+  remindersOn: string | null
+  /** The day unused sign-in names were last freed. */
+  cleanedOn?: string | null
+}
+const freshState = (c: Ctx): DailyState => ({ lease: null, round: { startedOn: bizDay(c), startedAt: c.now.toISOString(), after: null, finishedOn: null }, batch: null, failed: [], remindersOn: null })
+const readDaily = async (c: Ctx) => ({ ...freshState(c), ...(await getPlatformSetting<Partial<DailyState>>(c.platform, 'dailyJobs', {})) }) as DailyState
+const sqlOf = (c: Ctx) => (c.dbs.perShop && c.platform.sql ? c.platform.sql.bind(c.platform) : null)
+const NOW_SQL = `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`
+
+/** Take the run's lease (null = another run holds it). Turso: one conditional UPDATE; otherwise a transaction. */
+async function takeLease(c: Ctx, lease: { id: string; until: number }): Promise<DailyState | null> {
+  const sql = sqlOf(c)
+  if (sql) {
+    for (let i = 0; i < 2; i++) {
+      const r = await sql(`UPDATE "platform_settings" SET "value_json" = json_set("value_json", '$.lease', json(?)), "updated_at" = ${NOW_SQL}
+        WHERE "setting_key" = 'dailyJobs' AND (json_extract("value_json", '$.lease') IS NULL OR json_extract("value_json", '$.lease.until') < ?) RETURNING "value_json"`, [JSON.stringify(lease), Date.now()])
+      if (r.length) return { ...freshState(c), ...JSON.parse(String(r[0].value_json)) } as DailyState
+      if (i > 0) return null
+      // No state yet (first run ever): create it, then take the lease. Already there = another run holds the lease.
+      const made = await sql(`INSERT INTO "platform_settings" ("setting_key", "value_json") VALUES ('dailyJobs', ?) ON CONFLICT ("setting_key") DO NOTHING RETURNING "id"`, [JSON.stringify({ ...freshState(c), lease: null })])
+      if (!made.length) return null
+    }
+    return null
+  }
+  return c.platformTx(async () => {
+    const st = await readDaily(c)
+    if (st.lease && st.lease.until > Date.now()) return null
+    st.lease = lease
+    await putPlatformSetting(c.platform, 'dailyJobs', st)
+    return st
+  })
+}
+/** Save the state while this run still holds the lease (false = a newer run took over after ours ran out). */
+async function saveDaily(c: Ctx, st: DailyState, leaseId: string): Promise<boolean> {
+  const sql = sqlOf(c)
+  if (sql) {
+    const r = await sql(`UPDATE "platform_settings" SET "value_json" = ?, "updated_at" = ${NOW_SQL} WHERE "setting_key" = 'dailyJobs' AND json_extract("value_json", '$.lease.id') = ? RETURNING "id"`, [JSON.stringify(st), leaseId])
+    return r.length > 0
+  }
+  return c.platformTx(async () => {
+    const now = await readDaily(c)
+    if (now.lease && now.lease.id !== leaseId) return false
+    await putPlatformSetting(c.platform, 'dailyJobs', st)
     return true
   })
-  return claimed ? sendReminders(c, { trigger: 'auto' }) : 0
+}
+const istHour = (d: Date) => Number(dateFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', hourCycle: 'h23' }).format(d))
+
+/** The next shops after `after`, in id order. One database per shop: by id in the query; one database: in memory. */
+async function nextShops(c: Ctx, after: string | null, n: number): Promise<string[]> {
+  if (c.dbs.perShop) {
+    const rows = await c.platform.select('businesses', { where: { deleted_at: null, ...(after ? { ROWID: { gt: after } } : {}) }, orderBy: [['ROWID', 'ASC']], limit: n })
+    return rows.map((r) => r.ROWID)
+  }
+  const ids = (await c.platform.select('businesses', { where: { deleted_at: null } })).map((r) => r.ROWID).sort((a, b) => (idBefore(a, b) ? -1 : idBefore(b, a) ? 1 : 0))
+  return ids.filter((id) => !after || idBefore(after, id)).slice(0, n)
+}
+
+export interface DailyRun { busy: boolean; sent: number; shops: number; idle: boolean }
+
+/**
+ * One run of the daily jobs (see above). `remindersFromHour` = from which IST hour reminders go (the Catalyst
+ * daily cron passes 0: it already runs at 09:00). Returns what it did; `idle` = nothing left for today.
+ */
+export async function runDailyBatch(c: Ctx, opts: { remindersFromHour?: number } = {}): Promise<DailyRun> {
+  const cfg = dailySettings()
+  const startReq = outgoing.n
+  const cpu0 = typeof process !== 'undefined' && typeof process.cpuUsage === 'function' ? process.cpuUsage() : null
+  const used = () => outgoing.n - startReq
+  const cpuMs = () => { if (!cpu0) return 0; const d = process.cpuUsage(cpu0); return (d.user + d.system) / 1000 }
+  const room = (need: number) => used() + need + END_RESERVE <= cfg.requestBudget && cpuMs() <= cfg.cpuBudgetMs
+  const today = bizDay(c)
+
+  // Only one run at a time: take the lease (a stopped run's lease runs out after LEASE_MS).
+  const lease = { id: Math.random().toString(36).slice(2), until: Date.now() + LEASE_MS }
+  const st = await takeLease(c, lease)
+  if (!st) return { busy: true, sent: 0, shops: 0, idle: false }
+  st.lease = lease
+  let sent = 0, shops = 0, remindersLeft = false
+  try {
+    // Once a day: sign-in names claimed by a new-user save that never finished (user_id 0) are freed after a day.
+    if (st.cleanedOn !== today) {
+      const stale = await c.platform.select('login_names', { where: { user_id: '0', CREATEDTIME: { lt: new Date(c.now.getTime() - DAY).toISOString() } }, limit: 500 })
+      if (stale.length) await c.platform.deleteMany('login_names', stale.map((r) => r.ROWID))
+      st.cleanedOn = today
+    }
+
+    // Renewal reminders: from the reminder hour, until all of today's are sent.
+    if (st.remindersOn !== today && istHour(c.now) >= (opts.remindersFromHour ?? cfg.reminderHour)) {
+      const rc = await loadSettings(c)
+      if (rc.lastRunOn === today) st.remindersOn = today
+      else {
+        await resolveStuckReminders(c)
+        const r = await sendReminderBatch(c, { trigger: 'auto', limit: cfg.remindersPerRun, canSend: () => room(4) })
+        sent = r.sent
+        remindersLeft = r.more
+        if (!r.ready) st.remindersOn = today // WhatsApp not set up: nothing to send today (as the once-a-day job did)
+        else if (!r.more) { st.remindersOn = today; await putPlatformSetting(c.platform, 'reminders', { ...rc, lastRunOn: today }) }
+      }
+    }
+
+    // Shops: a new round once the last one is finished on an earlier day; an unfinished round carries on.
+    if (st.round.finishedOn && st.round.finishedOn < today) st.round = { startedOn: today, startedAt: c.now.toISOString(), after: null, finishedOn: null }
+    if (!st.round.finishedOn) {
+      if (!st.batch) {
+        const ids = await nextShops(c, st.round.after, cfg.shopsPerRun)
+        if (!ids.length) st.round.finishedOn = today
+        else st.batch = { shops: ids, done: [], tries: {} }
+        // The claimed batch is saved before any work (in progress). Lost the lease meanwhile: stop, do nothing.
+        if (!(await saveDaily(c, st, lease.id))) return { busy: true, sent, shops: 0, idle: false }
+      }
+      if (st.batch) {
+        const b = st.batch
+        const todo = b.shops.filter((id) => !b.done.includes(id))
+        if (c.dbs.openMany && todo.length) await c.dbs.openMany(todo)
+        const usage = new Map<string, ShopUsage>()
+        for (const bid of todo) {
+          if (shops > 0 && !room(2)) break // the rest wait for the next run
+          try {
+            const db = await c.shopDb(bid)
+            const capFor = () => Math.max(shops > 0 ? 0 : 1, Math.floor((cfg.requestBudget - END_RESERVE - used() - 1) / PER_CUSTOMER))
+            let due: string[], more = false
+            if (c.dbs.perShop && db.sqlMany) {
+              // One round trip: this shop's bill counts and who has expired points.
+              const q = usageQuery(c, bid), cap = capFor()
+              const [u, d] = await db.sqlMany([q, { sql: 'SELECT DISTINCT "customer_id" AS id FROM "customer_points" WHERE "business_id" = ? AND "remaining" > 0 AND "expires_on" < ? LIMIT ?', args: [Number(bid), today, cap + 1] }])
+              usage.set(bid, usageFromRow(u[0]))
+              due = d.map((r) => String(r.id))
+              if (due.length > cap) { due = due.slice(0, cap); more = true }
+            } else {
+              const rows = await db.select('customer_points', { where: { business_id: bid, remaining: { gt: 0 }, expires_on: { lt: today } } })
+              due = [...new Set(rows.map((r) => str(r.customer_id)))]
+            }
+            for (const cid of due) await expireCustomerPoints(db, bid, cid, today)
+            shops++
+            if (more) break // this shop has more expired points than this run has room for: it carries on next run
+            b.done.push(bid)
+          } catch (e) {
+            const tries = (b.tries[bid] ?? 0) + 1
+            b.tries[bid] = tries
+            console.error(`[daily shop ${bid}] try ${tries}`, (e as Error).message)
+            if (tries >= MAX_TRIES) {
+              st.failed = [{ id: bid, on: today, error: String((e as Error).message).slice(0, 200) }, ...st.failed.filter((f) => f.id !== bid)].slice(0, 50)
+              b.done.push(bid) // set aside for this round (the next round tries it again)
+            }
+          }
+        }
+        if (usage.size) await mergeUsageCopy(c, st.round.startedAt, usage)
+        if (b.shops.every((id) => b.done.includes(id))) { st.round.after = b.shops[b.shops.length - 1]; st.batch = null }
+      }
+    }
+  } finally {
+    // Give the lease back (only if it is still ours) and save what was done.
+    st.lease = null
+    await saveDaily(c, st, lease.id).catch((e) => { console.error('[daily] save', e); return false })
+  }
+  // Nothing left for now: every shop done today and no reminder waiting for room (WhatsApp not set up = none to send).
+  const idle = !!st.round.finishedOn && !remindersLeft
+  return { busy: false, sent, shops, idle }
+}
+
+/**
+ * Catalyst's daily cron (09:00 IST) and system.runDailyJobs: runs batch after batch until today's work is done
+ * (Catalyst has no per-run CPU limit). Returns the reminders sent, as before.
+ */
+export async function runDailyJobs(c: Ctx) {
+  let sent = 0
+  for (let i = 0; i < 10_000; i++) {
+    const r = await runDailyBatch(c, { remindersFromHour: 0 })
+    sent += r.sent
+    if (r.busy || r.idle) break
+    if (!r.shops && !r.sent) {
+      // Nothing moved (e.g. reminders not ready yet): stop instead of looping.
+      const st = await readDaily(c)
+      if (st.round.finishedOn || !st.batch) break
+    }
+  }
+  return sent
 }
 
 define('system', {
@@ -186,6 +425,12 @@ define('system', {
     const want = process.env.CRON_KEY
     if (!want || String(key ?? '') !== want) throw new ApiError('Not allowed', 403, 'FORBIDDEN')
     return runDailyJobs(c)
+  }),
+  /** One hourly run (an hourly scheduler, e.g. Cloudflare Cron): a batch of shops and reminders within the budgets. */
+  runDailyBatch: publicWrite(async (c, key?: string) => {
+    const want = process.env.CRON_KEY
+    if (!want || String(key ?? '') !== want) throw new ApiError('Not allowed', 403, 'FORBIDDEN')
+    return runDailyBatch(c)
   }),
 })
 

@@ -21,8 +21,10 @@ export interface Env {
   shared?: Kv
   /** Browser push for order tracking; null/undefined = not set up. */
   push?: PushSender | null
-  /** Live updates for open screens (event hub); null/undefined = not set up (screens use the change feed). */
+  /** Live updates for open screens (event hub); null/undefined = not set up (screens use the change feed). Catalyst: none. */
   events?: EventSink | null
+  /** Where browsers connect for live updates (with `events`); null/undefined = off. */
+  liveUrl?: string | null
 }
 
 export const ALL_BRANCHES = 'all'
@@ -59,7 +61,13 @@ export class Ctx {
   session: Session | null = null
   admin: AdminSession | null = null
   effects: Effects = {}
-  addStock(productId: string, branchId: string, stock: number) {
+  /**
+   * Did an item run out, or come back, in this request (stock crossed 0)? Only then do customers' QR menus change
+   * (they hide sold-out items and show no stock numbers). Unknown change (no `delta`) counts as yes.
+   */
+  soldOutChanged = false
+  addStock(productId: string, branchId: string, stock: number, delta?: number) {
+    if (delta === undefined || (stock - delta > 0) !== (stock > 0)) this.soldOutChanged = true
     const list = (this.effects.stock ??= [])
     const i = list.findIndex((x) => x.productId === productId && x.branchId === branchId)
     if (i >= 0) list[i].stock = stock; else list.push({ productId, branchId, stock })
@@ -71,6 +79,8 @@ export class Ctx {
   readonly shared: Kv
   readonly push: PushSender | null
   readonly events: EventSink | null
+  /** Live updates' address for browsers (null = off: screens use the change feed). */
+  readonly liveUrl: string | null
   /** Events of this request, sent to the hub only after everything is saved (app.ts). */
   private outbox: HubEvent[] = []
   emit(ev: HubEvent) { if (this.events) this.outbox.push(ev) }
@@ -97,6 +107,7 @@ export class Ctx {
   constructor(env: Env, platform: Db, readonly requestId: string | null, readonly now = new Date()) {
     this.dbs = env.dbs; this.kv = env.kv; this.files = env.files; this.epochs = env.epochs
     this.shared = env.shared ?? env.kv; this.push = env.push ?? null; this.events = env.events ?? null
+    this.liveUrl = this.events ? env.liveUrl ?? null : null
     this.rawPlatform = platform
   }
 

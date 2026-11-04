@@ -9,7 +9,7 @@ import { api } from '@/data'
 import { money, setCurrencySymbol } from '@/lib/format'
 import { priceLabel } from '@/features/Catalog'
 import { ShopLogo } from '@/components/ShopLogo'
-import { usePublicLive } from '@/features/tracking/publicLive'
+import { useCheckEvery, usePublicLive } from '@/features/tracking/publicLive'
 
 const PAGE = 6
 
@@ -17,10 +17,14 @@ const PAGE = 6
 export default function SpecialsDisplay() {
   const { businessId = '' } = useParams()
   const now = useNow(1000)
-  // The board updates when the shop changes its specials (live event) — not on a timer.
+  // The board updates when the shop changes its specials: a live event where the server has them, else a check
+  // every minute while it is on screen — only while Daily Specials is on for the shop (Admin → Features and the
+  // shop's module). The server answers from its cached copy.
   const [fresh, setFresh] = useState(0)
-  usePublicLive(businessId, null, { menu: () => setFresh(Date.now()) })
+  const live = usePublicLive(businessId, null, { menu: () => setFresh(Date.now()) })
   const { data, error } = useData(() => (fresh ? api.public.specials(businessId, fresh) : api.public.specials(businessId)), [businessId, fresh])
+  // A copy cached before `specialsOn` existed counts as on, so the board picks up the new answer.
+  useCheckEvery(60_000, !live && !!data && data.business.specialsOn !== false, () => setFresh(Date.now()))
   const [page, setPage] = useState(0)
   const pages = Math.max(1, Math.ceil((data?.items.length ?? 0) / PAGE))
   useEffect(() => { const id = setInterval(() => setPage((p) => (p + 1) % pages), 8000); return () => clearInterval(id) }, [pages])

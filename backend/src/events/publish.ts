@@ -1,39 +1,17 @@
-// The API's side of the event hub: after a request's changes are saved, its events are posted to the hub
-// (one small server-to-server call, no database). If the hub is down nothing is lost: the change is already in
-// the database and in the change feed, and screens catch up when they reconnect.
+// The API's side of live updates: after a request's changes are saved, its events go to the hub (where a host has
+// one). If the hub is down nothing is lost: the change is already in the database and in the change feed, and
+// screens catch up when they reconnect.
 import type { Ctx } from '../core/context'
 import type { KitchenTicket, Order } from '@/core/types'
 import { kotsFrom, loadOrder } from '../domain/orders'
 import { moduleOn, str } from '../domain/util'
-import type { Hub, HubEvent } from './hub'
+import type { HubEvent } from './hub'
 
+/**
+ * Where a request's events go once its changes are saved. Not set on Catalyst (screens use the change feed there);
+ * the Cloudflare host sends them to the shop's live-update hub; the tests keep a hub in memory.
+ */
 export interface EventSink { publish(events: HubEvent[]): Promise<void> }
-
-/** Production: the hub on Catalyst AppSail (EVENTS_URL, EVENTS_SECRET). */
-export class HttpSink implements EventSink {
-  /** After a failure the hub is skipped for 30 s, so a hub outage never slows down billing. */
-  private downUntil = 0
-  constructor(private url: string, private secret: string) {}
-  async publish(events: HubEvent[]) {
-    if (Date.now() < this.downUntil) return
-    const ctl = new AbortController()
-    const t = setTimeout(() => ctl.abort(), 800)
-    try {
-      const r = await fetch(`${this.url.replace(/\/$/, '')}/publish`, { method: 'POST', signal: ctl.signal, headers: { 'content-type': 'application/json', 'x-events-secret': this.secret }, body: JSON.stringify({ events }) })
-      if (!r.ok) throw new Error(`hub answered ${r.status}`)
-    } catch (e) { this.downUntil = Date.now() + 30_000; throw e } finally { clearTimeout(t) }
-  }
-}
-/** Local server and tests: the hub runs in the same process. */
-export class LocalSink implements EventSink {
-  constructor(private hub: Hub) {}
-  async publish(events: HubEvent[]) { this.hub.publish(events) }
-}
-
-export function sinkFromEnv(): EventSink | null {
-  const url = process.env.EVENTS_URL, secret = process.env.EVENTS_SECRET
-  return url && secret && secret.length >= 16 ? new HttpSink(url, secret) : null
-}
 
 /** Lists the screens update in place, from these actions' results (anything else: refresh as before). */
 const ORDER_RESULT = new Set(['orders.checkout', 'orders.settle', 'orders.cancel'])

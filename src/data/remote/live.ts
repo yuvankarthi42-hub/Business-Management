@@ -1,5 +1,5 @@
-// Live updates for staff screens (Catalyst backend): one stream per tab from the event hub, instead of asking
-// the server every 30 s whether anything changed.
+// Live updates for staff screens, where the server has a live-update hub (not on Catalyst — there the change feed
+// in sync.ts is used): one stream per tab from the hub, instead of asking the server every 30 s whether anything changed.
 //  • Off unless the server has a hub (events.ticket returns a url) — then everything works as before.
 //  • Each event names the action another device finished; the same reads are refreshed as for this device's own
 //    writes, except lists that take the changed orders / tickets in place (no extra server call).

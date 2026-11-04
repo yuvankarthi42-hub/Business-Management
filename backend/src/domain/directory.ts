@@ -38,6 +38,33 @@ export async function loginFree(c: Ctx, kind: LoginKind, value: string, self?: {
 }
 
 /**
+ * claimLogins for a brand-new user, in one round trip where the database can batch (Turso): the same claims,
+ * made before the user row exists (same safety order). A taken email is simply not claimed, as in claimLogins.
+ * Any clash goes the step-by-step way (claimLogins), so the messages stay the same. `ids` = the claims made in
+ * the batch (to point at the new user in a later batch); null when claimLogins did it.
+ */
+export async function claimNewLogins(c: Ctx, businessId: string, next: Logins) {
+  if (!c.platform.writeBatch) return { ...(await claimLogins(c, businessId, null, next)), ids: null as string[] | null }
+  const rows: { login: string; kind: number; business_id: string; user_id: string }[] = []
+  for (const kind of ['username', 'phone', 'email'] as const) {
+    const v = next[kind] ? keyOf(kind, String(next[kind])) : null
+    if (!v) continue
+    if (kind === 'email' && (await c.platform.first('login_names', { login: v }))) continue
+    rows.push({ login: v, kind: E.LoginKind[kind], business_id: businessId, user_id: '0' })
+  }
+  let ids: string[]
+  try { ids = rows.length ? (await c.platform.writeBatch([{ insert: 'login_names', rows }]))[0].map((r) => r.ROWID) : [] } catch (e) {
+    if (!(e instanceof DuplicateError)) throw e
+    return { ...(await claimLogins(c, businessId, null, next)), ids: null as string[] | null } // nothing was claimed (all or nothing)
+  }
+  return {
+    ids: ids as string[] | null,
+    undo: async () => { if (ids.length) await c.platform.deleteMany('login_names', ids).catch((e) => console.error('[logins undo]', e)) },
+    bind: async (newUserId: string) => { if (ids.length) await c.platform.updateMany('login_names', ids.map((ROWID) => ({ ROWID, user_id: newUserId }))) },
+  }
+}
+
+/**
  * Claims the new names of a user (before the user row is written). Returns an undo for when the user write
  * fails, and `release` to call after it succeeded (frees the names the user no longer has).
  * Emails are a convenience: a taken email is simply not usable for sign-in by the second user.
