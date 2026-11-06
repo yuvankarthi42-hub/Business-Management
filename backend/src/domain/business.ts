@@ -1,5 +1,6 @@
-// Business ⇄ tables: businesses + business_settings (JSON) + tax_rates + sequences + price_lists.
+// Business ⇄ tables: businesses + business_settings (JSON) + tax_rates + sequences + price_lists; branches + bill_formats.
 // Produces exactly the `Business` / `Branch` shapes the app already uses (src/core/types.ts).
+import { cleanBillFormat, type BillFormat } from '@/core/billFormat'
 import type { BillingSettings, Branch, BranchPrinter, Business, LoyaltySettings, ModuleConfig, QrSettings, StickerSettings, Terminology } from '@/core/types'
 import { DEFAULT_TERMS, modulesFor, templateFor } from '@/core/config'
 import type { Db, Row } from '../db/types'
@@ -30,14 +31,16 @@ export async function loadBusiness(c: { platform: Db; db: Db; files?: Files }, b
   const row = await c.platform.get('businesses', businessId)
   if (!row || row.deleted_at) return null
   const db = c.db
-  const [settings, taxes, seqs, lists, branches] = await Promise.all([
+  const [settings, taxes, seqs, lists, branches, formats] = await Promise.all([
     db.select('business_settings', { where: { business_id: businessId } }),
     db.select('tax_rates', { where: { business_id: businessId }, orderBy: [['rate_bp', 'ASC']] }),
     db.select('sequences', { where: { business_id: businessId } }),
     db.select('price_lists', { where: { business_id: businessId } }),
     db.select('branches', { where: { business_id: businessId } }),
+    db.select('bill_formats', { where: { business_id: businessId, kind: E.BillKind.thermal } }),
   ])
-  return { business: businessFrom(row, settings, taxes, seqs, lists, c.files), branches: branches.map((b) => branchFrom(b, seqs)) }
+  const business = businessFrom(row, settings, taxes, seqs, lists, c.files)
+  return { business, branches: branches.map((b) => branchFrom(b, seqs, formats, business)) }
 }
 
 export function businessFrom(row: Row, settings: Row[], taxes: Row[], seqs: Row[], lists: Row[], files?: Files): Business {
@@ -82,14 +85,18 @@ export function businessFrom(row: Row, settings: Row[], taxes: Row[], seqs: Row[
 
 export const PRINTER_DEFAULTS: BranchPrinter = { transport: 'browser', paper: null, mode: 'auto', autoPrint: false, copies: 1, cut: true, drawer: false, baudRate: 9600 }
 
-export function branchFrom(b: Row, seqs: Row[]): Branch {
+/** One branch as the app sees it. `formats` (bill_formats rows) and `shop` add its bill format, when it has one. */
+export function branchFrom(b: Row, seqs: Row[], formats: Row[] = [], shop?: Pick<Business, 'category' | 'subType'>): Branch {
   const own = seqs.find((s) => s.branch_id === b.ROWID && Number(s.name) === E.SequenceName.invoice)
   const printer = json<BranchPrinter | null>(b.printer_json, null)
+  const fmt = shop && formats.find((f) => f.branch_id === b.ROWID)
   return {
     id: b.ROWID, businessId: str(b.business_id), name: str(b.name), address: str(b.address), phone: str(b.phone),
     isDefault: !!b.is_default, active: b.is_active !== false,
     ...(b.invoice_prefix ? { invoicePrefix: str(b.invoice_prefix), nextInvoiceNumber: Number(own?.next_value ?? 10001) } : {}),
     ...(printer ? { printer } : {}),
+    // Completed from the shop type's default, so a format saved before a new option existed still works.
+    ...(fmt ? { billFormat: cleanBillFormat(json<unknown>(fmt.format_json, null), shop) } : {}),
   }
 }
 
@@ -101,4 +108,23 @@ export function taxRateSeedRows(businessId: string, category: Business['category
   const rates = [{ name: 'No Tax', rate: 0 }, { name: 'GST 5%', rate: 5 }, { name: 'GST 12%', rate: 12 }, { name: 'GST 18%', rate: 18 }]
   const def = category === 'retail' ? 0 : 5
   return rates.map((r) => ({ business_id: businessId, name: r.name, rate_bp: toBp(r.rate), is_inclusive: false, is_default: r.rate === def, is_active: true }))
+}
+
+/**
+ * Save a branch's bill format (one bill_formats row per branch and kind). `onlyNew`: leave a saved one as it is.
+ * Returns false when another save changed the row in between (the caller asks the user to try again).
+ */
+export async function putBillFormat(db: Db, businessId: string, branchId: string, f: BillFormat, userId: string | null, onlyNew = false) {
+  const uniq_key = `${branchId}:${E.BillKind.thermal}`
+  const ex = await db.first('bill_formats', { uniq_key })
+  const format_json = JSON.stringify(f)
+  if (!ex) { await db.insert('bill_formats', { business_id: businessId, branch_id: branchId, kind: E.BillKind.thermal, format_json, schema_version: 1, uniq_key, updated_by: userId }); return true }
+  if (onlyNew) return true
+  return db.updateIfVersion('bill_formats', ex.ROWID, Number(ex.row_version), { format_json, updated_by: userId })
+}
+
+/** A branch's saved bill format, or null. */
+export async function getBillFormat(db: Db, branchId: string, shop: Pick<Business, 'category' | 'subType'>) {
+  const r = await db.first('bill_formats', { uniq_key: `${branchId}:${E.BillKind.thermal}` })
+  return r ? cleanBillFormat(json<unknown>(r.format_json, null), shop) : null
 }

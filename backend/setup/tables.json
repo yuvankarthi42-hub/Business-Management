@@ -874,6 +874,85 @@
       }
     ]
   },
+  "bill_formats": {
+    "columns": [
+      {
+        "name": "business_id",
+        "type": "fk",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "businesses",
+        "onDelete": "cascade"
+      },
+      {
+        "name": "branch_id",
+        "type": "fk",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "branches",
+        "onDelete": "cascade"
+      },
+      {
+        "name": "kind",
+        "type": "int",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "1",
+        "enum": "BillKind"
+      },
+      {
+        "name": "format_json",
+        "type": "text",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "schema_version",
+        "type": "int",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "1"
+      },
+      {
+        "name": "uniq_key",
+        "type": "varchar",
+        "maxLength": 80,
+        "mandatory": true,
+        "unique": true,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "updated_by",
+        "type": "fk",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "users",
+        "onDelete": "null"
+      },
+      {
+        "name": "row_version",
+        "type": "int",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "1"
+      }
+    ]
+  },
   "sequences": {
     "columns": [
       {

@@ -10,7 +10,7 @@ import type { BillingSettings, Branch, Business, OrderType, PaymentMethod, Permi
 import { api, BACKEND } from '@/data'
 import { fmtDateTime, uid } from '@/lib/format'
 import { PhoneInput } from '@/components/PhoneInput'
-import { PrinterSettingsPanel } from '@/features/printing/PrinterSettings'
+import { PrinterAndBill } from '@/features/printing/BillFormatSettings'
 import { StickerSettingsPanel } from '@/features/Labels'
 import { LoyaltySettingsPanel } from '@/features/loyalty/Points'
 import { BRAND } from '@/core/brand'
@@ -31,7 +31,7 @@ export default function Settings() {
     { key: 'billing', label: 'Billing & Tax', icon: Receipt, show: can('settings.manage') },
     { key: 'loyalty', label: 'Loyalty points', icon: Star, show: can('settings.manage') && mod('customers') },
     { key: 'stickers', label: 'Price stickers', icon: Tag, show: can('settings.manage') && !!me && (usesRetailPos(me.business) || /bakery|sweet/i.test(me.business.subType)) },
-    { key: 'printer', label: 'Printer', icon: Printer, show: can('billing.create') || can('settings.manage') },
+    { key: 'printer', label: 'Printer and bill', icon: Printer, show: can('billing.create') || can('settings.manage') || can('bill.format') },
     { key: 'integrations', label: 'Integrations', icon: Plug, show: can('settings.manage') && !!me?.features.whatsapp },
     { key: 'terms', label: 'Terminology', icon: Languages, show: can('settings.manage') },
     { key: 'modules', label: 'Modules', icon: LayoutGrid, show: can('settings.manage') },
@@ -63,7 +63,7 @@ export default function Settings() {
           {sec === 'billing' && <BillingSettingsForm />}
           {sec === 'stickers' && <StickerSettingsPanel Section={Section} />}
           {sec === 'loyalty' && <LoyaltySettingsPanel Section={Section} />}
-          {sec === 'printer' && <PrinterSettingsPanel />}
+          {sec === 'printer' && <PrinterAndBill />}
           {sec === 'integrations' && <IntegrationsSettings />}
           {sec === 'terms' && <TermsSettings />}
           {sec === 'modules' && <ModuleSettings />}
@@ -196,14 +196,6 @@ function BillingSettingsForm() {
             <p className="mb-2 text-sm font-medium">Order types</p>
             <div className="flex flex-col gap-2">{(['counter', 'dine_in', 'takeaway', 'delivery'] as OrderType[]).map((m) => <Checkbox key={m} label={ORDER_TYPE_LABEL[m]} checked={b.orderTypes.includes(m)} onChange={(v) => set('orderTypes', toggleIn(b.orderTypes, m, v))} />)}</div>
           </div>
-        </div>
-        <div className="grid gap-4 sm:grid-cols-[180px_1fr]">
-          <Field label="Printer paper">
-            <Select value={b.paperWidth ?? '80mm'} onChange={(e) => set('paperWidth', e.target.value as BillingSettings['paperWidth'])}>
-              <option value="80mm">80 mm (3 inch)</option><option value="58mm">58 mm (2 inch)</option>
-            </Select>
-          </Field>
-          <Field label="Receipt footer" hint="Leave empty to print nothing at the bottom"><Input value={b.receiptFooter} onChange={(e) => set('receiptFooter', e.target.value)} placeholder="Thank you! Visit again." /></Field>
         </div>
       </div>
     </Section>

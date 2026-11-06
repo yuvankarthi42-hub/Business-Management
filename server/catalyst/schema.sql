@@ -185,6 +185,19 @@ CREATE TABLE branches (
   row_version      INT          NOT NULL DEFAULT 1
 );
 
+-- How a branch's bills look (Settings → Printer and bill): columns, top / bottom lines and their names, footer.
+-- One row per branch and kind. A branch without a row prints the classic bill.
+CREATE TABLE bill_formats (
+  business_id      BIGINT       NOT NULL FK → businesses CASCADE,
+  branch_id        BIGINT       NOT NULL FK → branches CASCADE,
+  kind             INT          NOT NULL DEFAULT 1,     -- BillKind: 1 thermal (later: A4 invoice, estimate, delivery challan)
+  format_json      TEXT         NOT NULL,               -- {layout, cols, qtyDecimals, name1, name2, address, phone2, title, cashSales, footer1, footer2, top, bottom}
+  schema_version   INT          NOT NULL DEFAULT 1,
+  uniq_key         VARCHAR(80)  NOT NULL UNIQUE,        -- '<branch_id>:<kind>'
+  updated_by       BIGINT       FK → users NULL,
+  row_version      INT          NOT NULL DEFAULT 1
+);
+
 -- Number series (bill, order, KOT, credit note, ticket …). Read-and-increment with row_version check.
 CREATE TABLE sequences (
   business_id      BIGINT       NOT NULL FK → businesses CASCADE,

@@ -112,6 +112,8 @@ erDiagram
   businesses ||--o{ sequences : ""
   branches ||--o{ sequences : "branch series"
   branches ||--o{ devices : ""
+  branches ||--o{ bill_formats : "bill per branch"
+  users |o--o{ bill_formats : "updated by"
   businesses ||--o{ media_files : ""
 ```
 
@@ -121,6 +123,7 @@ erDiagram
 | `business_settings` | The shop's settings as JSON, one row each: `billing` (prefixes, tax mode, payment methods, round-off…), `terminology` (Menu Item vs Product), `modules` (which screens are on), `qr`, `wholesale`. New options need no new column. | key `billing` |
 | `subscription_periods` | **History** of the plan: every new / renew / extend / branch change with months, branches, rate and amount, and which admin did it. (`businesses` keeps only the current end date and limit.) | Renew 6 months, ₹2,994 |
 | `branches` | Shop locations. Own bill prefix (AD-, VL-), own GSTIN if in another state, open / closed, and the branch's **printer setup**. | T. Nagar, Adyar |
+| `bill_formats` | **How each branch's bill looks** (Settings → Printer and bill): item columns (Rate, MRP, Discount…) and their names, which top / bottom lines print and what they are called, footer. One row per branch and kind (1 = thermal bill; A4 invoice / estimate later). No row = the classic bill. | T. Nagar: MRP + discount, "விலை" |
 | `sequences` | Number counters so numbers never repeat: bill, order, KOT, credit note, purchase — per business or per branch, optionally restarting every financial year. | INV- next 11187 |
 | `devices` | Each counter / waiter phone / kitchen screen of a branch, when it was last seen and last synced. For offline sync later. | Counter 1, T. Nagar |
 | `media_files` | Facts about files kept in **Stratus**: product and category photos, logo, ticket screenshots, offer posters. Only the Stratus key and size are stored here. | `biz12/products/ab.webp`, 41 KB |

@@ -180,6 +180,7 @@ export const PERMISSIONS: { key: Permission; label: string; group: string }[] = 
   { key: 'inventory.manage', label: 'Manage stock', group: 'Catalogue' },
   { key: 'customers.manage', label: 'Manage customers', group: 'Catalogue' },
   { key: 'settings.manage', label: 'Business settings', group: 'Admin' },
+  { key: 'bill.format', label: 'Change bill format (own branches)', group: 'Admin' },
   { key: 'users.manage', label: 'Manage staff & roles', group: 'Admin' },
 ]
 

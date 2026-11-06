@@ -9,13 +9,14 @@ import { isTextile, ORDER_TYPE_LABEL, PAYMENT_LABEL } from '@/core/config'
 import { itemLabel } from '@/core/orderItem'
 import { discountParts, lineMrp, lineTotal, mrpSaved, preGstLines, r2, taxableValue, taxBreakup, taxIncluded } from '@/core/pricing'
 import { stateLabel } from '@/core/gst'
-import type { Branch, Business, Customer, Order, Payment, PaymentMethod } from '@/core/types'
+import type { Business, Customer, Order, Payment, PaymentMethod } from '@/core/types'
 import { api, type PaymentInput } from '@/data'
 import { formatPhone } from '@/core/phone'
 import { useWhatsApp } from './whatsapp/useWhatsApp'
 import { amountInWords, fmtDateTime, money } from '@/lib/format'
 import { CustomerPicker } from './CustomerPicker'
-import { needsImage, receiptDoc } from './printing/doc'
+import { needsImage, receiptDoc, type ReceiptProps } from './printing/doc'
+import { BillLines } from './printing/BillLines'
 import { encodeImage, encodeText } from './printing/escpos'
 import { printerFor, sendToPrinter, usePrinterSettings } from './printing/printer'
 
@@ -223,23 +224,23 @@ export function receiptText(o: Order, b: Business, customer?: Customer | null) {
   return lines.filter((l, i, a) => l !== '' || a[i - 1] !== '').join('\n').trim()
 }
 
-export interface ReceiptProps {
-  order: Order
-  business: Business
-  /** Branch that made the bill — its address / phone are printed when set. */
-  branch?: Branch | null
-  customer?: Customer | null
-  /** Staff list used to print cashier / waiter names. */
-  users?: { id: string; name: string }[]
-  tableLabel?: string | null
-}
+export type { ReceiptProps }
 
 const d2 = (n: number) => n.toFixed(2)
 const fmtBillDate = (d: string) => { const x = new Date(d); return `${String(x.getDate()).padStart(2, '0')}-${String(x.getMonth() + 1).padStart(2, '0')}-${x.getFullYear()}` }
 const fmtBillTime = (d: string) => new Date(d).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }).toUpperCase()
 
 /** Thermal-printer tax invoice (58mm / 80mm). Same component is used for preview and print. */
-export function Receipt({ order: o, business: b, branch, customer, users = [], tableLabel }: ReceiptProps) {
+export function Receipt(props: ReceiptProps) {
+  // A branch with its own bill format: the same lines the printer gets, at the paper width this branch prints on.
+  if (props.branch?.billFormat) {
+    const paper = printerFor(props.branch).paper ?? props.business.billing.paperWidth ?? '80mm'
+    return <BillLines doc={receiptDoc(props, paper)} paper={paper} />
+  }
+  return <ClassicReceipt {...props} />
+}
+
+function ClassicReceipt({ order: o, business: b, branch, customer, users = [], tableLabel }: ReceiptProps) {
   const address = branch?.address || b.address
   const phone = branch?.phone || b.phone
   const narrow = b.billing.paperWidth === '58mm'

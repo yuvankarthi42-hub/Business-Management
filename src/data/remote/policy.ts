@@ -88,6 +88,7 @@ const WRITES: Record<string, string[]> = {
   'business.finishOnboarding': ['me'],
   'branches.save': ['me', 'branches'],
   'branches.savePrinter': ['me', 'branches'],
+  'branches.saveBillFormat': ['me', 'branches'],
   'roles.save': ['roles', 'me', 'users'],
   'roles.remove': ['roles', 'me'],
   'users.save': ['users', 'me', 'staff'],

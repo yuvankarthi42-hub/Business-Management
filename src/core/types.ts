@@ -1,4 +1,5 @@
 import type { FeatureFlags } from './features'
+import type { BillFormat } from './billFormat'
 import type { PlanPrice, PlanPrices } from './plans'
 import type { WaLang, WaTemplateKind } from './whatsapp'
 // Common core domain. Every entity uses generic names (Product, Customer, Order...)
@@ -211,6 +212,8 @@ export interface Branch {
   nextInvoiceNumber?: number
   /** This branch's receipt printer setup (every counter in the branch uses it). */
   printer?: BranchPrinter
+  /** How this branch's bills look (Settings → Printer and bill). Unset = the classic bill. */
+  billFormat?: BillFormat
 }
 
 /** Printer setup per branch. Which physical printer a device is paired with stays on that device. */
@@ -234,7 +237,7 @@ export interface BranchPrinter {
 export type Permission =
   | 'dashboard.view' | 'billing.create' | 'billing.discount' | 'billing.price' | 'orders.view' | 'orders.cancel'
   | 'products.manage' | 'inventory.manage' | 'customers.manage' | 'payments.view' | 'payments.collect'
-  | 'expenses.manage' | 'reports.view' | 'reports.profit' | 'tables.manage' | 'kitchen.view'
+  | 'expenses.manage' | 'reports.view' | 'reports.profit' | 'tables.manage' | 'kitchen.view' | 'bill.format'
   | 'settings.manage' | 'users.manage'
 
 export interface Role {

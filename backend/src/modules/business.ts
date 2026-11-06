@@ -3,6 +3,7 @@ import { COUNTRIES, normalizePhone } from '@/core/phone'
 import { branchLimitMessage } from '@/core/subscription'
 import { modulesFor, setupDefaultsFor } from '@/core/config'
 import { FEATURE_MODULE, withFeatures, type FeatureKey } from '@/core/features'
+import { canEditBillFormat, cleanBillFormat, defaultBillFormat } from '@/core/billFormat'
 import { cleanStickers, stickerSettings } from '@/core/stickers'
 import { cleanGstin, GST_STATES, gstinError } from '@/core/gst'
 import { cleanLoyalty, loyaltyOf } from '@/core/loyalty'
@@ -12,7 +13,7 @@ import type { Ctx } from '../core/context'
 import { ApiError, forbidden } from '../core/errors'
 import { assertPassword, hashPassword } from '../core/passwords'
 import { define, userRead, userWrite } from '../core/registry'
-import { branchFrom, loadBusiness, PRINTER_DEFAULTS } from '../domain/business'
+import { branchFrom, getBillFormat, loadBusiness, PRINTER_DEFAULTS, putBillFormat } from '../domain/business'
 import { storeImage } from './catalog'
 import { loadRoles, loadUsers, payColumns, setUserBranches } from '../domain/people'
 import { saveUserWithLogins, syncBranchCount, syncOwner } from '../domain/directory'
@@ -195,6 +196,9 @@ define('business', {
     await c.platform.update('businesses', c.businessId, { name: input.name.trim().slice(0, 150), category: code(E.BusinessCategory, input.category), sub_type: String(input.subType).slice(0, 60) })
     await putSetting(c.db, c.businessId, 'modules', modules, c.userId)
     await putSetting(c.db, c.businessId, 'terminology', input.terminology, c.userId)
+    // The main branch starts with the bill layout we set up for the shop's type (a saved one is kept).
+    const main = await c.db.first('branches', { business_id: c.businessId, is_default: true })
+    if (main) await putBillFormat(c.db, c.businessId, main.ROWID, defaultBillFormat(probe, c.business.billing.receiptFooter), c.userId, true)
     // MRP / shelf prices include GST in supermarkets, spare-parts and textile shops (core/config.ts setupDefaultsFor).
     await saveBilling(c, { orderTypes: input.orderTypes, taxMode: defaults.taxMode })
     await setDefaultTaxByRate(c, defaults.taxRate)
@@ -278,6 +282,18 @@ define('branches', {
     return saved
   }),
 
+  /** Save one branch's bill format (Settings → Printer and bill). Owner / manager, or "Change bill format" for own branches. */
+  saveBillFormat: userWrite(async (c, branchId: string, input: unknown) => {
+    if (!canEditBillFormat((p) => c.can(p))) throw forbidden('You don’t have permission to change the bill format')
+    const br = await own(c, 'branches', branchId, 'Branch not found')
+    if (!c.s.allowed.includes(br.ROWID)) throw new ApiError('Branch not found', 404)
+    const f = cleanBillFormat(input, c.business)
+    if (!(await putBillFormat(c.db, c.businessId, br.ROWID, f, c.userId))) throw new ApiError('Someone else just changed this bill format. Open it again and save.', 409)
+    await audit(c, 'branch', br.ROWID, 'update', `${str(br.name)}: bill format (${f.layout})`, br.ROWID)
+    await bumpEpoch(c, c.businessId)
+    return f
+  }),
+
   list: userRead(async (c) => branchesWithCounts(c)),
 
   save: userWrite(async (c, input: Partial<Branch> & { name: string }) => {
@@ -306,6 +322,10 @@ define('branches', {
     if (all.some((b) => str(b.invoice_prefix).toUpperCase() === auto)) auto = `${auto.slice(0, -1)}${all.length + 1}-`
     const nb = await c.db.insert('branches', { business_id: c.businessId, name: name.slice(0, 120), address: (input.address ?? '').slice(0, 255), phone: cleanPhone(input.phone, c.business.defaultCountry) || null, is_default: false, is_active: true, invoice_prefix: auto })
     await setSequence(c.db, c.businessId, nb.ROWID, 'invoice', { prefix: auto, next: input.nextInvoiceNumber ?? 10001 })
+    // A new branch starts with the main branch's bill format (changed on its own after that).
+    const main = all.find((b) => b.is_default)
+    const mainFormat = main ? await getBillFormat(c.db, main.ROWID, c.business) : null
+    if (mainFormat) await putBillFormat(c.db, c.businessId, nb.ROWID, mainFormat, c.userId)
     await audit(c, 'branch', nb.ROWID, 'create', name, nb.ROWID)
     await bumpEpoch(c, c.businessId)
     await syncBranchCount(c, c.businessId)

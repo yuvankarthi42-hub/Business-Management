@@ -35,6 +35,7 @@ const forCustomers = (p: Product): Product => ({ ...p, costPrice: 0, wholesalePr
 /** Demo rate limit for "Track my order" (one browser). */
 const trackTries = { minute: 0, n: 0 }
 import { ADMIN_ROLES, adminCan, type AdminPermission } from '@/core/adminRoles'
+import { canEditBillFormat, cleanBillFormat, defaultBillFormat } from '@/core/billFormat'
 import { FEATURE_ACTIONS, FEATURES, featureOffAction, featureOn, featuresFor, moduleReleased, withFeatures, type FeatureFlag, type FeatureKey } from '@/core/features'
 import { renderTemplate, templateErrors, WA_KIND, type WaLang, type WaTemplateKind } from '@/core/whatsapp'
 import type { ImportItem } from '@/core/productImport'
@@ -1028,6 +1029,9 @@ export const api = {
         if (!input.name.trim()) throw new ApiError('Enter your business name')
         Object.assign(b, { name: input.name.trim(), category: input.category, subType: input.subType, modules: input.modules, terminology: input.terminology })
         b.billing.orderTypes = input.orderTypes
+        // The main branch starts with the bill layout for the shop's type, as on the server (a saved one is kept).
+        const main = mine(d.branches).find((x) => x.isDefault)
+        if (main && !main.billFormat) main.billFormat = defaultBillFormat(b, b.billing.receiptFooter)
         // Same defaults as the server (core/config.ts): GST rate, prices with / without GST, modules for the shop type.
         const defaults = setupDefaultsFor(b)
         b.billing.defaultTaxRateId = `tax_${defaults.taxRate}`
@@ -1113,6 +1117,21 @@ export const api = {
         return clone(br.printer)
       })
     },
+    /** Save one branch's bill format. Owner / manager, or "Change bill format" for the branches the user works in. */
+    async saveBillFormat(branchId: string, input: unknown) {
+      return tx((d) => {
+        const s = session.get()
+        const u = s && d.users.find((x) => x.id === s.userId)
+        const perms = u ? permissionsOf(d, u) : null
+        if (!u || !perms || !canEditBillFormat((p) => perms === 'all' || perms.has(p))) throw new ApiError('You don’t have permission to change the bill format')
+        const br = mine(d.branches).find((b) => b.id === branchId)
+        if (!br || !allowedBranches(d, u).includes(br.id)) throw new ApiError('Branch not found')
+        const f = cleanBillFormat(input, biz(d))
+        br.billFormat = f
+        audit(d, 'branch', br.id, 'update', `${br.name}: bill format (${f.layout})`)
+        return clone(f)
+      })
+    },
     async list() {
       const d = getDB()
       return clone(mine(d.branches).map((b) => ({
@@ -1140,6 +1159,9 @@ export const api = {
         const auto = prefix || `${name.replace(/[^a-z]/gi, '').slice(0, 2).toUpperCase() || 'BR'}-`
         const nb: Branch = { id: uid('br_'), businessId: s.businessId, name, address: input.address ?? '', phone: cleanPhone(input.phone, biz(d).defaultCountry), isDefault: false, active: true, invoicePrefix: auto, nextInvoiceNumber: input.nextInvoiceNumber ?? 10001 }
         if (mine(d.branches).some((b) => (b.invoicePrefix ?? '').toUpperCase() === auto)) nb.invoicePrefix = `${auto.slice(0, -1)}${mine(d.branches).length + 1}-`
+        // A new branch starts with the main branch's bill format (as on the server).
+        const mainFormat = mine(d.branches).find((x) => x.isDefault)?.billFormat
+        if (mainFormat) nb.billFormat = structuredClone(mainFormat)
         d.branches.push(nb)
         audit(d, 'branch', nb.id, 'create', name)
         return clone(nb)

@@ -105,6 +105,9 @@ export const ShopDbStatus = { creating: 1, ready: 2, failed: 3, deleting: 4 } as
 export type ShopDbStatus = keyof typeof ShopDbStatus
 export const PointsKind = { earn: 1, redeem: 2, return: 3, cancel: 4, expire: 5, adjust: 6 } as const
 export type PointsKind = keyof typeof PointsKind
+/** Which bill a branch's bill format is for (bill_formats.kind). */
+export const BillKind = { thermal: 1, a4: 2, estimate: 3, challan: 4 } as const
+export type BillKind = keyof typeof BillKind
 
 type EnumMap = Record<string, number>
 /** Name → number for the database. Throws on an unknown name so bad input never reaches a table. */
