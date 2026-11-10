@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Product Audit Report</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#16202c;--ink2:#4a5868;--muted:#7a8696;--line:#e3e7ec;--brand:#2f5bea;
+--crit:#b42318;--critbg:#fde8e7;--high:#c4320a;--highbg:#fdeee6;--med:#9a6700;--medbg:#fff5d6;--low:#2f6f4f;--lowbg:#e6f4ec;--info:#475467;--infobg:#eef1f5;--ok:#1d7a46}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f141a;--card:#171e26;--ink:#e6ebf1;--ink2:#b3bfcc;--muted:#8a96a3;--line:#2a3440;--brand:#7c9cff;
+--crit:#ff8a80;--critbg:#3a1714;--high:#ffab7a;--highbg:#3a2114;--med:#f3c96b;--medbg:#352a10;--low:#7fd1a4;--lowbg:#13301f;--info:#b3bfcc;--infobg:#1f2731;--ok:#6fd49a}}
+:root[data-theme="dark"]{--bg:#0f141a;--card:#171e26;--ink:#e6ebf1;--ink2:#b3bfcc;--muted:#8a96a3;--line:#2a3440;--brand:#7c9cff;
+--crit:#ff8a80;--critbg:#3a1714;--high:#ffab7a;--highbg:#3a2114;--med:#f3c96b;--medbg:#352a10;--low:#7fd1a4;--lowbg:#13301f;--info:#b3bfcc;--infobg:#1f2731;--ok:#6fd49a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans Tamil",sans-serif}
+.wrap{max-width:1120px;margin:0 auto;padding:28px 16px 60px}
+h1{font-size:26px;margin:0 0 4px}h2{font-size:19px;margin:34px 0 12px;padding-top:6px;border-top:1px solid var(--line)}h3{font-size:15px;margin:18px 0 8px}
+.sub{color:var(--ink2);margin:0 0 18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:12px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.stat b{display:block;font-size:24px;font-variant-numeric:tabular-nums}.stat span{color:var(--ink2);font-size:13px}
+.tbl{width:100%;overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{background:var(--infobg);color:var(--ink2);font-weight:600;font-size:12.5px;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+code{font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--infobg);padding:1px 5px;border-radius:4px;word-break:break-word}
+.b{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.Critical{color:var(--crit);background:var(--critbg)}.High{color:var(--high);background:var(--highbg)}.Medium{color:var(--med);background:var(--medbg)}.Low{color:var(--low);background:var(--lowbg)}.Info{color:var(--info);background:var(--infobg)}
+.pass{color:var(--ok);font-weight:600}.fail{color:var(--high);font-weight:600}
+.filters{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 12px}
+.filters button{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:999px;padding:5px 12px;font:inherit;font-size:13px;cursor:pointer}
+.filters button.on{border-color:var(--brand);color:var(--brand);font-weight:600}
+.note{color:var(--ink2);font-size:13.5px}
+ul{margin:6px 0 6px 20px;padding:0}li{margin:3px 0}
+.verdict{border-left:4px solid var(--brand)}
+.toc{display:flex;flex-wrap:wrap;gap:6px 16px}
+.toc a{color:var(--brand);text-decoration:none;font-size:14px;white-space:nowrap}
+@media print{.filters,.toc{display:none}body{background:#fff}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Kadai Kalanjiyam POS — Full Product Audit</h1>
+<p class="sub">Functional, end-to-end, security, load and hosting-capacity review · 07 Nov 2026 · audit only (no code changed) · local test servers and the demo app</p>
+
+<div class="toc card">
+<a href="#summary">Summary</a><a href="#tests">Test results</a><a href="#findings">All findings</a><a href="#pages">Pages</a><a href="#flows">End-to-end flows</a><a href="#security">Security</a><a href="#load">Load</a><a href="#capacity">Hosting capacity</a><a href="#next">Fix order</a><a href="#scope">Scope</a>
+</div>
+
+<h2 id="summary">1. Summary</h2>
+<div class="grid">
+<div class="stat"><b>0</b><span>Critical</span></div>
+<div class="stat"><b>4</b><span>High</span></div>
+<div class="stat"><b>11</b><span>Medium</span></div>
+<div class="stat"><b>23</b><span>Low</span></div>
+<div class="stat"><b>6</b><span>Info / product decision</span></div>
+</div>
+<div class="card verdict">
+<p><b>Verdict.</b> The product works end to end. Billing, payments, purchases, the supplier ledger, branches, GST on bills, QR orders, the kitchen, tables, cancellations and returns all give consistent numbers on all three database setups. Duplicate bills and parallel bills are handled safely. Shop and branch data stayed isolated in every test. There are <b>no Critical security issues</b>.</p>
+<p><b>Fix before go-live:</b></p>
+<ul>
+<li>Return refunds on bills that mix GST rates (wrong refund and GST credit-note amounts).</li>
+<li>Kitchen and QR screens stop updating after 5 idle minutes.</li>
+<li>Low-privilege staff can read all customers and bills.</li>
+<li>The campaign permission gap.</li>
+<li>The <code>javascript:</code> QR link.</li>
+<li>Two small regressions from the shop-cache change.</li>
+</ul>
+<p><b>Biggest scale and cost lever:</b> a bill takes 27–45 database round trips, one after another. At about 10 ms each that is 0.3–0.5 s per bill, and it is also what sets the hosting bill.</p>
+</div>
+
+<h2 id="tests">2. Automated test results</h2>
+<div class="tbl"><table>
+<tr><th>Run</th><th class="num">Tests</th><th class="num">Pass</th><th class="num">Fail</th><th>Notes</th></tr>
+<tr><td>Full backend suite — SQLite (one DB per shop)</td><td class="num">190</td><td class="num">188</td><td class="num">2</td><td><code>discount.test</code> → finding <b>R-1</b>; <code>design-batch</code> round trips → <b>R-2</b></td></tr>
+<tr><td>Full backend suite — Turso over HTTP (hrana)</td><td class="num">200</td><td class="num">196</td><td class="num">1</td><td>Same <b>R-1</b>; 3 skipped by design</td></tr>
+<tr><td>Full backend suite — single DB (Catalyst Data Store mode)</td><td class="num">197</td><td class="num">171</td><td class="num">7*</td><td>*All 7 were temporary audit files deleted while the run was going. Every project test passed (19 skipped by design).</td></tr>
+<tr><td>End-to-end flows and API (helper)</td><td class="num">≈239</td><td class="num">≈209</td><td class="num">≈22</td><td>Same results on all 3 databases. Plus 3,348 garbage-argument calls over 180 handlers: 48 returned HTTP 500, in 20 handlers.</td></tr>
+<tr><td>Security (controlled, local)</td><td class="num">—</td><td colspan="2" class="num">0 C · 0 H · 3 M · 8 L</td><td>About 70 targeted IDOR calls plus fuzzing; 5,600 SQL-injection calls with no leak</td></tr>
+<tr><td>Pages in the browser (demo app)</td><td class="num">40+ routes</td><td class="num">all load</td><td class="num">0 errors</td><td>Desktop, tablet (768) and mobile (375). 3 roles checked. Real bill and QR order flows driven by clicks.</td></tr>
+</table></div>
+
+<h2 id="findings">3. All findings</h2>
+<div class="filters" id="f">
+<button class="on" data-s="all">All</button><button data-s="High">High</button><button data-s="Medium">Medium</button><button data-s="Low">Low</button><button data-s="Info">Info</button>
+</div>
+<div class="tbl"><table id="ft">
+<tr><th>ID</th><th>Sev.</th><th>Area</th><th>Problem → how to reproduce</th><th>Where</th><th>Recommended fix</th></tr>
+
+<tr data-s="High"><td>F-1</td><td><span class="b High">High</span></td><td>Returns / GST</td><td>On a bill with mixed GST rates, refunds are spread by one blended ratio. Example: Charger ₹100 @18% ×2 and Rice ₹50 @5% ×1, then return 1 Charger. Refund is <b>₹115.40, should be ₹118</b>. Return the Rice: <b>₹57.70, should be ₹52.50</b>. The GST report then rebuilds the credit-note tax differently (₹17.60 against the stored ₹15.40), so GSTR-1, 3B and the summary disagree.</td><td><code>backend/src/modules/returns.ts:95-115</code> <code>returns.create</code></td><td>Work out each returned line from the stored <code>order_items.taxable_minor</code> and <code>tax_minor</code>, pro-rata by qty, then spread the bill discount and round-off. Store the per-line tax on <code>sale_return_items</code>.</td></tr>
+<tr data-s="High"><td>F-2</td><td><span class="b High">High</span></td><td>Kitchen / QR orders screen</td><td>Background refresh stops after 5 minutes with no touch or keypress. A wall-mounted kitchen display or QR-orders screen that nobody touches stops showing new orders. Catalyst has no live hub, so polling is the only update path.</td><td><code>src/data/remote/sync.ts:109</code> (<code>IDLE_AFTER</code>)</td><td>Never go idle on the urgent display routes (<code>/kitchen</code>, <code>/qr-orders</code>, <code>/tables</code>), or use a longer idle time there.</td></tr>
+<tr data-s="High"><td>F-3</td><td><span class="b High">High</span></td><td>Performance</td><td>Each bill, kitchen order or QR order makes 27–29, 31–34 or 45 database round trips, one after another. At 10 ms per round trip that is 0.32 s, 0.40 s and 0.49 s. The shop's write lock is held for about 17 round trips, so one shop takes about 6 bills/s at most; 10 bills at once took 2.3 s.</td><td><code>modules/orders.ts</code> checkout, save, placeOrder → <code>core/context.ts</code> tx → <code>db/turso.ts</code></td><td>Read once, before the transaction. Run independent reads together (pipeline or Promise.all). Write the bill as one Hrana batch. Answer from <code>RETURNING</code> rows instead of reading back. Take the feed number from the change_log insert.</td></tr>
+<tr data-s="High"><td>F-4</td><td><span class="b High">High</span></td><td>Cloudflare path (prepared)</td><td>A QR order makes 45 sub-requests, against Cloudflare free's limit of 50. Checkout, kitchen order, QR order and login go over 10 ms CPU at p95.</td><td>same as F-3</td><td>Same fix as F-3. Required before Cloudflare is turned on.</td></tr>
+
+<tr data-s="Medium"><td>F-5</td><td><span class="b Medium">Medium</span></td><td>Permissions</td><td>A user with only Kitchen or only Billing permission can read every customer's phone, address and dues, and every bill. Any role can list all staff phones and emails.</td><td><code>modules/orders.ts:422</code> customers.list/one/history/points, orders.list/page/get; <code>returns.ts</code> list; <code>business.ts</code> users.list; <code>ops.ts</code> inventory.movements/batches</td><td>Require <code>customers.manage</code> or <code>billing.create</code> (a masked lookup for billing-only roles), <code>orders.view</code>, <code>users.manage</code> and <code>inventory.manage</code>.</td></tr>
+<tr data-s="Medium"><td>F-6</td><td><span class="b Medium">Medium</span></td><td>Campaigns</td><td>Any signed-in user, even kitchen staff, can rewrite the offer text sent to customers (phishing links) and mark campaigns as sent.</td><td><code>modules/whatsapp.ts:397</code> campaigns.update, <code>:402</code> markSent</td><td>Add <code>{ perm: 'customers.manage' }</code>.</td></tr>
+<tr data-s="Medium"><td>F-7</td><td><span class="b Medium">Medium</span></td><td>QR settings</td><td>The QR link address accepts <code>javascript:</code> or any site. It is used as an "Open" link and printed into every QR code.</td><td><code>modules/business.ts:147</code>; <code>src/pages/QrOrders.tsx:155</code></td><td>Accept only <code>https?://</code>, with a length limit and known keys only. Check it in the client too.</td></tr>
+<tr data-s="Medium"><td>F-8</td><td><span class="b Medium">Medium</span></td><td>Stock</td><td>Bill with Inventory off, then turn Inventory on and cancel or return the bill. Stock goes up even though it never went down (5 → 6 or 7).</td><td><code>orders.ts</code> orders.cancel; <code>returns.ts</code> restock</td><td>Restore only the quantities that stock_movements show were taken out for that order.</td></tr>
+<tr data-s="Medium"><td>F-9</td><td><span class="b Medium">Medium</span></td><td>Kitchen (KOT)</td><td>Lowering a quantity or removing an item from a running table order sends no change to the kitchen. The old ticket still shows the original quantity.</td><td><code>orders.ts</code> orders.save / kitchen tickets</td><td>Send a "reduced / cancelled" KOT line, or update the open ticket.</td></tr>
+<tr data-s="Medium"><td>F-10</td><td><span class="b Medium">Medium</span></td><td>Scale — platform DB</td><td>Public calls (QR tracking every 30 s, menu, placeOrder) read all feature flags from the platform DB with no cache. Each tracking poll also writes a rate-limit row.</td><td><code>app.ts:233</code>, <code>domain/session.ts:30</code> featureFlags; <code>domain/tracking.ts</code> rateLimit</td><td>Cache feature flags in memory under the 30 s global epoch. Keep read-only rate limits in memory per instance.</td></tr>
+<tr data-s="Medium"><td>F-11</td><td><span class="b Medium">Medium</span></td><td>Daily jobs</td><td>One cron run (15-minute limit on Catalyst) loops over every shop. Past about 20–30k shops a run won't finish; the lease does let the next run carry on.</td><td><code>modules/admin/renewals.ts:408</code> runDailyJobs</td><td>Hourly trigger, or one queue message per shop.</td></tr>
+<tr data-s="Medium"><td>F-12</td><td><span class="b Medium">Medium</span></td><td>Reports (branch)</td><td>A manager limited to one branch sees the whole business's receivables. Customer stats are also whole-business.</td><td><code>modules/reports.ts</code> reports.receivables</td><td>Filter by <code>branch_id IN c.scope()</code>.</td></tr>
+<tr data-s="Medium"><td>R-1</td><td><span class="b Medium">Medium</span></td><td>Regression (shop cache)</td><td><code>logChange</code> now needs <code>sqlMany</code>. A database handle without batching gets HTTP 500 on every write. All production Turso/SQLite handles have it; the test that turns it off fails.</td><td><code>backend/src/core/context.ts:252</code></td><td>When <code>sqlMany</code> is missing, run the statements one at a time. Two-line fix.</td></tr>
+<tr data-s="Medium"><td>F-13</td><td><span class="b Medium">Medium</span></td><td>Memory</td><td>Heap reached 160–170 MB with 100–200 requests in flight in one process, while the function has 128 MB. How many requests Catalyst puts in one instance is unverified.</td><td>Catalyst function config</td><td>Check concurrency per instance; consider 256 MB.</td></tr>
+<tr data-s="Medium"><td>F-14</td><td><span class="b Medium">Medium</span></td><td>Login</td><td>Login makes 15 round trips and 4 platform writes, at 9–12 ms CPU (p95 about 20 ms). That goes over the 10 ms target.</td><td><code>modules/auth.ts</code>, <code>domain/loginGuard.ts</code></td><td>Batch the reads and skip the <code>last_login_at</code> write when it is recent.</td></tr>
+
+<tr data-s="Low"><td>R-2</td><td><span class="b Low">Low</span></td><td>Regression (shop cache)</td><td>A new shop's first cache bump creates its <code>sync_epochs</code> row with <code>epoch=1</code>. Before the row existed the epoch read as 0, so every user's session reloads once.</td><td><code>backend/src/core/shopCache.ts</code> bumpSql / flag</td><td>Insert with <code>epoch = 0</code>.</td></tr>
+<tr data-s="Low"><td>F-15</td><td><span class="b Low">Low</span></td><td>Input validation</td><td>48 calls returned HTTP 500 instead of a message, in 20 handlers: <code>public.placeOrder</code> (public), branches.save, savePrinter, saveSetup, business.update, categories.save, customers.save, media.store, orders.checkout (items not a list), orders.list(null), orders.save, assignBarcodes, products.save, roles.save, suppliers.save, tables.save, users.save, admin.renew, admin.resetPassword, staff.markAll.</td><td>Each handler reads <code>input.x</code> before checking <code>input</code></td><td>Guard <code>input ?? {}</code>, check types, use a shared validator.</td></tr>
+<tr data-s="Low"><td>F-16</td><td><span class="b Low">Low</span></td><td>Products</td><td><code>products.page(1e308)</code> gives a 500 "datatype mismatch". saveDesign() and setDiscount(null) show raw JavaScript errors to the user.</td><td><code>modules/catalog.ts</code></td><td>Validate <code>after</code> as a safe integer; validate the input object.</td></tr>
+<tr data-s="Low"><td>F-17</td><td><span class="b Low">Low</span></td><td>Errors</td><td>Bad JSON or a body over 8 MB gets Express's HTML error page. Production hides the stack, but the client sees BAD_RESPONSE.</td><td><code>backend/src/app.ts</code> createApp</td><td>Add a JSON error handler after <code>express.json</code>.</td></tr>
+<tr data-s="Low"><td>F-18</td><td><span class="b Low">Low</span></td><td>Duplicates</td><td>Sending the same request id twice saves twice for expenses.save, products.save, inventory.adjust, staff.giveAdvance and customers.adjustPoints. The client only resends after BUSY.</td><td><code>ops.ts</code>, <code>catalog.ts</code>, <code>staff.ts</code>, <code>orders.ts</code></td><td>Use the <code>clientUuid</code> pattern (as bills and payments do).</td></tr>
+<tr data-s="Low"><td>F-19</td><td><span class="b Low">Low</span></td><td>Billing</td><td>A discount larger than the bill is capped silently: the total becomes ₹0 and stock is still taken out.</td><td><code>domain/orders.ts</code> writeOrder</td><td>Refuse with "Discount is more than the bill".</td></tr>
+<tr data-s="Low"><td>F-20</td><td><span class="b Low">Low</span></td><td>Inventory</td><td><code>inventory.adjust(p,'purchase',-5)</code> flips the sign silently and stock goes <b>up</b> 5.</td><td><code>modules/ops.ts</code> inventory.adjust</td><td>Refuse qty ≤ 0.</td></tr>
+<tr data-s="Low"><td>F-21</td><td><span class="b Low">Low</span></td><td>Public tracking</td><td>Anyone can look up today's counter bills by number (items, total, paid status; no name or phone). Limited to 10 a minute per IP.</td><td><code>orders.ts:664</code> public.track</td><td>Look up QR orders only, or require the phone number; add a per-shop daily cap.</td></tr>
+<tr data-s="Low"><td>F-22</td><td><span class="b Low">Low</span></td><td>Public menu</td><td>Exposes next invoice, order, KOT and credit-note numbers, which reveal sales volume, plus empty internal fields.</td><td><code>public.menu</code> business.billing</td><td>Send only the fields the menu needs.</td></tr>
+<tr data-s="Low"><td>F-23</td><td><span class="b Low">Low</span></td><td>Passwords</td><td><code>shop1234</code>, <code>lakshmi123</code> (username + digits) and reusing the old password are accepted. The common-password list has 21 entries. PBKDF2 at 20k is kept by the owner's choice.</td><td><code>backend/src/core/passwords.ts</code></td><td>Refuse passwords containing the name, username or phone; use a larger list; keep a short password history.</td></tr>
+<tr data-s="Low"><td>F-24</td><td><span class="b Low">Low</span></td><td>Uploads</td><td>Image checks look only at the first 2 bytes. A PNG or JPEG header followed by HTML is accepted, and the declared type is not matched against the bytes.</td><td><code>modules/catalog.ts:28</code> decodeImage</td><td>Check full signatures, match the type to the bytes, and set <code>nosniff</code> on the bucket.</td></tr>
+<tr data-s="Low"><td>F-25</td><td><span class="b Low">Low</span></td><td>Products</td><td>Any external <code>https://</code> image link is accepted. It is shown on the public QR menu and TV board, where it can act as a tracking pixel.</td><td><code>modules/catalog.ts:76</code></td><td>Store the image on import, or allow-list hosts.</td></tr>
+<tr data-s="Low"><td>F-26</td><td><span class="b Low">Low</span></td><td>Robustness</td><td>Enum lookups with <code>'constructor'</code> give a 500. The DB layer treats any object as an operator set, and <code>{}</code> matches all. Nothing leaked, but it is a hazard for future code.</td><td><code>db/turso.ts</code> condSql; <code>x in E.Enum</code> checks</td><td>Use <code>Object.hasOwn</code>; reject objects with unknown operators.</td></tr>
+<tr data-s="Low"><td>F-27</td><td><span class="b Low">Low</span></td><td>Headers</td><td>No CSP, nosniff, HSTS or frame protection. Tokens are kept in localStorage.</td><td><code>app.ts</code>, <code>index.html</code>, <code>src/data/remote/http.ts:43</code></td><td>Add security headers and a strict CSP.</td></tr>
+<tr data-s="Low"><td>F-28</td><td><span class="b Low">Low</span></td><td>QR customers</td><td>A QR guest using someone else's phone number gets the order linked to that customer's history.</td><td><code>orders.ts</code> placeOrder</td><td>Mark the link as unverified until staff confirm.</td></tr>
+<tr data-s="Low"><td>F-29</td><td><span class="b Low">Low</span></td><td>Returns</td><td>A branch-limited manager returning another branch's bill gets the misleading message "Only completed bills can be returned".</td><td><code>returns.ts</code> billOf</td><td>Say "Bill not found".</td></tr>
+<tr data-s="Low"><td>F-30</td><td><span class="b Low">Low</span></td><td>Onboarding page</td><td>An already set-up owner can open <code>/onboarding</code> and run setup again. It can remove categories and reset the bill layout and modules (needs settings.manage).</td><td><code>src/main.tsx:125,176</code>; <code>business.saveSetup</code></td><td>Send onboarded shops from /onboarding to the dashboard.</td></tr>
+<tr data-s="Low"><td>F-31</td><td><span class="b Low">Low</span></td><td>Expenses page</td><td>While loading, the page shows "₹0 spent / No expenses" instead of a loading state (seen on a slow first load).</td><td><code>src/pages/Expenses.tsx</code></td><td>Show a skeleton until the data arrives.</td></tr>
+<tr data-s="Low"><td>F-32</td><td><span class="b Low">Low</span></td><td>Daily specials TV</td><td>The TV board says "Specials will be announced soon" when none were saved today. This is correct; worth adding a hint on the Specials page.</td><td><code>SpecialsDisplay.tsx</code></td><td>Optional hint text.</td></tr>
+<tr data-s="Low"><td>F-33</td><td><span class="b Low">Low</span></td><td>Tracking (legacy)</td><td>Numeric order ids of QR orders are still accepted for 2 days (links from before tracking codes), so they can be counted through.</td><td><code>domain/tracking.ts</code> trackRef</td><td>Remove legacy ids once old links have expired.</td></tr>
+<tr data-s="Low"><td>F-34</td><td><span class="b Low">Low</span></td><td>Storage growth</td><td><code>audit_logs</code> is never pruned (about 2.3 rows per bill). Each bill is about 1.56 KB.</td><td>schema / daily job</td><td>Retention or archive policy.</td></tr>
+<tr data-s="Low"><td>F-35</td><td><span class="b Low">Low</span></td><td>Errors (admin)</td><td><code>/schema-check</code> and <code>/migrate</code> return raw error text. Only setup-key holders can call them.</td><td><code>app.ts:147,154</code></td><td>Log the detail and return a code.</td></tr>
+<tr data-s="Low"><td>F-36</td><td><span class="b Low">Low</span></td><td>Development errors</td><td>Development error pages include stack traces. Production sets <code>NODE_ENV=production</code>.</td><td><code>src/index.ts:9</code></td><td>Covered by the F-17 fix.</td></tr>
+
+<tr data-s="Info"><td>I-1</td><td><span class="b Info">Info</span></td><td>Stock</td><td>Counter bills can take stock below 0 (15 parallel bills on stock 5 → −10, with no lost updates). QR orders do check stock.</td><td><code>domain/stock.ts</code></td><td>Optional setting: block the sale when out of stock.</td></tr>
+<tr data-s="Info"><td>I-2</td><td><span class="b Info">Info</span></td><td>QR menu</td><td>The menu is still served when QR ordering is off; ordering is refused.</td><td><code>public.menu</code></td><td>Confirm this is intended.</td></tr>
+<tr data-s="Info"><td>I-3</td><td><span class="b Info">Info</span></td><td>Purchases</td><td>The same supplier bill number can be saved twice with different request ids.</td><td><code>purchases.ts</code></td><td>Optional duplicate warning.</td></tr>
+<tr data-s="Info"><td>I-4</td><td><span class="b Info">Info</span></td><td>Repository</td><td><code>DEMO_ACCOUNTS.md</code> is tracked in git (not opened). No other secrets were found in the code or history; <code>.env*</code> files are ignored.</td><td>repo root</td><td>If it has real passwords, rotate them and untrack the file.</td></tr>
+<tr data-s="Info"><td>I-5</td><td><span class="b Info">Info</span></td><td>Webhooks</td><td>There are none; WhatsApp sending is simulated. Add signature checks when the real Meta API is connected.</td><td><code>whatsapp.ts:42</code></td><td>—</td></tr>
+<tr data-s="Info"><td>I-6</td><td><span class="b Info">Info</span></td><td>QR qty</td><td>Quantity −5 or 0.001 is clamped to 1–50, not refused. This is safe.</td><td><code>placeOrder</code></td><td>—</td></tr>
+</table></div>
+
+<h2 id="pages">4. Page-by-page testing (browser)</h2>
+<p class="note">Demo app (same React UI) driven in the built-in browser. Shops: <i>Annai Fresh Vegetables</i> (retail) and <i>Food Corner</i> (restaurant). Roles: owner, cashier, waiter, kitchen staff. Each page was checked for console errors, crash screens, empty or wrong data, and sideways scrolling at 1024 px, 768 px and 375 px.</p>
+<div class="tbl"><table>
+<tr><th>Page</th><th>Loads</th><th>Mobile 375</th><th>Tablet 768</th><th>Notes</th></tr>
+<tr><td>Dashboard</td><td class="pass">Pass</td><td class="pass">Pass</td><td class="pass">Pass</td><td>Figures matched Orders, Payments and Reports before and after a real bill</td></tr>
+<tr><td>Billing / POS</td><td class="pass">Pass</td><td class="pass">Pass</td><td class="pass">Pass</td><td>Add-ons box, qty, 5% GST: ₹300 + ₹15 = ₹315 correct; Collect gave bill INV-11161</td></tr>
+<tr><td>Orders</td><td class="pass">Pass</td><td class="pass">Pass</td><td class="pass">Pass</td><td>New bill listed with the correct total and status</td></tr>
+<tr><td>Tables / Take order (waiter app)</td><td class="pass">Pass</td><td>—</td><td class="pass">Pass</td><td>Restaurant only; redirects correctly for retail</td></tr>
+<tr><td>Kitchen (KOT)</td><td class="pass">Pass</td><td>—</td><td class="pass">Pass</td><td>Start preparing → Mark ready worked; idle refresh issue <b>F-2</b></td></tr>
+<tr><td>QR orders</td><td class="pass">Pass</td><td>—</td><td class="pass">Pass</td><td>New order appeared; Accept created a KOT</td></tr>
+<tr><td>QR menu (customer)</td><td class="pass">Pass</td><td class="pass">Pass</td><td>—</td><td>Cart, taxes, "Enter your mobile number" validation, order placed (#2517)</td></tr>
+<tr><td>Customer tracking</td><td class="pass">Pass</td><td class="pass">Pass</td><td>—</td><td>Showed "Your order is ready" after the kitchen step; a wrong number gave a clear message</td></tr>
+<tr><td>Daily specials / TV display</td><td class="pass">Pass</td><td>—</td><td class="pass">Pass</td><td>See F-32</td></tr>
+<tr><td>Customer orders</td><td class="pass">Pass</td><td>—</td><td>—</td><td>Shows the explanation screen for shop types it doesn't apply to</td></tr>
+<tr><td>Products / Menu items</td><td class="pass">Pass</td><td class="pass">Pass</td><td>—</td><td>Empty save gives "Name is required"</td></tr>
+<tr><td>Inventory (stock, purchases, suppliers, expiry)</td><td class="pass">Pass</td><td class="pass">Pass</td><td>—</td><td>—</td></tr>
+<tr><td>Customers / Guests</td><td class="pass">Pass</td><td class="pass">Pass</td><td>—</td><td>—</td></tr>
+<tr><td>Payments</td><td class="pass">Pass</td><td class="pass">Pass</td><td>—</td><td>Cash ₹315 shown after the bill</td></tr>
+<tr><td>Expenses</td><td class="pass">Pass</td><td>Pass*</td><td>—</td><td>*One card about 12 px wider than the screen (clipped, no sideways scroll); F-31</td></tr>
+<tr><td>Reports (daily, sales, items, customers, inventory, GST returns)</td><td class="pass">Pass</td><td class="pass">Pass</td><td class="pass">Pass</td><td>Sales ₹315, tax ₹15 after the bill</td></tr>
+<tr><td>Staff</td><td class="pass">Pass</td><td class="pass">Pass</td><td>—</td><td>—</td></tr>
+<tr><td>Settings (all sections)</td><td class="pass">Pass</td><td class="pass">Pass</td><td class="pass">Pass</td><td>—</td></tr>
+<tr><td>Help &amp; support</td><td class="pass">Pass</td><td class="pass">Pass</td><td>—</td><td>—</td></tr>
+<tr><td>Onboarding</td><td class="pass">Pass</td><td>—</td><td>—</td><td>F-30</td></tr>
+<tr><td>Login / demo shops</td><td class="pass">Pass</td><td>—</td><td>—</td><td>—</td></tr>
+<tr><td>Unknown URL, bad QR shop id</td><td class="pass">Pass</td><td>—</td><td>—</td><td>Redirects to the dashboard / "Menu not available"</td></tr>
+<tr><td>Admin pages</td><td colspan="3">API only</td><td>The UI needs the demo admin password (not opened). Admin APIs were covered by the security and API tests.</td></tr>
+</table></div>
+<h3>Role restrictions in the UI</h3>
+<div class="tbl"><table>
+<tr><th>Role</th><th>Menu shown</th><th>Typed a restricted URL</th><th>Result</th></tr>
+<tr><td>Cashier (Ravi)</td><td>Billing, Tables, Take order, QR orders, Orders, Customers, Payments</td><td>/settings, /reports, /staff, /expenses, /inventory, /products, /specials, /dashboard</td><td class="pass">Sent to /billing</td></tr>
+<tr><td>Kitchen (Murugan)</td><td>Kitchen</td><td>/billing, /settings, /reports, /payments, /customers</td><td class="pass">Sent to /kitchen</td></tr>
+<tr><td>Waiter (Suresh)</td><td>Tables, Take order, QR orders, Orders</td><td>/billing, /settings, /reports, /payments, /customers, /kitchen</td><td class="pass">Sent to /tables</td></tr>
+</table></div>
+<p class="note">The UI hides these pages correctly, but the server still answers some of the reads for these roles (F-5). Server checks must match the UI.</p>
+
+<h2 id="flows">5. End-to-end flows (API, all 3 databases)</h2>
+<div class="tbl"><table>
+<tr><th>Flow</th><th>Result</th><th>What was checked</th></tr>
+<tr><td>Product → purchase → stock → bill → payment → reports</td><td class="pass">Pass</td><td>Stock 0→10→7 in the list and in branch_stock; sales 300, cost of goods 180, payments 300; branch report = summary</td></tr>
+<tr><td>Customer → bill → history</td><td class="pass">Pass</td><td>Stats the same in list and single view; collectDue clears the due; cancel updates stats</td></tr>
+<tr><td>Purchase → supplier payment → ledger</td><td class="pass">Pass</td><td>600→350→600 after voiding the payment; void refused once stock was sold</td></tr>
+<tr><td>Bill → stock → dashboard (UI too)</td><td class="pass">Pass</td><td>Same numbers on all pages</td></tr>
+<tr><td>QR scan → menu → order → accept → kitchen → bill → tracking</td><td class="pass">Pass</td><td>Stock only on billing; reject works; an order larger than stock refused (also tested in UI)</td></tr>
+<tr><td>Table → KOT → change order → final bill</td><td class="pass">Pass*</td><td>*Only new items go to the kitchen; lowered or removed items are not sent (F-9)</td></tr>
+<tr><td>Cancel / void → stock restored → reports</td><td class="pass">Pass*</td><td>*Except bills made while Inventory was off (F-8)</td></tr>
+<tr><td>Returns</td><td class="fail">Fail</td><td>Wrong amounts on mixed GST rates (F-1); single-rate returns correct</td></tr>
+<tr><td>Branch-wise billing → branch reports</td><td class="pass">Pass*</td><td>Separate stock and invoice series, no leak; *receivables not branch-filtered (F-12)</td></tr>
+<tr><td>GST billing → GST report</td><td class="pass">Pass*</td><td>Output tax, HSN and B2CS match; *credit notes on mixed-rate bills (F-1)</td></tr>
+<tr><td>Module on/off → dependent pages and APIs</td><td class="pass">Pass</td><td>MODULE_OFF for inventory, tables, specials, expenses, kitchen, staff, QR, GST</td></tr>
+<tr><td>Duplicate request id (bills, payments, purchases, returns, QR)</td><td class="pass">Pass</td><td>Saved once, parallel repeats included; F-18 lists the handlers not covered</td></tr>
+<tr><td>Parallel checkouts (15) / collectDue (5) / settle / cancel / qr.accept</td><td class="pass">Pass</td><td>Unique invoice numbers, no lost stock updates, each action done exactly once</td></tr>
+</table></div>
+
+<h2 id="security">6. Security — controls verified</h2>
+<div class="tbl"><table>
+<tr><th>Area</th><th>Result</th><th>Evidence</th></tr>
+<tr><td>Tokens and sessions</td><td class="pass">Pass</td><td>alg:none, HS512 swap, edited payload or signature, expired, user↔admin swap and proof-as-session all refused (401). Revoked on password change and on deactivation.</td></tr>
+<tr><td>Shop isolation / IDOR</td><td class="pass">Pass</td><td>Shop B used shop A's ids across about 20 entity types plus a fuzz of every handler. Nothing leaked and nothing changed, in both single-DB and per-shop modes.</td></tr>
+<tr><td>Branch isolation</td><td class="pass">Pass</td><td>Operator-object fuzz (<code>{ne:null}</code>, <code>{}</code>, <code>{in:[…]}</code>) gave no leak (but see F-26)</td></tr>
+<tr><td>SQL injection</td><td class="pass">Pass</td><td>5,600 payload calls: no SQL error, no leak; column names are whitelisted and LIKE is escaped</td></tr>
+<tr><td>XSS (frontend)</td><td class="pass">Pass*</td><td>No innerHTML or dangerouslySetInnerHTML; bills are text or canvas; *the QR link (F-7)</td></tr>
+<tr><td>CSRF / CORS</td><td class="pass">Pass</td><td>Bearer tokens, no cookies; evil, null, look-alike and http origins refused</td></tr>
+<tr><td>Price and billing tampering</td><td class="pass">Pass</td><td>Client prices, tax and totals ignored; negative, NaN or huge values and overpayment refused</td></tr>
+<tr><td>Admin endpoints</td><td class="pass">Pass</td><td>/migrate, /schema-check and /ip-check need the key; setup only once; cron key compared in constant time</td></tr>
+<tr><td>Signed media links</td><td class="pass">Pass</td><td>Forged, expired, traversal and svg all 404</td></tr>
+<tr><td>Rate limits</td><td class="pass">Pass</td><td>Login, password check, QR placing and tracking limits held</td></tr>
+<tr><td>Data exposure</td><td class="pass">Pass*</td><td>No password hashes or secrets in exports or admin views; cost hidden on the menu; *F-5, F-21, F-22</td></tr>
+<tr><td>Secrets</td><td class="pass">Pass</td><td>No hard-coded secrets; production refuses development fallbacks; .env ignored (see I-4)</td></tr>
+</table></div>
+
+<h2 id="load">7. Load and performance</h2>
+<p class="note">Local Apple M3, real app with fake Turso over HTTP, 10 shops. CPU is measured on the server. "RTT 10" adds 10 ms per database call to simulate Turso latency. Production Turso latency from Catalyst India is not verified.</p>
+<div class="tbl"><table>
+<tr><th>Handler</th><th class="num">CPU p50 (ms)</th><th class="num">CPU p95 (ms)</th><th class="num">DB round trips</th><th class="num">Wall @ RTT 10 (ms)</th><th>10 ms target</th></tr>
+<tr><td>sync.changes (poll)</td><td class="num">0.6</td><td class="num">1.2–2.5</td><td class="num">3</td><td class="num">36</td><td class="pass">OK</td></tr>
+<tr><td>public.menu (cached)</td><td class="num">0.6</td><td class="num">0.8–1.1</td><td class="num">2</td><td class="num">27</td><td class="pass">OK</td></tr>
+<tr><td>auth.boot</td><td class="num">2.1–2.4</td><td class="num">7.7–8.4</td><td class="num">12–14</td><td class="num">50</td><td class="pass">OK</td></tr>
+<tr><td>reports.summary (today)</td><td class="num">1.4–1.5</td><td class="num">4.5–5.2</td><td class="num">5</td><td class="num">57</td><td class="pass">OK</td></tr>
+<tr><td>public.order (tracking)</td><td class="num">1.5–2.2</td><td class="num">5–6</td><td class="num">5–10</td><td class="num">132</td><td class="pass">OK</td></tr>
+<tr><td>public.menu (rebuilt)</td><td class="num">4–4.8</td><td class="num">11–12</td><td class="num">22</td><td class="num">139</td><td class="fail">p95 over</td></tr>
+<tr><td>purchases.create</td><td class="num">3.4–3.9</td><td class="num">8.5–10</td><td class="num">17–20</td><td class="num">225</td><td>borderline</td></tr>
+<tr><td><b>orders.checkout</b> (4 items)</td><td class="num">7.6–9.1</td><td class="num">24–30</td><td class="num">27–29</td><td class="num">322</td><td class="fail">p95 over</td></tr>
+<tr><td><b>orders.save + KOT</b></td><td class="num">6.3–7.4</td><td class="num">14.6–21.7</td><td class="num">31–34</td><td class="num">403</td><td class="fail">p95 over</td></tr>
+<tr><td><b>public.placeOrder</b></td><td class="num">7.5–8.8</td><td class="num">24–65</td><td class="num">45</td><td class="num">491</td><td class="fail">p95 over</td></tr>
+<tr><td>auth.login</td><td class="num">7.8–10.9</td><td class="num">18.5–22.4</td><td class="num">15</td><td class="num">—</td><td class="fail">over</td></tr>
+</table></div>
+<h3>Concurrency (closed loop: 70% polls, 12% bills, 12% menu, 3% QR orders, 3% reports)</h3>
+<div class="tbl"><table>
+<tr><th>Setup</th><th class="num">Clients</th><th class="num">Req/s</th><th class="num">p50 / p95 / p99 ms</th><th class="num">Errors</th><th class="num">CPU/req</th></tr>
+<tr><td>hrana, RTT 0</td><td class="num">10</td><td class="num">485–552</td><td class="num">9 / 75 / 110</td><td class="num">0</td><td class="num">2.1 ms</td></tr>
+<tr><td>hrana, RTT 0</td><td class="num">100</td><td class="num">533–604</td><td class="num">120 / 550 / 760</td><td class="num">0</td><td class="num">2.0 ms</td></tr>
+<tr><td>hrana, RTT 10</td><td class="num">200</td><td class="num">289</td><td class="num">451 / 2038 / 2529</td><td class="num">0</td><td class="num">2.2 ms</td></tr>
+<tr><td>One shop, 10 bills at once, RTT 10</td><td class="num">10</td><td class="num">—</td><td class="num">p50 2,290 ms</td><td class="num">0</td><td class="num">—</td></tr>
+</table></div>
+<p class="note">A single Node process handles about 550–600 req/s with no errors. Average CPU per request is about 2 ms for the realistic mix; polling is cheap (0.6 ms). Bills are the costly part (F-3).</p>
+
+<h2 id="capacity">8. Free-tier hosting capacity</h2>
+<p class="note">Limits checked 07 Nov 2026 from the providers' pricing and limits pages (catalyst.zoho.com/pricing, docs.catalyst.zoho.com, turso.tech/pricing, developers.cloudflare.com). Usage is derived from the code: polls every 30/60 s only while the screen is used, bill and boot calls. <b>Retail profile:</b> 2 devices, 10 h a day, 100 bills a day, about 34.5k requests a month. <b>Restaurant profile:</b> 3 devices, 150 bills and 30 QR orders a day, about 106k requests a month.</p>
+<div class="tbl"><table>
+<tr><th>Free limit</th><th class="num">Retail shops</th><th class="num">Restaurant shops</th><th>Comment</th></tr>
+<tr><td>Catalyst functions — 25,000 GB-s/month</td><td class="num"><b>65–90</b></td><td class="num"><b>15–25</b></td><td>First limit reached (128 MB × wall time at 10–15 ms per DB call)</td></tr>
+<tr><td>Catalyst API Gateway — 100k requests/month (only if in the request path)</td><td class="num">2–3</td><td class="num">~1</td><td>Check whether your project routes through it</td></tr>
+<tr><td>Web hosting / Slate — 300k requests/month</td><td class="num">~500</td><td class="num">~20</td><td>Each QR customer's phone loads the app fresh</td></tr>
+<tr><td>Turso — 100 databases</td><td class="num">99</td><td class="num">99</td><td>One database per shop plus the platform database</td></tr>
+<tr><td>Turso — 10M rows written/month</td><td class="num">~180</td><td class="num">~55</td><td>Free plan blocks every database once it is exceeded</td></tr>
+<tr><td>Turso — 5 GB storage</td><td class="num">~89 after one year</td><td class="num">less</td><td>About 4.7 MB per shop per month</td></tr>
+<tr><td>Cloudflare Workers — 100k requests/day</td><td class="num">~87</td><td class="num">~28</td><td>Plus the 50-subrequest and 10 ms CPU risk (F-4)</td></tr>
+</table></div>
+<h3>Paid estimate (retail profile, rough monthly)</h3>
+<div class="tbl"><table>
+<tr><th>Shops</th><th>Catalyst</th><th>Turso</th><th class="num">Total / month</th><th>Notes</th></tr>
+<tr><td>1,000</td><td>about $5–11</td><td>Scaler $25 + storage</td><td class="num">about $30–60</td><td>Comfortable</td></tr>
+<tr><td>10,000</td><td>about $60</td><td>Scaler/Pro + write overage + storage</td><td class="num">about $700–1,000</td><td>About 100 concurrent calls at peak (limit 1,500)</td></tr>
+<tr><td>100,000</td><td>about $600</td><td>Pro + about 5.5B writes + about 5.6 TB storage</td><td class="num">about $7–8k</td><td>Catalyst concurrency and the platform DB become the limits; needs enterprise terms or the Cloudflare path with the F-3 fixes</td></tr>
+</table></div>
+<p class="note">Halving round trips (F-3) roughly halves Catalyst GB-s and the write-lock time. Caching feature flags (F-10) removes most platform reads and about 15% of restaurant writes.</p>
+
+<h2 id="next">9. Recommended fix order</h2>
+<div class="card">
+<ol>
+<li><b>Now (small):</b> R-1 and R-2 (shop-cache regressions); F-6 (campaign permission); F-7 (QR link); F-2 (kitchen idle refresh).</li>
+<li><b>Before go-live:</b> F-1 (returns / GST credit notes); F-5 and F-12 (server permissions and branch filter); F-8 and F-9 (stock on cancel, KOT reductions); F-15 to F-20 (validation, 500s, idempotency).</li>
+<li><b>For cost and scale:</b> F-3 (fewer round trips per bill, which also fixes F-4 and F-14); F-10 (cache feature flags); F-11 (daily jobs fan-out); F-13 (check function memory).</li>
+<li><b>Hardening:</b> F-21 to F-28, F-33 to F-35, and the Info items.</li>
+<li><b>Before deploy (pending from earlier):</b> deploy, <code>/migrate</code>, smoke test, <code>/ip-check</code> verification, set <code>PASSWORD_PEPPER</code> and <code>STRATUS_PRIVATE_BUCKET</code>, rotate the exposed secrets, and recreate existing shop databases (shop-cache schema).</li>
+</ol>
+</div>
+
+<h2 id="scope">10. Scope and limits of this audit</h2>
+<div class="card note">
+<ul>
+<li>No project code, schema, config or dependency was changed. Temporary test files were created and deleted (none remain).</li>
+<li>Everything ran locally: the demo app for the UI, and local test servers (SQLite, fake Turso over HTTP, single DB) for APIs, security and load. No real or deployed host was contacted.</li>
+<li>Not tested: real Turso and Catalyst latency; Catalyst instance concurrency; the Stratus bucket's headers; real WhatsApp, web push and payment providers; the admin UI pages (password not opened); past-day reports after back-dated changes; long rate-limit soak or DoS; whether a <code>javascript:</code> link actually runs in each browser.</li>
+<li>Load figures come from an M3 laptop while the full suite was running. p50 and averages are reliable; p95 is inflated.</li>
+</ul>
+</div>
+</div>
+<script>
+(function(){var f=document.getElementById('f'),rows=document.querySelectorAll('#ft tr[data-s]');
+f.addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;
+f.querySelectorAll('button').forEach(function(x){x.classList.toggle('on',x===b)});
+var s=b.getAttribute('data-s');rows.forEach(function(r){r.style.display=(s==='all'||r.getAttribute('data-s')===s)?'':'none'})});})();
+</script>
+</body>
+</html>

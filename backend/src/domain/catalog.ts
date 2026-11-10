@@ -6,7 +6,8 @@ import { ApiError } from '../core/errors'
 import type { Row, Value, Where } from '../db/types'
 import { cleanHsn, hsnError } from '@/core/gst'
 import { cleanDetails } from '@/core/stickers'
-import { E, fromMilli, fromMinor, fromMinorOrNull, json, nameOf, str, strOrNull, toMilli, toMinor } from './util'
+import { fromLightRow, INDEX_MAX_CHANGES, INDEX_PAGE, L, LF, type IndexPage, type LightRow } from '@/core/catalogIndex'
+import { E, fromMilli, fromMinor, fromMinorOrNull, json, nameOf, str, strOrNull, toMilli, toMinor, money } from './util'
 
 export async function mediaMap(c: Ctx, ids: (string | null | undefined)[]) {
   const want = [...new Set(ids.filter(Boolean) as string[])]
@@ -121,9 +122,10 @@ export function productColumns(p: Partial<Product>) {
   if (p.emoji !== undefined) out.emoji = (p.emoji || '').slice(0, 8) || null
   if (p.sku !== undefined) out.sku = (p.sku || '').trim().slice(0, 40) || null
   if (p.unit !== undefined) out.unit = (p.unit || 'pc').slice(0, 10)
-  if (p.price !== undefined) { if (!(p.price >= 0)) throw new ApiError('Enter a valid price'); out.price_minor = toMinor(p.price) }
-  if (p.mrp !== undefined) out.mrp_minor = p.mrp == null ? null : toMinor(p.mrp)
-  if (p.costPrice !== undefined) out.cost_minor = toMinor(p.costPrice ?? 0)
+  // Prices: real numbers from 0 to ₹1 crore (never negative).
+  if (p.price !== undefined) out.price_minor = toMinor(money(p.price, 'Price'))
+  if (p.mrp !== undefined) out.mrp_minor = p.mrp == null ? null : toMinor(money(p.mrp, 'MRP'))
+  if (p.costPrice !== undefined) out.cost_minor = toMinor(money(p.costPrice ?? 0, 'Cost price'))
   if (p.taxRateId !== undefined) out.tax_rate_id = p.taxRateId || null
   if (p.trackStock !== undefined) out.track_stock = !!p.trackStock
   if (p.trackExpiry !== undefined) out.track_batches = !!p.trackExpiry
@@ -143,6 +145,11 @@ export function productColumns(p: Partial<Product>) {
 /** Sync sizes, add-ons and contractor prices of one product to what the form sent. */
 export async function syncOptions(c: Ctx, productId: string, p: Partial<Product>) {
   const biz = c.businessId
+  // Sizes, add-ons and wholesale prices: lists, and every price a real number from 0 to ₹1 crore.
+  if ((p.variants != null && !Array.isArray(p.variants)) || (p.addOns != null && !Array.isArray(p.addOns))) throw new ApiError('Check the sizes and add-ons')
+  for (const v of p.variants ?? []) { money(v.price ?? 0, 'Size price'); if (v.wholesalePrice != null) money(v.wholesalePrice, 'Wholesale price') }
+  for (const a of p.addOns ?? []) money(a.price ?? 0, 'Add-on price')
+  if (p.wholesalePrice != null) money(p.wholesalePrice, 'Wholesale price')
   const list = p.wholesalePrice !== undefined || p.variants?.some((v) => v.wholesalePrice !== undefined) ? await wholesaleList(c) : null
   let variantIds = new Map<string, string>()
   if (p.variants) variantIds = await syncList(c, 'product_variants', productId, p.variants.map((v, i) => ({ id: v.id, data: { name: String(v.name ?? '').trim().slice(0, 60), price_minor: toMinor(v.price) ?? 0, sort_order: i, is_active: true } })))
@@ -183,3 +190,110 @@ export const withCostFor = <T extends { costPrice?: number }>(c: Ctx, list: T[])
 /** What a customer's phone may see of a product (QR menu, TV board): no cost or wholesale prices. */
 export const forCustomers = <T extends { costPrice?: number; wholesalePrice?: number | null }>(p: T): T => ({ ...p, costPrice: 0, wholesalePrice: null })
 
+
+// ---------- the light product index (large shops; src/core/catalogIndex.ts) ----------
+// One compact row per product, built from only the columns it needs, in ONE round trip per page (raw SQL, one
+// database per shop). Stock is the current view's branches; cost only for those who may see it (as products.page).
+const LIGHT_COLS = '"id", "name", "category_id", "sort_order", "price_minor", "mrp_minor", "unit", "tax_rate_id", "barcode", "sku", "is_active", "track_stock", "is_veg", "sends_to_kitchen", "kind", "track_batches", "low_stock_milli", "image_media_id", "cost_minor", "emoji", "hsn_code", "updated_at"'
+type Sql = { sql: string; args: (string | number | null)[] }
+
+/** The products to put in the index, chosen by `pick` (an id range, or a list of ids) → light rows + the database's time. */
+async function lightRowsWhere(c: Ctx, pick: { sql: string; args: (string | number | null)[] }, idsOf: 'range' | 'list', ids?: number[], limit?: number): Promise<{ rows: LightRow[]; dbNow: string; lastId: number | null }> {
+  const db = c.db
+  const biz = Number(c.businessId)
+  const list = await wholesaleList(c)
+  const branches = c.scope().map(Number)
+  const bIn = branches.map(() => '?').join(', ')
+  // The product rows decide the id range the other reads cover.
+  const [prows, nowRows] = await db.sqlReads!([
+    { sql: `SELECT ${LIGHT_COLS} FROM "products" WHERE "business_id" = ? AND ${pick.sql} ORDER BY "id" LIMIT ?`, args: [biz, ...pick.args, limit ?? 100000] },
+    { sql: `SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-2 seconds') AS now`, args: [] },
+  ])
+  const dbNow = String(nowRows[0]?.now ?? new Date(Date.now() - 2000).toISOString())
+  if (!prows.length) return { rows: [], dbNow, lastId: null }
+  const pids = prows.map((r) => Number(r.id))
+  const lo = pids[0], hi = pids[pids.length - 1]
+  // Extras for exactly these products: by id range for a page, by id list for changes.
+  const of = (col: string): Sql => (idsOf === 'range' ? { sql: `"${col}" >= ? AND "${col}" <= ?`, args: [lo, hi] } : { sql: `"${col}" IN (${(ids ?? pids).map(() => '?').join(', ')})`, args: ids ?? pids })
+  const st = of('product_id')
+  const reads: Sql[] = [
+    { sql: `SELECT "product_id", "branch_id", "qty_milli" FROM "branch_stock" WHERE "business_id" = ? AND ${st.sql}${branches.length ? ` AND "branch_id" IN (${bIn})` : ''}`, args: [biz, ...st.args, ...branches] },
+    { sql: `SELECT "product_id", COUNT(*) AS n, MIN("price_minor") AS lo FROM "product_variants" WHERE "business_id" = ? AND "is_active" = 1 AND ${st.sql} GROUP BY "product_id"`, args: [biz, ...st.args] },
+    { sql: `SELECT "product_id", COUNT(*) AS n FROM "product_addons" WHERE "business_id" = ? AND "is_active" = 1 AND ${st.sql} GROUP BY "product_id"`, args: [biz, ...st.args] },
+    // Next expiry in the view's branches (only products that track batches have any).
+    { sql: `SELECT "product_id", MIN("expiry_date") AS d FROM "stock_batches" WHERE "business_id" = ? AND "qty_left_milli" > 0 AND "expiry_date" IS NOT NULL AND ${st.sql}${branches.length ? ` AND "branch_id" IN (${bIn})` : ''} GROUP BY "product_id"`, args: [biz, ...st.args, ...branches] },
+  ]
+  if (list) reads.push({ sql: `SELECT "product_id", "price_minor" FROM "product_prices" WHERE "business_id" = ? AND "price_list_id" = ? AND "variant_id" IS NULL AND ${st.sql}`, args: [biz, Number(list.ROWID), ...st.args] })
+  const mediaIds = [...new Set(prows.map((r) => r.image_media_id).filter((x) => x != null).map(Number))]
+  if (mediaIds.length) reads.push({ sql: `SELECT "id", "bucket", "object_key", "thumb_key" FROM "media_files" WHERE "business_id" = ? AND "id" IN (${mediaIds.map(() => '?').join(', ')})`, args: [biz, ...mediaIds] })
+  const res = await db.sqlReads!(reads)
+  const [stockR, varR, addR, expR] = res
+  const priceR = list ? res[4] : []
+  const mediaR = mediaIds.length ? res[list ? 5 : 4] : []
+  const expiry = new Map(expR.map((x) => [String(x.product_id), x.d == null ? null : String(x.d)]))
+  const stock = new Map<string, Record<string, number>>()
+  for (const s of stockR) { const k = String(s.product_id); const m = stock.get(k) ?? {}; m[String(s.branch_id)] = Number(s.qty_milli) / 1000; stock.set(k, m) }
+  const vars = new Map(varR.map((v) => [String(v.product_id), { n: Number(v.n), lo: v.lo == null ? null : Number(v.lo) / 100 }]))
+  const adds = new Map(addR.map((a) => [String(a.product_id), Number(a.n)]))
+  const whole = new Map(priceR.map((p) => [String(p.product_id), Number(p.price_minor) / 100]))
+  const media = new Map(mediaR.map((m) => [String(m.id), { ROWID: String(m.id), bucket: m.bucket, object_key: m.object_key, thumb_key: m.thumb_key } as unknown as Row]))
+  const cost = canSeeCost(c)
+  const rows = prows.map((r): LightRow => {
+    const id = String(r.id)
+    const sb = stock.get(id) ?? {}
+    const total = Math.round(Object.values(sb).reduce((a, v) => a + v, 0) * 1000) / 1000
+    const img = r.image_media_id == null ? { imageUrl: null, thumbUrl: null } : imageOf(c, media.get(String(r.image_media_id)))
+    const v = vars.get(id)
+    const flags = (r.is_active ? LF.active : 0) | (r.track_stock ? LF.trackStock : 0) | (r.is_veg !== 0 ? LF.isVeg : 0) | (r.sends_to_kitchen !== 0 ? LF.sendToKitchen : 0)
+      | (r.track_batches ? LF.trackExpiry : 0) | (Number(r.kind) === E.ProductKind.service ? LF.service : 0)
+    return [id, String(r.name ?? ''), r.category_id == null ? null : String(r.category_id), Number(r.sort_order ?? 0), Number(r.price_minor ?? 0) / 100,
+      r.mrp_minor == null ? null : Number(r.mrp_minor) / 100, String(r.unit || 'pc'), r.tax_rate_id == null ? null : String(r.tax_rate_id), String(r.barcode ?? ''), String(r.sku ?? ''), flags,
+      total, sb, Number(r.low_stock_milli ?? 0) / 1000, img.thumbUrl, img.imageUrl, whole.get(id) ?? null, cost ? Number(r.cost_minor ?? 0) / 100 : 0,
+      String(r.emoji ?? ''), r.hsn_code == null ? null : String(r.hsn_code), v?.n ?? 0, adds.get(id) ?? 0, v?.lo ?? null, String(r.updated_at),
+      r.track_batches ? expiry.get(id) ?? null : null]
+  })
+  return { rows, dbNow, lastId: hi }
+}
+
+/** One page of the whole index, in id order: `after` = the last id of the previous page ('' for the first). */
+export async function lightIndexPage(c: Ctx, after: string | null): Promise<IndexPage> {
+  const from = /^\d{1,16}$/.test(String(after ?? '')) ? Number(after) : 0
+  const { rows, dbNow } = await lightRowsWhere(c, { sql: '"id" > ?', args: [from] }, 'range', undefined, INDEX_PAGE + 1)
+  const more = rows.length > INDEX_PAGE
+  const page = more ? rows.slice(0, INDEX_PAGE) : rows
+  return { rows: page, next: more ? page[page.length - 1][L.id] : null, at: dbNow }
+}
+
+/** These products (≤ 100) as light products, in the order of `ids` — Inventory's pages. */
+export async function lightProducts(c: Ctx, ids: number[]): Promise<Product[]> {
+  if (!ids.length) return []
+  const { rows } = await lightRowsWhere(c, { sql: `"id" IN (${ids.map(() => '?').join(', ')})`, args: ids }, 'list', ids)
+  const by = new Map(rows.map((r) => [r[L.id], r]))
+  return ids.flatMap((id) => { const r = by.get(String(id)); return r ? [fromLightRow(r, c.businessId)] : [] })
+}
+
+/** What changed since `since` (a time the server gave): products edited, or whose stock moved, in the view's branches. */
+export async function lightChangesSince(c: Ctx, since: string): Promise<IndexPage> {
+  const biz = Number(c.businessId)
+  const branches = c.scope().map(Number)
+  const [ed, mv] = await c.db.sqlReads!([
+    { sql: 'SELECT "id" FROM "products" WHERE "business_id" = ? AND "updated_at" > ? LIMIT ?', args: [biz, since, INDEX_MAX_CHANGES + 1] },
+    { sql: `SELECT DISTINCT "product_id" FROM "branch_stock" WHERE "business_id" = ? AND "updated_at" > ?${branches.length ? ` AND "branch_id" IN (${branches.map(() => '?').join(', ')})` : ''} LIMIT ?`, args: [biz, since, ...branches, INDEX_MAX_CHANGES + 1] },
+  ])
+  const ids = [...new Set([...ed.map((r) => Number(r.id)), ...mv.map((r) => Number(r.product_id))])].sort((a, b) => a - b)
+  if (ids.length > INDEX_MAX_CHANGES) return { rows: [], next: null, at: since, reset: true }
+  if (!ids.length) {
+    const [now] = await c.db.sql!(`SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-2 seconds') AS now`)
+    return { rows: [], next: null, at: String(now?.now ?? since) }
+  }
+  const all: LightRow[] = []
+  let at = since
+  // In parts, so a burst of changes never makes one answer big.
+  for (let i = 0; i < ids.length; i += INDEX_PAGE) {
+    const part = ids.slice(i, i + INDEX_PAGE)
+    const r = await lightRowsWhere(c, { sql: `"id" IN (${part.map(() => '?').join(', ')})`, args: part }, 'list', part)
+    all.push(...r.rows)
+    if (i === 0) at = r.dbNow
+  }
+  return { rows: all, next: null, at }
+}

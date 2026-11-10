@@ -1,3 +1,4 @@
+import { minVariantPrice, variantCount } from '@/core/catalogIndex'
 import clsx from 'clsx'
 import { Check, Download, Flame, ImageDown, Send, ShieldCheck } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
@@ -44,8 +45,8 @@ export function OfferShareDrawer({ onClose }: { onClose: () => void }) {
   const chosen = picked ?? sp.specials.map((p) => p.id)
   const autoDetails = () => sp.specials.filter((p) => chosen.includes(p.id)).map((p) => {
     const info = sp.info.get(p.id)!
-    const offer = info.special.specialPrice != null && !p.variants.length && info.special.specialPrice < info.originalPrice
-    const price = p.variants.length ? `from ${money(Math.min(...p.variants.map((v) => v.price)))}` : money(p.price)
+    const offer = info.special.specialPrice != null && !variantCount(p) && info.special.specialPrice < info.originalPrice
+    const price = variantCount(p) ? `from ${money(minVariantPrice(p) ?? p.price)}` : money(p.price)
     return `${p.name} ${price}${offer ? ` (was ${money(info.originalPrice)})` : ''}`
   }).join(', ')
   // WhatsApp fields are one line, so the offer is a comma-separated list. Kept in sync until edited.
@@ -68,8 +69,8 @@ export function OfferShareDrawer({ onClose }: { onClose: () => void }) {
   const makePoster = async () => {
     const items = sp.specials.filter((p) => chosen.includes(p.id)).map((p) => {
       const info = sp.info.get(p.id)!
-      const offer = info.special.specialPrice != null && !p.variants.length && info.special.specialPrice < info.originalPrice
-      return { name: p.name, emoji: p.emoji, imageUrl: p.imageUrl, tag: info.special.tag, price: p.variants.length ? `${money(Math.min(...p.variants.map((v) => v.price)))}+` : money(p.price), was: offer ? money(info.originalPrice) : undefined }
+      const offer = info.special.specialPrice != null && !variantCount(p) && info.special.specialPrice < info.originalPrice
+      return { name: p.name, emoji: p.emoji, imageUrl: p.imageUrl, tag: info.special.tag, price: variantCount(p) ? `${money(minVariantPrice(p) ?? p.price)}+` : money(p.price), was: offer ? money(info.originalPrice) : undefined }
     })
     const blob = await drawSpecialsPoster({ business: b.name, subtitle: b.subType, date: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }), items, footer: b.phone || b.address })
     if (poster) URL.revokeObjectURL(poster.url)

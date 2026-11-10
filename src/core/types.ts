@@ -1,5 +1,6 @@
 import type { FeatureFlags } from './features'
 import type { BillFormat } from './billFormat'
+import type { BranchScale } from './scale'
 import type { PlanPrice, PlanPrices } from './plans'
 import type { WaLang, WaTemplateKind } from './whatsapp'
 // Common core domain. Every entity uses generic names (Product, Customer, Order...)
@@ -214,6 +215,8 @@ export interface Branch {
   printer?: BranchPrinter
   /** How this branch's bills look (Settings → Printer and bill). Unset = the classic bill. */
   billFormat?: BillFormat
+  /** This branch's weighing scale setup. Unset = no scale (weights are typed as before). */
+  scale?: BranchScale
 }
 
 /** Printer setup per branch. Which physical printer a device is paired with stays on that device. */
@@ -352,6 +355,11 @@ export interface Product extends Audit {
   details?: ProductDetails | null
   /** HSN (goods) / SAC (services) code. Empty = the category's code, if any. */
   hsn?: string | null
+  /**
+   * Set only on a large shop's light index row (core/catalogIndex.ts): `variants` / `addOns` are then empty and these
+   * say how many there are — open the full product (api.products.full) before choosing them. Absent = a full product.
+   */
+  light?: { variants: number; addOns: number; minVariantPrice: number | null }
 }
 
 export interface ProductDetails {
@@ -725,6 +733,8 @@ export interface KitchenTicket extends Scoped, Audit {
   items: { name: string; qty: number; notes: string; isVeg: boolean }[]
   status: KotStatus
   statusAt: ISODate
+  /** Items taken off the order after the kitchen got them (quantities are negative): the kitchen stops making them. */
+  cancel?: boolean
 }
 
 // ---------- Tables ----------
@@ -768,6 +778,8 @@ export interface StockMovement extends Scoped, Audit {
   balanceAfter: number
   refId: ID | null
   note: string
+  /** The item's name and picture — only when asked for (Inventory → History has no product list). */
+  product?: Pick<Product, 'id' | 'name' | 'emoji' | 'unit' | 'imageUrl' | 'thumbUrl'> | null
 }
 
 // ---------- Batches & expiry ----------
@@ -835,7 +847,7 @@ export interface AdminAuditLog {
   adminId: ID
   adminName: string
   action: 'create' | 'update' | 'password' | 'renew' | 'branch_limit' | 'activate' | 'deactivate' | 'delete' | 'settings' | 'login'
-    | 'admin_create' | 'admin_update' | 'support_start' | 'support_end' | 'feature' | 'export' | 'reminder'
+    | 'admin_create' | 'admin_update' | 'support_start' | 'support_end' | 'feature' | 'export' | 'reminder' | 'ticket'
   businessId: ID | null
   businessName: string
   detail: string

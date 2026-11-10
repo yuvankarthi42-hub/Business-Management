@@ -2,7 +2,7 @@
 // ROWID / CREATEDTIME / MODIFIEDTIME and ids as strings; the tables use id / created_at / updated_at.
 // Every value is a query parameter (never put into the SQL text), and every column name is checked against
 // the schema before it is used.
-import { decryptSecret, encryptSecret } from '../core/crypto'
+import { decryptSecret, encryptSecret, secretPlace } from '../core/crypto'
 import { ApiError } from '../core/errors'
 import { column, columns } from './columns'
 import { type TableName, TABLES } from './schema.gen'
@@ -26,8 +26,12 @@ function tbl(table: TableName) {
   return q(table)
 }
 
+/** Tables with ENCRYPTED columns: the column whose value ties an encrypted value to its row (core/crypto.ts). */
+const ROW_KEY: Partial<Record<TableName, string>> = { secrets: 'uniq_key' }
+const rowKeyOf = (table: TableName, row: Record<string, unknown>) => { const k = ROW_KEY[table]; return k && row[k] != null ? String(row[k]) : null }
+
 /** JavaScript value → SQLite value, with the same checks as the Data Store (types, lengths). */
-export function toSql(table: TableName, name: string, v: Value | undefined): SqlValue {
+export function toSql(table: TableName, name: string, v: Value | undefined, rowKey: string | null = null): SqlValue {
   if (v === undefined || v === null) return null
   const c = column(table, name)
   switch (c.type) {
@@ -62,24 +66,26 @@ export function toSql(table: TableName, name: string, v: Value | undefined): Sql
       if (c.maxLength && s.length > c.maxLength) throw new ApiError(`Too long (${c.maxLength} characters at most)`)
       if ((c.type === 'text' || c.type === 'encrypted') && s.length > 10_000) throw new ApiError('Text is too long (10,000 characters at most)')
       // SQLite doesn't encrypt: ENCRYPTED columns are encrypted here (Catalyst does it by itself).
-      return c.type === 'encrypted' ? encryptSecret(s) : s
+      return c.type === 'encrypted' ? encryptSecret(s, secretPlace(table, name, rowKey)) : s
     }
   }
 }
-function fromSql(table: TableName, name: string, v: SqlValue): Value {
+function fromSql(table: TableName, name: string, v: SqlValue, rowKey: string | null = null): Value {
   if (v === null || v === undefined) return null
   const c = column(table, name)
   switch (c.type) {
     case 'int': case 'bigint': case 'double': return Number(v)
     case 'boolean': return v === 1 || v === '1'
     case 'fk': case 'id': return String(v)
-    case 'encrypted': return decryptSecret(String(v))
+    case 'encrypted': return decryptSecret(String(v), secretPlace(table, name, rowKey))
     default: return String(v)
   }
 }
 function rowFrom(table: TableName, columns_: string[], values: SqlValue[]): Row {
   const out: Record<string, Value> = {}
-  columns_.forEach((c, i) => { const name = SQL_SYSTEM[c] ?? c; out[name] = fromSql(table, name, values[i]) })
+  const k = ROW_KEY[table], ki = k ? columns_.indexOf(k) : -1
+  const rowKey = ki >= 0 && values[ki] != null ? String(values[ki]) : null
+  columns_.forEach((c, i) => { const name = SQL_SYSTEM[c] ?? c; out[name] = fromSql(table, name, values[i], rowKey) })
   return out as Row
 }
 
@@ -87,21 +93,25 @@ function rowFrom(table: TableName, columns_: string[], values: SqlValue[]): Row 
 function forInsert(table: TableName, row: NewRow): Record<string, SqlValue> {
   for (const k of Object.keys(row)) if (!['CREATEDTIME', 'MODIFIEDTIME', 'CREATORID', 'ROWID'].includes(k)) column(table, k)
   const out: Record<string, SqlValue> = {}
+  const rowKey = rowKeyOf(table, row as Record<string, unknown>)
   for (const c of columns(table)) {
     if (['ROWID', 'CREATORID', 'CREATEDTIME', 'MODIFIEDTIME'].includes(c.name)) continue
     let v = row[c.name]
     if (v === undefined && c.default !== undefined) v = c.type === 'boolean' ? c.default === 'true' : c.type === 'int' || c.type === 'bigint' ? Number(c.default) : c.default
-    out[c.name] = toSql(table, c.name, v as Value)
+    out[c.name] = toSql(table, c.name, v as Value, rowKey)
     if (c.mandatory && out[c.name] === null) throw new Error(`${table}.${c.name} is required`)
   }
   return out
 }
 function forUpdate(table: TableName, patch: NewRow): Record<string, SqlValue> {
   const out: Record<string, SqlValue> = {}
+  const rowKey = rowKeyOf(table, patch as Record<string, unknown>)
   for (const [k, v] of Object.entries(patch)) {
     if (v === undefined || ['ROWID', 'CREATEDTIME', 'MODIFIEDTIME', 'CREATORID'].includes(k)) continue
     const c = column(table, k)
-    out[k] = toSql(table, k, v)
+    // An encrypted value is tied to its row: the row's key must come with it (e.g. secrets.uniq_key).
+    if (c.type === 'encrypted' && ROW_KEY[table] && rowKey === null && v !== null) throw new Error(`${table}.${k}: send ${ROW_KEY[table]} with it`)
+    out[k] = toSql(table, k, v, rowKey)
     if (c.mandatory && out[k] === null) throw new Error(`${table}.${k} is required`)
   }
   return out
@@ -285,15 +295,18 @@ export class TursoDb implements Db {
     const stmts: Stmt[] = [], spans: { op: WriteOp; from: number; to: number }[] = []
     for (const op of ops) {
       const from = stmts.length
-      if ('insert' in op) { if (op.rows.length) stmts.push(...this.insertStmts(op.insert, op.rows)) }
+      if ('sql' in op) stmts.push({ sql: op.sql, args: op.args ?? [] })
+      else if ('insert' in op) { if (op.rows.length) stmts.push(...this.insertStmts(op.insert, op.rows)) }
       else stmts.push(...op.rows.map(({ ROWID, ...p }) => this.updateStmt(op.update, ROWID, p)))
       spans.push({ op, from, to: stmts.length })
     }
     if (!stmts.length) return ops.map(() => [])
-    const first = 'insert' in ops[0] ? ops[0].insert : ops[0].update
+    const named = ops.find((o) => !('sql' in o)) as Exclude<WriteOp, { sql: string }> | undefined
+    const first: TableName = named ? ('insert' in named ? named.insert : named.update) : 'businesses'
     const results = await this.execAll(first, stmts)
     return spans.map(({ op, from, to }) => {
       const part = results.slice(from, to)
+      if ('sql' in op) return part.flatMap((r) => r.rows.map((v) => Object.fromEntries(r.columns.map((c, i) => [c, v[i]])) as unknown as Row))
       if ('insert' in op) return part.flatMap((r) => r.rows.map((v) => rowFrom(op.insert, r.columns, v))).sort((a, b) => Number(a.ROWID) - Number(b.ROWID))
       return part.map((r, i) => {
         if (!r.rows.length) throw new Error(`${op.update} row ${op.rows[i].ROWID} not found`)

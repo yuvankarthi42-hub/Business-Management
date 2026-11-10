@@ -12,7 +12,7 @@ import type { NewRow, Row, Where } from '../db/types'
 import { DEFAULT_SEQ } from '../domain/business'
 import { clientUuid, selectIn } from '../domain/orders'
 import { moveStockMany, stockProduct } from '../domain/stock'
-import { audit, bizDay, code, cursorArg, E, fromMilli, fromMinor, isId, keyPart, nameOf, nextNumber, own, str, strOrNull, toBp, toMilli, toMinor, fromBp } from '../domain/util'
+import { audit, bizDay, code, cursorArg, E, fromMilli, fromMinor, isId, keyPart, nameOf, nextNumber, own, str, strOrNull, toBp, toMilli, toMinor, fromBp, money, mayUseBranch, assertBranch } from '../domain/util'
 import { cleanPhone } from './business'
 import { categoryIdFor } from './ops'
 
@@ -77,13 +77,12 @@ async function loadPurchases(c: Ctx, rows: Row[]) {
 }
 
 async function pay(c: Ctx, supplierId: string, input: { amount: number; method: SupplierPayMethod; date?: string; reference?: string; note?: string }, purchaseId: string | null, suffix: string) {
-  const amount = r2(Number(input.amount))
-  if (!(amount > 0)) throw new ApiError('Enter the amount paid')
+  const amount = money(input?.amount, 'Amount paid', { positive: true })
   if (!SUPPLIER_PAY_METHODS.includes(input.method)) throw new ApiError('Choose how it was paid')
   const day = input.date || bizDay(c)
   if (!DAY.test(day) || day > bizDay(c)) throw new ApiError('Enter a valid payment date')
   const uuid = clientUuid(c, suffix)
-  const again = await c.db.first('supplier_payments', { client_uuid: uuid })
+  const again = await c.db.first('supplier_payments', { business_id: c.businessId, client_uuid: uuid })
   if (again) return again
   const supplier = await c.db.get('suppliers', supplierId)
   const row = await c.db.insert('supplier_payments', {
@@ -132,10 +131,12 @@ define('suppliers', {
   /** Statement: opening balance, purchase bills and payments with the running balance. */
   ledger: userRead(async (c, supplierId: string) => {
     const s = await own(c, 'suppliers', supplierId, 'Supplier not found')
-    const [bills, pays] = await Promise.all([
+    const [allBills, allPays] = await Promise.all([
       c.db.select('purchases', { where: { business_id: c.businessId, supplier_id: s.ROWID }, orderBy: [['purchase_date', 'ASC']] }),
       c.db.select('supplier_payments', { where: { business_id: c.businessId, supplier_id: s.ROWID }, orderBy: [['paid_on', 'ASC']] }),
     ])
+    // Staff limited to some branches see those branches' bills and payments only.
+    const bills = allBills.filter((r) => mayUseBranch(c, r.branch_id)), pays = allPays.filter((r) => mayUseBranch(c, r.branch_id))
     const purchases = await loadPurchases(c, bills)
     const payments = pays.map(paymentFrom)
     const { rows, balance } = supplierLedger(fromMinor(s.opening_balance_minor), purchases, payments)
@@ -152,6 +153,7 @@ define('suppliers', {
 
   voidPayment: userWrite(async (c, paymentId: string, reason: string) => {
     const p = await own(c, 'supplier_payments', paymentId, 'Payment not found')
+    assertBranch(c, p.branch_id, 'Payment not found')
     if (p.is_voided) throw new ApiError('This payment is already voided')
     if (!String(reason ?? '').trim()) throw new ApiError('Enter a reason')
     await c.db.update('supplier_payments', p.ROWID, { is_voided: true, voided_at: c.now.toISOString(), note: `${str(p.note)} [void: ${String(reason).trim()}]`.trim().slice(0, 255) })
@@ -213,6 +215,7 @@ define('purchases', {
 
   get: userRead(async (c, id: string) => {
     const r = await own(c, 'purchases', id, 'Purchase not found')
+    assertBranch(c, r.branch_id, 'Purchase not found')
     return (await loadPurchases(c, [r]))[0]
   }, perm),
 
@@ -225,6 +228,7 @@ define('purchases', {
     const again = await c.db.first('purchases', { business_id: c.businessId, client_uuid: uuid })
     if (again) return (await loadPurchases(c, [again]))[0]
     const supplier = await own(c, 'suppliers', input?.supplierId, 'Choose the supplier')
+    if (input.lines != null && !Array.isArray(input.lines)) throw new ApiError('Add at least one item')
     const ids = [...new Set((input.lines ?? []).map((l) => String(l.productId)).filter(isId))]
     const prows = await selectIn(c, 'products', 'ROWID', ids, { business_id: c.businessId })
     const products = new Map(prows.map((p) => [p.ROWID, { name: str(p.name), unit: str(p.unit) || 'pc', trackExpiry: !!p.track_batches, hsn: str(p.hsn_code) }]))
@@ -280,6 +284,7 @@ define('purchases', {
    */
   void: userWrite(async (c, id: string, reason: string) => {
     const r = await own(c, 'purchases', id, 'Purchase not found')
+    assertBranch(c, r.branch_id, 'Purchase not found')
     if (Number(r.status) === E.PurchaseStatus.void) throw new ApiError('This purchase is already voided')
     if (!String(reason ?? '').trim()) throw new ApiError('Enter a reason')
     const items = await c.db.select('purchase_items', { where: { purchase_id: r.ROWID } })

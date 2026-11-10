@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useApp, useData, useNow } from '@/app/AppContext'
 import { QrImage } from '@/components/Qr'
 import { Badge, Button, Card, Checkbox, EmptyState, Field, Input, PageHeader, Segmented, Toggle, useAction } from '@/components/ui'
-import { ORDER_TYPE_LABEL, qrSettings } from '@/core/config'
+import { ORDER_TYPE_LABEL, QR_BASE_URL_MAX, qrBaseUrlOk, qrSettings } from '@/core/config'
 import { itemLabel } from '@/core/orderItem'
 import { lineTotal } from '@/core/pricing'
 import type { Order, OrderType, QrSettings } from '@/core/types'
@@ -191,7 +191,11 @@ function SettingsView() {
         <Field required label="Public address used in QR codes" hint="The address phones use to reach this app — your network URL now, your domain after going live.">
           <Input value={v.baseUrl} onChange={(e) => setV({ ...v, baseUrl: e.target.value.trim() })} placeholder="http://10.89.33.221:5173" />
         </Field>
-        <div className="flex justify-end"><Button disabled={!dirty} onClick={() => run(() => api.business.update({ qr: v }), 'QR settings saved')}>Save</Button></div>
+        <div className="flex justify-end"><Button disabled={!dirty} onClick={() => run(async () => {
+          // Only a web address (the server checks it too): it goes into every printed QR code.
+          if (!qrBaseUrlOk(v.baseUrl)) throw new Error(`Enter a web address starting with http:// or https:// (${QR_BASE_URL_MAX} characters at most)`)
+          await api.business.update({ qr: v })
+        }, 'QR settings saved')}>Save</Button></div>
       </div>
     </Card>
   )

@@ -14,6 +14,9 @@ import { LanguageToggle } from '@/i18n/LanguagePicker'
 const roleIcon: Record<string, string> = { Owner: '👑', Manager: '🧑‍💼', Cashier: '💳', Waiter: '🧑‍🍳', 'Kitchen Staff': '🍳' }
 
 /** Customers sign in with the username and password the product admin gave them (no public sign-up). */
+/** Demo tiles whose shop type name doesn't say enough on its own. */
+const DEMO_LABEL: Record<string, string> = { biz_smart_mobiles: 'Mobile shop' }
+
 export default function Login() {
   const nav = useNavigate()
   const loc = useLocation()
@@ -129,7 +132,7 @@ export default function Login() {
                   <button key={g.business.id} onClick={() => setDemoBiz(g.business.id)}
                     className={`rounded-lg border px-2 py-2 text-center transition ${g.business.id === currentDemo?.business.id ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-slate-200 text-slate-600 hover:border-slate-300'}`}>
                     <span className="block text-lg">{g.business.emoji}</span>
-                    <span className="block truncate text-[11px] font-semibold">{g.business.subType}</span>
+                    <span className="block truncate text-[11px] font-semibold">{DEMO_LABEL[g.business.id] ?? g.business.subType}</span>
                   </button>
                 ))}
               </div>

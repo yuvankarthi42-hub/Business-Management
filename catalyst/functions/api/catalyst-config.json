@@ -1,7 +1,7 @@
 {
   "deployment": {
     "name": "api",
-    "stack": "node18",
+    "stack": "node24",
     "type": "advancedio",
     "env_variables": {}
   },

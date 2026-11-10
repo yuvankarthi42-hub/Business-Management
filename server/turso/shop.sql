@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS "branches" (
   "invoice_prefix"           TEXT,  -- max 10 · own bill series, e.g. 'AD-'; NULL = business series
   "printer_json"             TEXT,  -- receipt printer setup: {transport, paper, mode, autoPrint, copies, cut, drawer, baudRate}
   "row_version"              INTEGER  NOT NULL DEFAULT 1,
+  "scale_json"               TEXT,  -- weighing scale setup: {enabled, brand, baudRate, autoAdd, minGrams, roundGrams}
   "created_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),  -- CREATEDTIME
   "updated_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))  -- MODIFIEDTIME
 ) STRICT;
@@ -170,6 +171,23 @@ CREATE TRIGGER IF NOT EXISTS "whatsapp_templates_updated_at" AFTER UPDATE ON "wh
 BEGIN UPDATE "whatsapp_templates" SET "updated_at" = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) WHERE "id" = NEW."id"; END;
 
 CREATE INDEX IF NOT EXISTS "ix_whatsapp_templates_business_id" ON "whatsapp_templates" ("business_id");
+
+-- Writes saved once per request (K-7): the answer of a stock change, expense, new product, staff advance or points
+-- change, so the same request sent again gets it back instead of saving twice. Older than 2 days: removed daily.
+CREATE TABLE IF NOT EXISTS "request_log" (
+  "id"                       INTEGER  PRIMARY KEY AUTOINCREMENT,  -- ROWID
+  "business_id"              INTEGER  NOT NULL,  -- → businesses.id in the platform database (checked by the API)
+  "uniq_key"                 TEXT     NOT NULL UNIQUE,  -- max 80 · '<business_id>:<request id>'
+  "name"                     TEXT     NOT NULL,  -- max 60 · the action, e.g. inventory.adjust
+  "answer_json"              TEXT,  -- its answer as JSON (NULL: too big to keep)
+  "created_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),  -- CREATEDTIME
+  "updated_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))  -- MODIFIEDTIME
+) STRICT;
+
+CREATE TRIGGER IF NOT EXISTS "request_log_updated_at" AFTER UPDATE ON "request_log" FOR EACH ROW WHEN NEW."updated_at" = OLD."updated_at"
+BEGIN UPDATE "request_log" SET "updated_at" = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) WHERE "id" = NEW."id"; END;
+
+CREATE INDEX IF NOT EXISTS "ix_request_log_business_id_created_at" ON "request_log" ("business_id", "created_at");
 
 -- Number series (bill, order, KOT, credit note, ticket …). Read-and-increment with row_version check.
 CREATE TABLE IF NOT EXISTS "sequences" (
@@ -502,6 +520,7 @@ CREATE TABLE IF NOT EXISTS "orders" (
   "points_balance_after"     INTEGER,  -- customer's points after this bill (printed)
   "updated_by"               INTEGER  REFERENCES "users"("id") ON DELETE SET NULL,
   "row_version"              INTEGER  NOT NULL DEFAULT 1,
+  "track_code"               TEXT,  -- max 32 · QR orders: random code in the customer's tracking link (never the row id)
   "created_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),  -- CREATEDTIME
   "updated_at"               TEXT     NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))  -- MODIFIEDTIME
 ) STRICT;
@@ -514,6 +533,7 @@ CREATE INDEX IF NOT EXISTS "ix_orders_business_id_billed_at" ON "orders" ("busin
 CREATE INDEX IF NOT EXISTS "ix_orders_business_id_customer_id_status" ON "orders" ("business_id", "customer_id", "status");
 CREATE INDEX IF NOT EXISTS "ix_orders_business_id_table_id_status" ON "orders" ("business_id", "table_id", "status");
 CREATE INDEX IF NOT EXISTS "ix_orders_business_id_order_number" ON "orders" ("business_id", "order_number");
+CREATE INDEX IF NOT EXISTS "ix_orders_business_id_track_code" ON "orders" ("business_id", "track_code");
 CREATE INDEX IF NOT EXISTS "ix_orders_branch_id" ON "orders" ("branch_id");
 CREATE INDEX IF NOT EXISTS "ix_orders_device_id" ON "orders" ("device_id");
 CREATE INDEX IF NOT EXISTS "ix_orders_table_id" ON "orders" ("table_id");
@@ -827,6 +847,7 @@ CREATE TRIGGER IF NOT EXISTS "products_updated_at" AFTER UPDATE ON "products" FO
 BEGIN UPDATE "products" SET "updated_at" = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) WHERE "id" = NEW."id"; END;
 
 CREATE INDEX IF NOT EXISTS "ix_products_business_id_is_active" ON "products" ("business_id", "is_active");
+CREATE INDEX IF NOT EXISTS "ix_products_business_id_updated_at" ON "products" ("business_id", "updated_at");
 CREATE INDEX IF NOT EXISTS "ix_products_category_id" ON "products" ("category_id");
 CREATE INDEX IF NOT EXISTS "ix_products_tax_rate_id" ON "products" ("tax_rate_id");
 CREATE INDEX IF NOT EXISTS "ix_products_image_media_id" ON "products" ("image_media_id");
@@ -1024,7 +1045,7 @@ CREATE TABLE IF NOT EXISTS "branch_stock" (
 CREATE TRIGGER IF NOT EXISTS "branch_stock_updated_at" AFTER UPDATE ON "branch_stock" FOR EACH ROW WHEN NEW."updated_at" = OLD."updated_at"
 BEGIN UPDATE "branch_stock" SET "updated_at" = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) WHERE "id" = NEW."id"; END;
 
-CREATE INDEX IF NOT EXISTS "ix_branch_stock_business_id" ON "branch_stock" ("business_id");
+CREATE INDEX IF NOT EXISTS "ix_branch_stock_business_id_updated_at" ON "branch_stock" ("business_id", "updated_at");
 CREATE INDEX IF NOT EXISTS "ix_branch_stock_branch_id" ON "branch_stock" ("branch_id");
 CREATE INDEX IF NOT EXISTS "ix_branch_stock_product_id" ON "branch_stock" ("product_id");
 
@@ -1179,6 +1200,7 @@ BEGIN UPDATE "stock_movements" SET "updated_at" = (strftime('%Y-%m-%dT%H:%M:%fZ'
 
 CREATE INDEX IF NOT EXISTS "ix_stock_movements_business_id_product_id_created_at" ON "stock_movements" ("business_id", "product_id", "created_at");
 CREATE INDEX IF NOT EXISTS "ix_stock_movements_business_id_branch_id_created_at" ON "stock_movements" ("business_id", "branch_id", "created_at");
+CREATE INDEX IF NOT EXISTS "ix_stock_movements_business_id_ref_type_ref_id" ON "stock_movements" ("business_id", "ref_type", "ref_id");
 CREATE INDEX IF NOT EXISTS "ix_stock_movements_branch_id" ON "stock_movements" ("branch_id");
 CREATE INDEX IF NOT EXISTS "ix_stock_movements_product_id" ON "stock_movements" ("product_id");
 CREATE INDEX IF NOT EXISTS "ix_stock_movements_batch_id" ON "stock_movements" ("batch_id");

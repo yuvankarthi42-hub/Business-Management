@@ -1,6 +1,7 @@
 // Business ⇄ tables: businesses + business_settings (JSON) + tax_rates + sequences + price_lists; branches + bill_formats.
 // Produces exactly the `Business` / `Branch` shapes the app already uses (src/core/types.ts).
 import { cleanBillFormat, type BillFormat } from '@/core/billFormat'
+import { cleanScale } from '@/core/scale'
 import type { BillingSettings, Branch, BranchPrinter, Business, LoyaltySettings, ModuleConfig, QrSettings, StickerSettings, Terminology } from '@/core/types'
 import { DEFAULT_TERMS, modulesFor, templateFor } from '@/core/config'
 import type { Db, Row } from '../db/types'
@@ -24,7 +25,11 @@ export const DEFAULT_SEQ: Record<SeqName, { prefix: string; start: number }> = {
   credit_note: { prefix: 'CN-', start: 1001 }, purchase: { prefix: 'PUR-', start: 1 },
 }
 
-export interface BusinessBundle { business: Business; branches: Branch[] }
+export interface BusinessBundle {
+  business: Business; branches: Branch[]
+  /** Product support reset this user's password (server only — never sent to the app): { userId, at }. */
+  supportReset?: { userId: string; at: string } | null
+}
 
 /** Loads one business with everything the app keeps on `Business` (≈ 10–20 rows). */
 export async function loadBusiness(c: { platform: Db; db: Db; files?: Files }, businessId: string): Promise<BusinessBundle | null> {
@@ -40,7 +45,9 @@ export async function loadBusiness(c: { platform: Db; db: Db; files?: Files }, b
     db.select('bill_formats', { where: { business_id: businessId, kind: E.BillKind.thermal } }),
   ])
   const business = businessFrom(row, settings, taxes, seqs, lists, c.files)
-  return { business, branches: branches.map((b) => branchFrom(b, seqs, formats, business)) }
+  const sr = settings.find((s) => s.setting_key === 'supportReset')
+  const supportReset = sr ? json<{ userId?: string; at?: string } | null>(sr.value_json, null) : null
+  return { business, branches: branches.map((b) => branchFrom(b, seqs, formats, business)), supportReset: supportReset?.userId ? { userId: String(supportReset.userId), at: String(supportReset.at ?? '') } : null }
 }
 
 export function businessFrom(row: Row, settings: Row[], taxes: Row[], seqs: Row[], lists: Row[], files?: Files): Business {
@@ -95,6 +102,7 @@ export function branchFrom(b: Row, seqs: Row[], formats: Row[] = [], shop?: Pick
     isDefault: !!b.is_default, active: b.is_active !== false,
     ...(b.invoice_prefix ? { invoicePrefix: str(b.invoice_prefix), nextInvoiceNumber: Number(own?.next_value ?? 10001) } : {}),
     ...(printer ? { printer } : {}),
+    ...(b.scale_json ? { scale: cleanScale(json<unknown>(b.scale_json, null)) } : {}),
     // Completed from the shop type's default, so a format saved before a new option existed still works.
     ...(fmt ? { billFormat: cleanBillFormat(json<unknown>(fmt.format_json, null), shop) } : {}),
   }

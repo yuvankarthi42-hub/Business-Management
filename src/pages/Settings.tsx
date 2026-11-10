@@ -11,6 +11,7 @@ import { api, BACKEND } from '@/data'
 import { fmtDateTime, uid } from '@/lib/format'
 import { PhoneInput } from '@/components/PhoneInput'
 import { PrinterAndBill } from '@/features/printing/BillFormatSettings'
+import { sellsByWeight } from '@/features/scale/ScaleSettings'
 import { StickerSettingsPanel } from '@/features/Labels'
 import { LoyaltySettingsPanel } from '@/features/loyalty/Points'
 import { BRAND } from '@/core/brand'
@@ -31,7 +32,7 @@ export default function Settings() {
     { key: 'billing', label: 'Billing & Tax', icon: Receipt, show: can('settings.manage') },
     { key: 'loyalty', label: 'Loyalty points', icon: Star, show: can('settings.manage') && mod('customers') },
     { key: 'stickers', label: 'Price stickers', icon: Tag, show: can('settings.manage') && !!me && (usesRetailPos(me.business) || /bakery|sweet/i.test(me.business.subType)) },
-    { key: 'printer', label: 'Printer and bill', icon: Printer, show: can('billing.create') || can('settings.manage') || can('bill.format') },
+    { key: 'printer', label: !!me && sellsByWeight(me.business) ? 'Printer, scale and bill' : 'Printer and bill', icon: Printer, show: can('billing.create') || can('settings.manage') || can('bill.format') },
     { key: 'integrations', label: 'Integrations', icon: Plug, show: can('settings.manage') && !!me?.features.whatsapp },
     { key: 'terms', label: 'Terminology', icon: Languages, show: can('settings.manage') },
     { key: 'modules', label: 'Modules', icon: LayoutGrid, show: can('settings.manage') },

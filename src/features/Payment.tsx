@@ -35,7 +35,9 @@ export function PaymentModal({ open, onClose, total, customerId, onCustomerChang
   const [busy, setBusy] = useState(false)
   // Credit note (exchange / earlier return) used as payment, with the rest paid another way.
   const [cnNo, setCnNo] = useState('')
-  const [cn, setCn] = useState<{ number: string; remaining: number } | null>(null)
+  const [cn, setCn] = useState<{ number: string; remaining: number; customerId: string | null } | null>(null)
+  // A credit note with no customer: the staff checked the slip (the server asks for this).
+  const [cnChecked, setCnChecked] = useState(false)
   const [cnError, setCnError] = useState('')
   const [cnRest, setCnRest] = useState<PaymentMethod>('cash')
 
@@ -44,15 +46,15 @@ export function PaymentModal({ open, onClose, total, customerId, onCustomerChang
   const linkedCn = params.get('cn')
   useEffect(() => {
     if (!open) return
-    setTendered(''); setPaidNow(''); setSplit({}); setCn(null); setCnError('')
+    setTendered(''); setPaidNow(''); setSplit({}); setCn(null); setCnError(''); setCnChecked(false)
     if (linkedCn) { setMode('credit_note'); setCnNo(linkedCn); void findCn(linkedCn) } else { setMode('cash'); setCnNo('') }
   }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
   const findCn = async (no = cnNo) => {
-    setCnError(''); setCn(null)
+    setCnError(''); setCn(null); setCnChecked(false)
     try {
       const r = await api.returns.creditNote(no)
       if (r.creditRemaining <= 0) setCnError(`${r.number} is already used`)
-      else setCn({ number: r.number, remaining: r.creditRemaining })
+      else setCn({ number: r.number, remaining: r.creditRemaining, customerId: r.customerId ?? null })
     } catch (e) { setCnError((e as Error).message) }
   }
 
@@ -64,14 +66,18 @@ export function PaymentModal({ open, onClose, total, customerId, onCustomerChang
   else if (mode === 'credit_note') {
     const use = cn ? r2(Math.min(cn.remaining, total)) : 0
     const rest = r2(total - use)
-    pays = [...(use ? [{ method: 'credit_note' as const, amount: use, reference: cn!.number }] : []), ...(rest > 0 && cnRest !== 'credit' ? [{ method: cnRest, amount: rest }] : [])]
+    pays = [...(use ? [{ method: 'credit_note' as const, amount: use, reference: cn!.number, ...(cn && !cn.customerId ? { confirmed: cnChecked } : {}) }] : []), ...(rest > 0 && cnRest !== 'credit' ? [{ method: cnRest, amount: rest }] : [])]
     balance = rest > 0 && cnRest === 'credit' ? rest : 0
   }
   else pays = [{ method: mode, amount: total }]
   const change = mode === 'cash' && Number(tendered) > total ? r2(Number(tendered) - total) : 0
   const overpaid = mode === 'split' && splitSum > total
   const needCustomer = balance > 0 && !customerId
-  const error = mode === 'credit_note' && !cn ? 'Find the credit note first' : overpaid ? 'Split amounts are more than the bill' : needCustomer ? `Select a ${t('customer').toLowerCase()} to keep ${money(balance)} as credit` : ''
+  const cnOther = mode === 'credit_note' && !!cn?.customerId && cn.customerId !== customerId
+  const cnNeedsCheck = mode === 'credit_note' && !!cn && !cn.customerId && !cnChecked
+  const error = mode === 'credit_note' && !cn ? 'Find the credit note first'
+    : cnOther ? `This credit note belongs to another ${t('customer').toLowerCase()} — select them on the bill`
+    : cnNeedsCheck ? 'Check the credit note slip and tick the box' : overpaid ? 'Split amounts are more than the bill' : needCustomer ? `Select a ${t('customer').toLowerCase()} to keep ${money(balance)} as credit` : ''
 
   const confirm = async () => {
     if (error || busy) return
@@ -159,6 +165,18 @@ export function PaymentModal({ open, onClose, total, customerId, onCustomerChang
             {cn && (
               <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 text-sm">
                 <p><b>{cn.number}</b> · {money(cn.remaining)} available · using <b>{money(Math.min(cn.remaining, total))}</b></p>
+                {cnOther && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 px-2.5 py-2 text-amber-800">
+                    <span className="flex-1">This credit note was made for another {t('customer').toLowerCase()}.</span>
+                    <Button type="button" size="sm" variant="secondary" write={false} onClick={() => onCustomerChange(cn.customerId)}>Use its {t('customer').toLowerCase()}</Button>
+                  </div>
+                )}
+                {!cn.customerId && (
+                  <label className="mt-2 flex items-center gap-2 text-slate-700">
+                    <input type="checkbox" checked={cnChecked} onChange={(e) => setCnChecked(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-brand-600" />
+                    No {t('customer').toLowerCase()} on this credit note — I checked the slip
+                  </label>
+                )}
                 {cn.remaining > total && <p className="mt-0.5 text-xs text-slate-600">{money(r2(cn.remaining - total))} stays on the credit note for next time.</p>}
                 {cn.remaining < total && (
                   <div className="mt-2 flex flex-wrap items-center gap-2">

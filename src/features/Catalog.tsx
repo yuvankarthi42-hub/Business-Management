@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react'
 import { useApp, useData } from '@/app/AppContext'
 import { EmptyState, VegMark } from '@/components/ui'
 import type { Product } from '@/core/types'
+import { variantCount } from '@/core/catalogIndex'
 import { api } from '@/data'
 import { money } from '@/lib/format'
 import { applySpecials, type SpecialInfo } from '@/core/specials'
@@ -14,7 +15,9 @@ const TINTS = ['bg-orange-50', 'bg-amber-50', 'bg-rose-50', 'bg-emerald-50', 'bg
 export const tintFor = (id: string) => TINTS[[...id].reduce((a, c) => a + c.charCodeAt(0), 0) % TINTS.length]
 
 export const priceLabel = (p: Product) =>
-  p.variants.length ? `${money(Math.min(...p.variants.map((v) => v.price)))}${p.variants.length > 1 ? '+' : ''}` : money(p.price)
+  p.light // a large shop's light index row: the lowest size price comes with it
+    ? (p.light.variants && p.light.minVariantPrice != null ? `${money(p.light.minVariantPrice)}${p.light.variants > 1 ? '+' : ''}` : money(p.price))
+    : p.variants.length ? `${money(Math.min(...p.variants.map((v) => v.price)))}${p.variants.length > 1 ? '+' : ''}` : money(p.price)
 
 /** Active catalogue + category/search filtering + "Popular" (best sellers in the last 7 days). */
 export function useCatalog() {
@@ -70,7 +73,7 @@ export function ProductGrid({ products, onPick, qtyOf, dense, specials }: { prod
             <div className="mt-auto flex items-center justify-between px-0.5 pt-1">
               <span className="text-[13px] font-semibold text-slate-900">
                 {priceLabel(p)}
-                {special && special.special.specialPrice != null && !p.variants.length && <span className="ml-1 text-[11px] font-normal text-slate-400 line-through">{money(special.originalPrice)}</span>}
+                {special && special.special.specialPrice != null && !variantCount(p) && <span className="ml-1 text-[11px] font-normal text-slate-400 line-through">{money(special.originalPrice)}</span>}
               </span>
               {out ? <span className="text-[10px] font-semibold text-red-600">Out</span> : low ? <span className="text-[10px] font-semibold text-amber-600">{p.stock} left</span> : null}
             </div>

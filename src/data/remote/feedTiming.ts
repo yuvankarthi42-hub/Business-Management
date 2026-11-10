@@ -5,6 +5,13 @@ const URGENT = /^\/(kitchen|qr-orders|tables|billing|m\/order|customer-orders)(\
 
 export const feedInterval = (path: string) => (URGENT.test(path) ? 30_000 : 60_000)
 
+/**
+ * Screens left on a wall or counter that nobody touches (kitchen board, QR orders, customer orders): they keep asking
+ * while visible, even when idle — otherwise new KOTs and QR orders would stop showing after a few minutes.
+ */
+const DISPLAY = /^\/(kitchen|qr-orders|customer-orders)(\/|$|\?)/
+export const isDisplayScreen = (path: string) => DISPLAY.test(path)
+
 /** What the server says with every answer: the shop's newest change number, the sign-in version, this request's own change. */
 export interface FeedNote { latest: number; epoch?: string | null; own?: number | null }
 

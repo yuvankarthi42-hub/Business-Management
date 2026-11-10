@@ -204,7 +204,7 @@ function PasswordModal({ c, onClose }: { c: Detail; onClose: () => void }) {
         <><CredentialCard phone={c.phone} username={c.username} password={pw} businessName={c.name} /><div className="mt-4 flex justify-end"><Button onClick={onClose}>Done</Button></div></>
       ) : (
         <form className="space-y-4" onSubmit={async (e) => { e.preventDefault(); if (await run(() => api.admin.resetPassword(c.id, pw), 'Password reset')) setDone(true) }}>
-          <Field required label="New password" hint="At least 6 characters">
+          <Field required label="New password" hint="At least 8 characters">
             <div className="flex gap-1.5">
               <Input required minLength={6} value={pw} onChange={(e) => setPw(e.target.value)} className="font-mono" autoComplete="new-password" />
               <Button type="button" variant="secondary" icon={Wand2} onClick={() => setPw(randomPassword())} aria-label="New password" title="Generate" />

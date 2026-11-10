@@ -125,3 +125,15 @@ Scanning the same item again adds +1. Barcodes are shown under **Products → Ed
 ## Reset
 
 **Settings → Audit & Data → Reset demo data** recreates all five businesses with fresh data.
+
+## 📱 Smart Mobiles & Service — Retail · Electronics (mobile shop)
+
+Owner username: `smartmobiles` · Password: same as the other demo shops · Active · 1 year
+
+| Name | Mobile (login) | Role |
+|---|---|---|
+| Imran K | 9876577771 | Owner |
+| Priya | 9876577772 | Cashier |
+
+New mobiles, accessories, chargers, mobile parts (display combo, battery, charging board) and repair / service
+labour (screen replacement, battery replacement, software, water damage) — sold together on one bill.

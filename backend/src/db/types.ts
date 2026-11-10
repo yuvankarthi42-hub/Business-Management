@@ -47,8 +47,12 @@ export interface SchemaInfo { tables: { name: string; columns: { name: string; t
 /** A raw SQL row (only SQL databases: Turso / SQLite). */
 export type SqlRow = Record<string, string | number | null>
 
-/** One part of a writeBatch: rows to insert into a table, or rows (by ROWID) to update. */
+/**
+ * One part of a writeBatch: rows to insert into a table, rows (by ROWID) to update, or one SQL statement
+ * (one database per shop; for tables the API writes with SQL only, such as the change feed).
+ */
 export type WriteOp = { insert: TableName; rows: NewRow[] } | { update: TableName; rows: (NewRow & { ROWID: string })[] }
+  | { sql: string; args?: (string | number | null)[] }
 
 export interface Db {
   /**

@@ -36,7 +36,8 @@ export function ReturnModal({ order: o, onClose }: { order: Order; onClose: () =
   const items = data?.items ?? []
   const ratio = data?.ratio ?? 0
   const lines = items.filter((i) => (qty[i.id] ?? 0) > 0)
-  const exact = r2(lines.reduce((a, i) => a + i.unitPrice * qty[i.id] * ratio, 0))
+  // Each item gives back its own billed value (its GST rate and share of the bill discount) — as the credit note will.
+  const exact = r2(lines.reduce((a, i) => a + (i.refundEach ?? i.unitPrice * ratio) * qty[i.id], 0))
   const alreadyBack = (data?.returns ?? []).reduce((a, r) => a + r.total, 0)
   const total = r2(Math.min(me?.business.billing.roundOff ? Math.round(exact) : exact, o.total - alreadyBack))
   const due = r2(Math.min(total, o.balance))

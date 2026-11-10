@@ -7,13 +7,13 @@ import { r2 } from '@/core/pricing'
 import type { Branch, Order, PaymentMethod } from '@/core/types'
 import { pastReport } from '../domain/reportCache'
 import { withGstSplit } from '../domain/gstSql'
-import type { Ctx } from '../core/context'
+import { ALL_BRANCHES, type Ctx } from '../core/context'
 import { ApiError, forbidden } from '../core/errors'
 import { define, userRead } from '../core/registry'
 import type { Row, SqlRow, Where } from '../db/types'
 import { imageOf, loadProducts, mediaMap, wholesaleList } from '../domain/catalog'
-import { customerFrom, loadOrders, paymentFrom, selectIn } from '../domain/orders'
-import { bizDay, bizDayStart, E, moduleOn, fromMilli, fromMinor, nameOf, selectOlder, str, strOrNull } from '../domain/util'
+import { CANCEL_STATION, customerFrom, loadOrders, paymentFrom, selectIn } from '../domain/orders'
+import { bizDay, bizDayStart, E, moduleOn, fromMilli, fromMinor, nameOf, selectOlder, str, strOrNull, hasAllBranches } from '../domain/util'
 import { categoryNames, expenseFrom } from './ops'
 import { dateFormat } from '@/core/intl'
 
@@ -173,6 +173,88 @@ function sqlSummaryOk(c: Ctx, from: Date, to: Date) {
 
 const sortLike = (rows: Row[], ids: string[]) => { const at = new Map(ids.map((id, k) => [id, k])); return rows.sort((a, b) => (at.get(a.ROWID) ?? 0) - (at.get(b.ROWID) ?? 0)) }
 
+/** The GST report for one month (reports.gst): sales, returns and purchases are read at the same time. */
+async function gstReport(c: Ctx, month: string, range: { from: string; to: string }, start: string, end: string) {
+  const billing = c.business.billing
+  const biz = c.businessId
+  const [sales, returned, bought] = await Promise.all([
+    // Turso: the database adds up the walk-in bills, and only the B2B / B2CL bills are read one by one.
+    (async () => {
+      const fast = await gstPreAdded(c, start, end)
+      const orders = fast
+        ? (fast.listed.length ? sortLike(await selectIn(c, 'orders', 'ROWID', fast.listed, { business_id: biz }), fast.listed) : [])
+        : await c.db.select('orders', { where: { business_id: biz, status: E.OrderStatus.completed, billed_at: { gte: start, lt: end } }, orderBy: [['billed_at', 'ASC']], limit: 50000 })
+      const items = orders.length ? await selectIn(c, 'order_items', 'order_id', orders.map((o) => o.ROWID)) : []
+      return { fast, orders, items }
+    })(),
+    // Credit notes of the month: their lines and their bills together, then the sold lines they return.
+    (async () => {
+      const rets = await c.db.select('sale_returns', { where: { business_id: biz, CREATEDTIME: { gte: start, lt: end } }, limit: 20000 })
+      if (!rets.length) return { rets, retItems: [] as Row[], retOrders: [] as Row[], soldLines: [] as Row[] }
+      const [retItems, retOrders] = await Promise.all([
+        selectIn(c, 'sale_return_items', 'return_id', rets.map((r) => r.ROWID)),
+        selectIn(c, 'orders', 'ROWID', [...new Set(rets.map((r) => str(r.order_id)))], { business_id: biz }),
+      ])
+      const soldLines = retItems.length ? await selectIn(c, 'order_items', 'ROWID', [...new Set(retItems.map((i) => str(i.order_item_id)))]) : []
+      return { rets, retItems, retOrders, soldLines }
+    })(),
+    // Purchases of the month: their lines and suppliers together.
+    (async () => {
+      const purchases = await c.db.select('purchases', { where: { business_id: biz, status: E.PurchaseStatus.final, purchase_date: { gte: range.from, lt: range.to } }, limit: 20000 })
+      if (!purchases.length) return { purchases, pItems: [] as Row[], sups: [] as Row[] }
+      const [pItems, sups] = await Promise.all([
+        selectIn(c, 'purchase_items', 'purchase_id', purchases.map((p) => p.ROWID)),
+        selectIn(c, 'suppliers', 'ROWID', [...new Set(purchases.map((p) => str(p.supplier_id)).filter(Boolean))], { business_id: biz }),
+      ])
+      return { purchases, pItems, sups }
+    })(),
+  ])
+  const { fast, orders, items } = sales
+  const { rets, retItems, retOrders, soldLines } = returned
+  const { purchases, pItems, sups } = bought
+  const custIds = [...new Set([...orders, ...retOrders].map((o) => str(o.customer_id)).filter(Boolean))]
+  const customers = custIds.length ? await selectIn(c, 'customers', 'ROWID', custIds, { business_id: c.businessId }) : []
+  // Lookups by id (one pass each) instead of searching the whole list for every bill.
+  const group = (rows: Row[], key: string) => { const m = new Map<string, Row[]>(); for (const r of rows) { const k = str(r[key]); const l = m.get(k); if (l) l.push(r); else m.set(k, [r]) } return m }
+  const byId = (rows: Row[]) => new Map(rows.map((r) => [r.ROWID, r]))
+  const custById = byId(customers)
+  const custName = (o: Row) => str(custById.get(str(o.customer_id))?.name) || str(o.customer_name)
+  const day = (iso: string) => bizDay(c, new Date(iso))
+  const itemsByOrder = group(items, 'order_id'), retItemsByReturn = group(retItems, 'return_id'), pItemsByPurchase = group(pItems, 'purchase_id')
+  const retOrderById = byId(retOrders), soldById = byId(soldLines), supById = byId(sups)
+
+  const bills: GstBill[] = orders.map((o) => {
+    const mine = (itemsByOrder.get(o.ROWID) ?? []).sort((a, b) => Number(a.sort_order) - Number(b.sort_order))
+    // Bills made before GST lines were stored: split with the shop's current tax settings.
+    const split = mine.some((i) => i.taxable_minor == null)
+      ? splitLineTax(mine.map((i) => ({ qty: fromMilli(i.qty_milli), unitPrice: fromMinor(i.unit_price_minor), taxRate: Number(i.tax_bp ?? 0) / 100 })), fromMinor(o.discount_minor), billing, fromMinor(o.tax_minor))
+      : mine.map((i) => ({ taxable: fromMinor(i.taxable_minor), tax: fromMinor(i.tax_minor) }))
+    return {
+      invoiceNumber: str(o.invoice_number), date: day(str(o.billed_at)), customer: custName(o), gstin: strOrNull(o.customer_gstin), placeOfSupply: strOrNull(o.place_of_supply), igst: !!o.is_igst, total: fromMinor(o.total_minor),
+      lines: mine.map((i, k) => ({ hsn: str(i.hsn_code), name: str(i.product_name), unit: str(i.unit) || 'pc', qty: fromMilli(i.qty_milli), rate: Number(i.tax_bp ?? 0) / 100, taxable: split[k].taxable, tax: split[k].tax })),
+    }
+  })
+  const creditNotes: GstCreditNote[] = rets.map((r) => {
+    const o = retOrderById.get(str(r.order_id))
+    const lines = (retItemsByReturn.get(r.ROWID) ?? []).map((i) => {
+      const sold = soldById.get(str(i.order_item_id))
+      return { name: str(i.product_name), unit: str(i.unit) || 'pc', hsn: str(sold?.hsn_code), qty: fromMilli(i.qty_milli), rate: Number(sold?.tax_bp ?? 0) / 100, amount: fromMinor(i.amount_minor) }
+    })
+    return {
+      number: str(r.number), date: day(r.CREATEDTIME), invoiceNumber: str(r.invoice_number), customer: o ? custName(o) : '', gstin: o ? strOrNull(o.customer_gstin) : null,
+      placeOfSupply: o ? strOrNull(o.place_of_supply) : null, igst: !!o?.is_igst, total: fromMinor(r.total_minor), lines: billing.taxEnabled ? returnLines(lines, fromMinor(r.tax_minor)) : lines.map((l) => ({ ...l, taxable: l.amount, tax: 0 })),
+    }
+  })
+  const gstPurchases: GstPurchase[] = purchases.map((p) => {
+    const sp = supById.get(str(p.supplier_id))
+    return {
+      number: str(p.number), supplierBillNo: str(p.supplier_bill_no), date: str(p.purchase_date), supplier: str(sp?.name), gstin: strOrNull(sp?.gstin), igst: !!p.is_igst, total: fromMinor(p.total_minor),
+      lines: (pItemsByPurchase.get(p.ROWID) ?? []).map((i) => ({ rate: Number(i.tax_bp ?? 0) / 100, taxable: fromMinor(i.taxable_minor), tax: fromMinor(i.tax_minor) })),
+    }
+  })
+  return buildGstReport({ month, shopState: shopStateOf(c.business), bills, creditNotes, purchases: gstPurchases, pre: fast?.pre })
+}
+
 /**
  * reports.gst on Turso: the month's bills added up by the database (outward tax, walk-in B2CS, HSN summary, invoice
  * range), plus the ids of the bills listed one by one (B2B, B2CL). GST is split per line (per bill × rate for B2CS)
@@ -195,19 +277,23 @@ async function gstPreAdded(c: Ctx, start: string, end: string): Promise<{ pre: G
   const split = withGstSplit
   const sums = `SUM(CASE WHEN ig THEN igp ELSE 0 END) AS sIg, SUM(CASE WHEN ig THEN 0 ELSE cg END) AS sCg, SUM(CASE WHEN ig THEN 0 ELSE sg END) AS sSg`
   const lineRows = (extra: string) => `(SELECT ${ig} AS ig, ${tax} AS t, i."taxable_minor" AS tx${extra} FROM ${lines})`
-  const [legacy, outward, hsnRows, b2csRows, docs, ids] = await Promise.all([
-    sql(`SELECT COUNT(*) AS n FROM ${lines} AND i."taxable_minor" IS NULL`, args),
-    sql(`SELECT COUNT(*) AS n, SUM(tx) AS tx, ${sums} FROM ${split(lineRows(''))}`, args),
+  const stmts = [
+    `SELECT COUNT(*) AS n FROM ${lines} AND i."taxable_minor" IS NULL`,
+    `SELECT COUNT(*) AS n, SUM(tx) AS tx, ${sums} FROM ${split(lineRows(''))}`,
     // (SQLite: with one MIN(), the plain column `name` comes from that same first line.)
-    sql(`SELECT h, bp, u, ig, COUNT(*) AS n, SUM(tx) AS tx, SUM(q) AS q, SUM(q % 10 <> 0) AS odd, MIN(first) AS first, name, ${sums}
+    `SELECT h, bp, u, ig, COUNT(*) AS n, SUM(tx) AS tx, SUM(q) AS q, SUM(q % 10 <> 0) AS odd, MIN(first) AS first, name, ${sums}
       FROM ${split(lineRows(`, ${hsnKey} AS h, ${bpKey} AS bp, ${unitKey} AS u, COALESCE(i."qty_milli", 0) AS q, ${at} AS first, COALESCE(i."product_name", '') AS name`))}
-      GROUP BY h, bp, u, ig`, args),
-    sql(`SELECT pos, bp, ig, COUNT(*) AS n, SUM(tx) AS tx, MIN(first) AS first, ${sums} FROM ${split(`(
+      GROUP BY h, bp, u, ig`,
+    `SELECT pos, bp, ig, COUNT(*) AS n, SUM(tx) AS tx, MIN(first) AS first, ${sums} FROM ${split(`(
       SELECT o."id" AS bill, NULLIF(o."place_of_supply", '') AS pos, ${bpKey} AS bp, ${ig} AS ig, SUM(${tax}) AS t, SUM(i."taxable_minor") AS tx, MIN(${at}) AS first
-      FROM ${lines} AND NOT ${listed} GROUP BY 1, 3)`)} GROUP BY pos, bp, ig`, args),
-    sql(`SELECT MIN(o."invoice_number") AS a, MAX(o."invoice_number") AS z, COUNT(*) AS n FROM "orders" o WHERE ${billed} AND COALESCE(o."invoice_number", '') <> ''`, args),
-    sql(`SELECT o."id" AS id FROM "orders" o WHERE ${billed} AND ${listed} ORDER BY o."billed_at", o."id"`, args),
-  ])
+      FROM ${lines} AND NOT ${listed} GROUP BY 1, 3)`)} GROUP BY pos, bp, ig`,
+    `SELECT MIN(o."invoice_number") AS a, MAX(o."invoice_number") AS z, COUNT(*) AS n FROM "orders" o WHERE ${billed} AND COALESCE(o."invoice_number", '') <> ''`,
+    `SELECT o."id" AS id FROM "orders" o WHERE ${billed} AND ${listed} ORDER BY o."billed_at", o."id"`,
+  ]
+  // All six in one round trip (read-only, no lock); the same statements one by one where that isn't available.
+  const [legacy, outward, hsnRows, b2csRows, docs, ids] = c.db.sqlReads
+    ? await c.db.sqlReads(stmts.map((q) => ({ sql: q, args })))
+    : await Promise.all(stmts.map((q) => sql(q, args)))
   if (Number(legacy[0]?.n ?? 0) > 0) return null
   const num = (v: unknown) => Number(v ?? 0)
   const byFirst = (a: SqlRow, b: SqlRow) => (str(a.first) < str(b.first) ? -1 : str(a.first) > str(b.first) ? 1 : 0)
@@ -469,64 +555,16 @@ define('reports', {
    * summary (output GST after returns − input GST from purchase bills). For the whole business (one GSTIN).
    */
   gst: userRead(async (c, month: string) => {
+    // One return for the whole GSTIN: only someone who can open every branch sees it.
+    if (!hasAllBranches(c)) throw new ApiError('The GST report needs access to every branch', 403, 'FORBIDDEN')
     let range
     try { range = monthRange(String(month ?? '')) } catch (e) { throw new ApiError((e as Error).message) }
     const start = bizDayStart(c, new Date(`${range.from}T12:00:00Z`)), end = bizDayStart(c, new Date(`${range.to}T12:00:00Z`))
-    const billing = c.business.billing
-    // Turso: the database adds up the walk-in bills, and only the B2B / B2CL bills are read one by one.
-    const fast = await gstPreAdded(c, String(start), String(end))
-    const orders = fast
-      ? (fast.listed.length ? sortLike(await selectIn(c, 'orders', 'ROWID', fast.listed, { business_id: c.businessId }), fast.listed) : [])
-      : await c.db.select('orders', { where: { business_id: c.businessId, status: E.OrderStatus.completed, billed_at: { gte: start, lt: end } }, orderBy: [['billed_at', 'ASC']], limit: 50000 })
-    const items = orders.length ? await selectIn(c, 'order_items', 'order_id', orders.map((o) => o.ROWID)) : []
-    const rets = await c.db.select('sale_returns', { where: { business_id: c.businessId, CREATEDTIME: { gte: start, lt: end } }, limit: 20000 })
-    const retItems = rets.length ? await selectIn(c, 'sale_return_items', 'return_id', rets.map((r) => r.ROWID)) : []
-    const retOrders = rets.length ? await selectIn(c, 'orders', 'ROWID', [...new Set(rets.map((r) => str(r.order_id)))], { business_id: c.businessId }) : []
-    const soldLines = retItems.length ? await selectIn(c, 'order_items', 'ROWID', [...new Set(retItems.map((i) => str(i.order_item_id)))]) : []
-    const custIds = [...new Set([...orders, ...retOrders].map((o) => str(o.customer_id)).filter(Boolean))]
-    const customers = custIds.length ? await selectIn(c, 'customers', 'ROWID', custIds, { business_id: c.businessId }) : []
-    // Lookups by id (one pass each) instead of searching the whole list for every bill.
-    const group = (rows: Row[], key: string) => { const m = new Map<string, Row[]>(); for (const r of rows) { const k = str(r[key]); const l = m.get(k); if (l) l.push(r); else m.set(k, [r]) } return m }
-    const byId = (rows: Row[]) => new Map(rows.map((r) => [r.ROWID, r]))
-    const custById = byId(customers)
-    const custName = (o: Row) => str(custById.get(str(o.customer_id))?.name) || str(o.customer_name)
-    const purchases = await c.db.select('purchases', { where: { business_id: c.businessId, status: E.PurchaseStatus.final, purchase_date: { gte: range.from, lt: range.to } }, limit: 20000 })
-    const pItems = purchases.length ? await selectIn(c, 'purchase_items', 'purchase_id', purchases.map((p) => p.ROWID)) : []
-    const sups = purchases.length ? await selectIn(c, 'suppliers', 'ROWID', [...new Set(purchases.map((p) => str(p.supplier_id)).filter(Boolean))], { business_id: c.businessId }) : []
-    const day = (iso: string) => bizDay(c, new Date(iso))
-    const itemsByOrder = group(items, 'order_id'), retItemsByReturn = group(retItems, 'return_id'), pItemsByPurchase = group(pItems, 'purchase_id')
-    const retOrderById = byId(retOrders), soldById = byId(soldLines), supById = byId(sups)
-
-    const bills: GstBill[] = orders.map((o) => {
-      const mine = (itemsByOrder.get(o.ROWID) ?? []).sort((a, b) => Number(a.sort_order) - Number(b.sort_order))
-      // Bills made before GST lines were stored: split with the shop's current tax settings.
-      const split = mine.some((i) => i.taxable_minor == null)
-        ? splitLineTax(mine.map((i) => ({ qty: fromMilli(i.qty_milli), unitPrice: fromMinor(i.unit_price_minor), taxRate: Number(i.tax_bp ?? 0) / 100 })), fromMinor(o.discount_minor), billing, fromMinor(o.tax_minor))
-        : mine.map((i) => ({ taxable: fromMinor(i.taxable_minor), tax: fromMinor(i.tax_minor) }))
-      return {
-        invoiceNumber: str(o.invoice_number), date: day(str(o.billed_at)), customer: custName(o), gstin: strOrNull(o.customer_gstin), placeOfSupply: strOrNull(o.place_of_supply), igst: !!o.is_igst, total: fromMinor(o.total_minor),
-        lines: mine.map((i, k) => ({ hsn: str(i.hsn_code), name: str(i.product_name), unit: str(i.unit) || 'pc', qty: fromMilli(i.qty_milli), rate: Number(i.tax_bp ?? 0) / 100, taxable: split[k].taxable, tax: split[k].tax })),
-      }
-    })
-    const creditNotes: GstCreditNote[] = rets.map((r) => {
-      const o = retOrderById.get(str(r.order_id))
-      const lines = (retItemsByReturn.get(r.ROWID) ?? []).map((i) => {
-        const sold = soldById.get(str(i.order_item_id))
-        return { name: str(i.product_name), unit: str(i.unit) || 'pc', hsn: str(sold?.hsn_code), qty: fromMilli(i.qty_milli), rate: Number(sold?.tax_bp ?? 0) / 100, amount: fromMinor(i.amount_minor) }
-      })
-      return {
-        number: str(r.number), date: day(r.CREATEDTIME), invoiceNumber: str(r.invoice_number), customer: o ? custName(o) : '', gstin: o ? strOrNull(o.customer_gstin) : null,
-        placeOfSupply: o ? strOrNull(o.place_of_supply) : null, igst: !!o?.is_igst, total: fromMinor(r.total_minor), lines: billing.taxEnabled ? returnLines(lines, fromMinor(r.tax_minor)) : lines.map((l) => ({ ...l, taxable: l.amount, tax: 0 })),
-      }
-    })
-    const gstPurchases: GstPurchase[] = purchases.map((p) => {
-      const sp = supById.get(str(p.supplier_id))
-      return {
-        number: str(p.number), supplierBillNo: str(p.supplier_bill_no), date: str(p.purchase_date), supplier: str(sp?.name), gstin: strOrNull(sp?.gstin), igst: !!p.is_igst, total: fromMinor(p.total_minor),
-        lines: (pItemsByPurchase.get(p.ROWID) ?? []).map((i) => ({ rate: Number(i.tax_bp ?? 0) / 100, taxable: fromMinor(i.taxable_minor), tax: fromMinor(i.tax_minor) })),
-      }
-    })
-    return buildGstReport({ month: String(month), shopState: shopStateOf(c.business), bills, creditNotes, purchases: gstPurchases, pre: fast?.pre })
+    // A finished month (it ended before today): the saved report, until something changes the past (a cancelled
+    // bill, a return, a purchase, a customer or settings change all make a new one — app.ts). This month: built now.
+    const build = () => gstReport(c, String(month), range, String(start), String(end))
+    if (new Date(String(end)).getTime() <= new Date(bizDayStart(c)).getTime()) return pastReport(c, `gst:${String(month)}`, build)
+    return build()
   }, { perm: 'reports.view' }),
 
   /** One summary per branch in the current view, plus live alerts — for the multi-branch dashboard. */
@@ -555,7 +593,7 @@ define('reports', {
       summary: forViewer(c, data instanceof Map ? data.get(b.id)! : summarize(c, data, new Set([b.id]))),
       running: open.filter((x) => str(x.branch_id) === b.id).reduce((n, x) => n + Number(x.n ?? 0), 0),
       pendingQr: open.filter((x) => str(x.branch_id) === b.id && Number(x.qr_status) === E.QrStatus.pending).reduce((n, x) => n + Number(x.n ?? 0), 0),
-      lateKots: kots.filter((k) => str(k.branch_id) === b.id).map((k) => ({ number: str(k.number), minutes: Math.floor((c.now.getTime() - Date.parse(k.CREATEDTIME)) / 60000) })),
+      lateKots: kots.filter((k) => str(k.branch_id) === b.id && str(k.station) !== CANCEL_STATION).map((k) => ({ number: str(k.number), minutes: Math.floor((c.now.getTime() - Date.parse(k.CREATEDTIME)) / 60000) })),
       lowStock: low ? low.get(b.id) ?? [] : products.map((p) => ({ p, s: qty.get(`${b.id}:${p.ROWID}`) ?? 0 })).filter(({ p, s }) => s <= fromMilli(p.low_stock_milli))
         .map(({ p, s }) => ({ name: str(p.name), stock: s, unit: str(p.unit) || 'pc' })),
     }))
@@ -563,16 +601,22 @@ define('reports', {
 
   /** Customers who owe money (whole business), largest first. */
   receivables: userRead(async (c) => {
+    // The bills of the current view, like every other report: "All branches" for someone who may open every branch
+    // is the whole business (no filter, as before); a branch view — or a user limited to some branches — only those.
+    const whole = c.s.branchId === ALL_BRANCHES && hasAllBranches(c)
+    const scope = c.scope()
     // One row per customer instead of every bill.
     const dues = (await c.db.aggregate('orders', {
-      where: { business_id: c.businessId, status: E.OrderStatus.completed, customer_id: { ne: null } }, groupBy: ['customer_id'],
+      where: { business_id: c.businessId, status: E.OrderStatus.completed, customer_id: { ne: null }, ...(whole ? {} : { branch_id: { in: scope } }) }, groupBy: ['customer_id'],
       fns: { total: ['SUM', 'total_minor'], n: ['COUNT', 'ROWID'], due: ['SUM', 'balance_minor'], last: ['MAX', 'billed_at'] },
     })).filter((x) => Number(x.due ?? 0) > 0)
     if (!dues.length) return []
     const ids = dues.map((x) => str(x.customer_id))
     const [rows, rets, list] = await Promise.all([
       selectIn(c, 'customers', 'ROWID', ids, { business_id: c.businessId }),
-      c.db.aggregate('sale_returns', { where: { business_id: c.businessId, customer_id: { in: ids } }, groupBy: ['customer_id'], fns: { total: ['SUM', 'total_minor'] } }),
+      whole
+        ? c.db.aggregate('sale_returns', { where: { business_id: c.businessId, customer_id: { in: ids } }, groupBy: ['customer_id'], fns: { total: ['SUM', 'total_minor'] } })
+        : returnsOfBillsIn(c, ids, scope),
       wholesaleList(c),
     ])
     return rows.map((r) => {
@@ -584,6 +628,29 @@ define('reports', {
     }).sort((a, b) => b.outstanding - a.outstanding)
   }, { perm: 'reports.view' }),
 })
+
+/**
+ * Returns per customer of bills in these branches (wherever the return was made) — a branch view's receivables.
+ * Turso: one query joining each return to its bill; the Data Store: the returns, then their bills' branches.
+ */
+async function returnsOfBillsIn(c: Ctx, customerIds: string[], branches: string[]): Promise<Row[]> {
+  if (!branches.length || !customerIds.length) return []
+  if (c.dbs.perShop && c.db.sql) {
+    const q = (n: number) => Array.from({ length: n }, () => '?').join(', ')
+    return (await c.db.sql(
+      `SELECT r."customer_id" AS customer_id, SUM(r."total_minor") AS total FROM "sale_returns" r JOIN "orders" o ON o."id" = r."order_id"
+        WHERE r."business_id" = ? AND r."customer_id" IN (${q(customerIds.length)}) AND o."branch_id" IN (${q(branches.length)}) GROUP BY r."customer_id"`,
+      [Number(c.businessId), ...customerIds.map(Number), ...branches.map(Number)],
+    )).map((r) => ({ customer_id: String(r.customer_id), total: Number(r.total ?? 0) }) as unknown as Row)
+  }
+  const rets = await selectIn(c, 'sale_returns', 'customer_id', customerIds, { business_id: c.businessId })
+  if (!rets.length) return []
+  const bills = await selectIn(c, 'orders', 'ROWID', [...new Set(rets.map((r) => str(r.order_id)))], { business_id: c.businessId })
+  const inView = new Set(bills.filter((o) => branches.includes(str(o.branch_id))).map((o) => o.ROWID))
+  const sum = new Map<string, number>()
+  for (const r of rets) if (inView.has(str(r.order_id))) sum.set(str(r.customer_id), (sum.get(str(r.customer_id)) ?? 0) + Number(r.total_minor ?? 0))
+  return [...sum.entries()].map(([customer_id, total]) => ({ customer_id, total }) as unknown as Row)
+}
 
 define('audit', {
   /** `before`: the last entry the screen has → the next older ones ("Load older"). */

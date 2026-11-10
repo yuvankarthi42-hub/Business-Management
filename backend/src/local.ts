@@ -28,7 +28,8 @@ const dir = join(__dirname, '..', '.local')
 mkdirSync(join(dir, 'uploads'), { recursive: true })
 const port = Number(process.env.PORT ?? 8787)
 const kv = new MemoryKv()
-const files = new LocalFiles(join(dir, 'uploads'), `/server/api/uploads`)
+// Support screenshots in a folder that is not served: shown only through signed links (GET /media/…).
+const files = new LocalFiles(join(dir, 'uploads'), `/server/api/uploads`, join(dir, 'private-uploads'))
 // No live-update hub (as on Catalyst): open screens use the change feed (sync.changes).
 const env: Env = process.env.LOCAL_DB === 'memory'
   ? { dbs: new SingleDatabases(new MemoryDb(join(dir, 'db.json'))), kv, files, epochs: new KvEpochs(kv), push: pushFromEnv() }

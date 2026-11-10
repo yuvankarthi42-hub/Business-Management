@@ -71,7 +71,7 @@ test('sign-in: a bcrypt password works once more and is stored as PBKDF2; lockou
     // Wrong password: same message; 5 wrong tries lock the account.
     for (let i = 0; i < 4; i++) await assert.rejects(s.call('auth.login', 'lakshmi', 'wrong-pass'), /Wrong mobile number or password/)
     await assert.rejects(s.call('auth.login', 'lakshmi', 'wrong-pass'), /Wrong mobile number or password/)
-    await assert.rejects(s.call('auth.login', 'lakshmi', 'shop1234'), /Too many wrong tries/)
+    await assert.rejects(s.call('auth.login', 'lakshmi', 'shop1234'), /Wrong mobile number or password/ /* locked: the same reply (L7) */)
     await assert.rejects(s.call('auth.login', 'nobody-here', 'shop1234'), /Wrong mobile number or password/)
     // Admin sign-in upgrades too.
     const [adm] = await s.env.dbs.platform().then((db) => db.select('platform_admins', { limit: 1 }))

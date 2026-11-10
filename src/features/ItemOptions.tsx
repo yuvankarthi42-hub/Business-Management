@@ -8,8 +8,10 @@ import { makeItem } from '@/core/orderItem'
 import { r2 } from '@/core/pricing'
 import type { AddOn, BillingSettings, OrderItem, Product, Variant } from '@/core/types'
 import { money } from '@/lib/format'
+import { addOnCount, variantCount } from '@/core/catalogIndex'
+import { useFullProduct } from './fullProduct'
 
-export const needsOptions = (p: Product) => p.variants.length > 0 || p.addOns.length > 0
+export const needsOptions = (p: Product) => variantCount(p) > 0 || addOnCount(p) > 0
 
 // A double-tap on "Add" must not land on the product tile underneath and reopen the picker.
 let lastClosed = 0
@@ -31,7 +33,9 @@ export function QtyStepper({ value, onChange, min = 0, size = 'md' }: { value: n
 }
 
 /** Variant / add-on / quantity / note picker. Used by POS, tables and mobile ordering. */
-export function ItemOptionsModal({ product, onClose: close, onAdd, billing: billingOverride }: { product: Product | null; onClose: () => void; onAdd: (item: OrderItem) => void; billing?: BillingSettings }) {
+export function ItemOptionsModal({ product: picked, onClose: close, onAdd, billing: billingOverride }: { product: Product | null; onClose: () => void; onAdd: (item: OrderItem) => void; billing?: BillingSettings }) {
+  // A large shop's item comes from the light index: its sizes and add-ons are read now (null until they arrive).
+  const product = useFullProduct(picked)
   const { me } = useApp()
   const billing = billingOverride ?? me?.business.billing
   const food = !me || me.business.category === 'food' || me.business.category === 'restaurant'

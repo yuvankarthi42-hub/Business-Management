@@ -1,3 +1,5 @@
+import { variantCount } from '@/core/catalogIndex'
+import { fullProduct } from '@/features/fullProduct'
 import clsx from 'clsx'
 import { Boxes, FileUp, FolderPlus, IndianRupee, Layers, PackageSearch, Pencil, Percent, Plus, ScanLine, Shirt, Tag, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
@@ -94,7 +96,7 @@ export default function Products() {
                   <Td>{catName(p.categoryId)}</Td>
                   <Td className="text-right font-medium tabular">
                     {priceLabel(p)}
-                    {!p.variants.length && !!p.mrp && p.mrp > p.price && <span className="block text-[11px] font-normal text-slate-400"><s>{money(p.mrp)}</s> · <span className="text-emerald-700">{Math.round(((p.mrp - p.price) / p.mrp) * 100)}% off</span></span>}
+                    {!variantCount(p) && !!p.mrp && p.mrp > p.price && <span className="block text-[11px] font-normal text-slate-400"><s>{money(p.mrp)}</s> · <span className="text-emerald-700">{Math.round(((p.mrp - p.price) / p.mrp) * 100)}% off</span></span>}
                   </Td>
                   {mod('inventory') && <Td className="text-right tabular">{p.trackStock ? <span className={p.stock <= p.lowStockAt ? 'font-semibold text-amber-600' : ''}>{p.stock}</span> : <span className="text-slate-400">—</span>}</Td>}
                   <Td>
@@ -102,7 +104,7 @@ export default function Products() {
                   </Td>
                   <Td className="whitespace-nowrap text-right">
                     {labels && <Button size="sm" variant="ghost" icon={Tag} onClick={() => setLabelsFor([p.id])} aria-label="Print labels" title="Print labels" />}
-                    <Button size="sm" variant="ghost" icon={Pencil} onClick={() => setEditing(p)}>Edit</Button>
+                    <Button size="sm" variant="ghost" icon={Pencil} onClick={async () => setEditing(await fullProduct(p))}>Edit</Button>
                   </Td>
                 </tr>
               ))}
@@ -116,7 +118,7 @@ export default function Products() {
       {labelsFor && <LabelPrintModal initialIds={labelsFor} onClose={() => setLabelsFor(null)} />}
       {designing && <AddDesignModal onClose={() => setDesigning(false)} />}
       {discounting && <CategoryDiscountModal initialCategory={cat} onClose={() => setDiscounting(false)} />}
-      {scanAdd && <ScanAddModal onClose={() => setScanAdd(false)} onEdit={(p) => { setScanAdd(false); setEditing(p) }} />}
+      {scanAdd && <ScanAddModal onClose={() => setScanAdd(false)} onEdit={async (p) => { setScanAdd(false); setEditing(await fullProduct(p)) }} />}
     </div>
   )
 }
@@ -158,7 +160,11 @@ export function ProductForm({ initial, onClose }: { initial: Partial<Product>; o
     <Modal open onClose={onClose} size="lg" title={isNew ? `Add ${t('product')}` : `Edit ${initial.name}`}
       footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button onClick={async () => {
         const ok = await run(async () => {
-          const saved = await api.products.save({ ...p, name: p.name ?? '', ...(form.textile ? { sku: p.details?.design ?? p.sku ?? '' } : {}), ...(isNew && p.trackExpiry && (p.stock ?? 0) > 0 ? { openingBatch } : {}) })
+          // A large shop's light row (if its full product couldn't be read): never send its empty sizes / add-ons /
+          // details — they would replace the real ones. Left out, the server keeps them.
+          const { light, ...body } = p
+          if (light) { delete body.variants; delete body.addOns; delete body.details }
+          const saved = await api.products.save({ ...body, name: p.name ?? '', ...(form.textile ? { sku: p.details?.design ?? p.sku ?? '' } : {}), ...(isNew && p.trackExpiry && (p.stock ?? 0) > 0 ? { openingBatch } : {}) })
           // Textile: every item needs its own code for its QR sticker.
           if (form.textile && !saved.barcode) await api.products.assignBarcodes([saved.id])
         }, isNew ? `${t('product')} added` : 'Saved')

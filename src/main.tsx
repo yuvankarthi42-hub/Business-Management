@@ -1,4 +1,5 @@
 import React, { lazy, Suspense } from 'react'
+import { SetNewPassword } from './features/SetNewPassword'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter, HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { HASH_ROUTER } from './lib/appUrl'
@@ -119,6 +120,8 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   // Signed out at the home address: the landing page (the installed app goes straight to sign-in).
   if (!me && loc.pathname === '/' && !isInstalledApp()) return <Landing />
   if (!me) return <Navigate to="/login" state={{ from: loc.pathname }} replace />
+  // Support reset the password: set a new one first (the server allows nothing else until then).
+  if (me.mustSetPassword) return <SetNewPassword />
   if (!me.business.onboarded && loc.pathname !== '/onboarding') return <Navigate to="/onboarding" replace />
   return <>{children}</>
 }

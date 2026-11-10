@@ -129,8 +129,8 @@ test('QR menu: every table of a branch shares one cached copy; kitchen list has 
     const m4 = await s.call<{ tables: { label: string }[] }>('public.menu', s.businessId, null, t1.id)
     assert.ok(m4.tables.some((t) => t.label === 'T2 window'))
     // Track my order still finds orders by number.
-    const placed = await s.call<{ orderId: string; number: string }>('public.placeOrder', s.businessId, { type: 'takeaway', tableId: null, items: [{ productId: tea.id, variantId: null, addOnIds: [], qty: 1, notes: '' }], guest: { name: 'Anu', phone: '9811122233', address: '' }, notes: '' })
-    assert.equal((await s.call<{ orderId: string }>('public.track', s.businessId, placed.number.replace(/\D/g, ''))).orderId, placed.orderId)
+    const placed = await s.call<{ orderId: string; number: string; trackCode: string }>('public.placeOrder', s.businessId, { type: 'takeaway', tableId: null, items: [{ productId: tea.id, variantId: null, addOnIds: [], qty: 1, notes: '' }], guest: { name: 'Anu', phone: '9811122233', address: '' }, notes: '' })
+    assert.equal((await s.call<{ orderId: string }>('public.track', s.businessId, placed.number.replace(/\D/g, ''))).orderId, placed.trackCode)
     await assert.rejects(s.call('public.track', '999999', '1'), /Shop not found/)
   } finally { s.close() }
 })

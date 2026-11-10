@@ -6,7 +6,7 @@
 import { invalidate, notify, setTtlScale } from './cache'
 import { auth, rpc, setFeedListener } from './http'
 import { invalidatesFor } from './policy'
-import { feedDecision, feedInterval, type FeedNote } from './feedTiming'
+import { feedDecision, feedInterval, isDisplayScreen, type FeedNote } from './feedTiming'
 import { startLive } from './live'
 
 const BASE = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '')
@@ -106,7 +106,8 @@ export function startSync() {
   // Coming back to the tab: catch up at once.
   document.addEventListener('visibilitychange', () => { if (!live && visible() && Date.now() - lastPoll > 5000) { lastUse = Date.now(); void poll() } })
   setInterval(() => {
-    if (quiet || live || running || off || !visible() || Date.now() - lastUse > IDLE_AFTER) return
+    // Idle screens stop asking — except the kitchen / QR order displays nobody touches (feedTiming.ts).
+    if (quiet || live || running || off || !visible() || (Date.now() - lastUse > IDLE_AFTER && !isDisplayScreen(currentPath()))) return
     // Heard from the server recently with nothing new from other devices: no need to ask on the timer yet.
     if (Date.now() - Math.max(lastPoll, lastHeard) >= intervalNow()) void poll()
   }, 5000)

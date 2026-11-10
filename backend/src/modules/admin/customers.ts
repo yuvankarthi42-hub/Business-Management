@@ -11,7 +11,8 @@ import { rolePermRows, roleSeedRows, seedRoles } from '../../domain/people'
 import { claimLogins, claimNewLogins, loginFree, saveUserWithLogins, syncOwner } from '../../domain/directory'
 import { bumpEpoch, featureFlags, loadPricing } from '../../domain/session'
 import { monthlyValue, PLAN_KEYS, PLAN_START, type PlanKey } from '@/core/plans'
-import { code, E, str, strOrNull } from '../../domain/util'
+import { code, E, putSetting, str, strOrNull } from '../../domain/util'
+import { SUPPORT_RESET } from '../auth'
 import { addPeriod, adminLog, adminLogFrom, adminLogRow, periodRow, businessLite, customerPrice, checkBranches, checkUsername, findBiz, fmtDay, ownerOf, periodFor, periodFrom, type Validity } from './shared'
 
 function cleanEmail(input: string | undefined) {
@@ -99,7 +100,7 @@ define('admin', {
       if (!businessName) throw new ApiError('Enter the business name')
       if (!ownerName) throw new ApiError('Enter the owner’s name')
       const username = await checkUsername(c, input.username)
-      assertPassword(input.password)
+      assertPassword(input.password, [username, input.phone])
       const maxBranches = checkBranches(input.maxBranches)
       const phone = cleanPhone(input.phone, 'IN', 'Enter the owner’s mobile number — it is their login ID')
       if (!(await loginFree(c, 'phone', phone))) throw new ApiError('This mobile number is already used by another account')
@@ -216,10 +217,14 @@ define('admin', {
     const r = await findBiz(c, id)
     const owner = await ownerOf(c, r.ROWID)
     if (!owner) throw new ApiError('This customer has no owner login')
-    assertPassword(password)
+    assertPassword(password, [str(owner.username), str(owner.phone)])
     // A new token version signs the owner out on every device.
     await (await c.shopDb(r.ROWID)).update('users', owner.ROWID, { password_hash: await hashPassword(password), token_version: Number(owner.token_version ?? 1) + 1, failed_logins: 0, locked_until: null, password_changed_at: c.now.toISOString() })
     await adminLog(c, a, 'password', { id: r.ROWID, name: str(r.name) }, `Password reset for ${str(owner.username) || str(owner.name)}`)
+    // The owner is told, and must set their own password before using the app (the API allows nothing else).
+    const shop = await c.shopDb(r.ROWID)
+    await putSetting(shop, r.ROWID, SUPPORT_RESET, { userId: owner.ROWID, at: c.now.toISOString() }, null)
+    await shop.insert('audit_logs', { business_id: r.ROWID, branch_id: owner.default_branch_id ?? null, user_id: null, entity: E.AuditEntity.user, entity_id: owner.ROWID, action: E.AuditAction.update, detail: 'Password reset by Kadai Kalanjiyam support' })
     await bumpEpoch(c, r.ROWID)
   }),
 

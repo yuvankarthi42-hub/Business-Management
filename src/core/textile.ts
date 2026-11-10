@@ -1,5 +1,6 @@
 // Textile shops: one design in many sizes / colours, and discounts for a whole category.
 // The checks live here so the mock API and the backend accept exactly the same input.
+import { variantCount } from './catalogIndex'
 import { cleanDetails, discountedPrice } from './stickers'
 import type { ID, Product } from './types'
 
@@ -83,7 +84,7 @@ export function planDiscount(input: DiscountInput, products: Pick<Product, 'id' 
   const ids: ID[] = [] // every item now on this discount (for printing new stickers)
   let noMrp = 0, withSizes = 0
   for (const p of pick) {
-    if (p.variants.length) { withSizes++; continue }
+    if (variantCount(p)) { withSizes++; continue }
     if (!(p.mrp && p.mrp > 0)) { noMrp++; continue }
     const price = pct === 0 ? p.mrp : discountedPrice(p.mrp, pct, round)
     ids.push(p.id)

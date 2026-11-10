@@ -1,4 +1,5 @@
 // Purchase bills and supplier balances, shared by the demo API and the backend so both accept the same input.
+import { amountError, qtyError } from './limits'
 import { cleanHsn, hsnError } from './gst'
 import { r2 } from './pricing'
 import type { PaymentMethod, Purchase, PurchaseLine, SupplierLedgerRow, SupplierPayment } from './types'
@@ -41,7 +42,8 @@ export function planPurchase(input: PurchaseInput, products: Map<string, { name:
     if (!p) throw new Error(`Row ${i + 1}: item not found`)
     const qty = Number(l.qty), cost = Number(l.cost), rate = Number(l.taxRate ?? 0)
     if (!(qty > 0 && qty <= 1e7)) throw new Error(`${p.name}: enter the quantity`)
-    if (!(cost >= 0 && cost <= 1e8)) throw new Error(`${p.name}: enter the cost price`)
+    if (qtyError(qty, p.unit)) throw new Error(`${p.name}: ${qtyError(qty, p.unit)!.toLowerCase()}`)
+    if (amountError(l.cost)) throw new Error(`${p.name}: enter the cost price (0 to ₹1 crore)`)
     if (!(rate >= 0 && rate <= 100)) throw new Error(`${p.name}: GST must be between 0 and 100%`)
     const hsn = cleanHsn(l.hsn ?? p.hsn)
     if (hsnError(hsn)) throw new Error(`${p.name}: ${hsnError(hsn)}`)
@@ -61,8 +63,8 @@ export function planPurchase(input: PurchaseInput, products: Map<string, { name:
   const tax = r2(out.reduce((a, l) => a + l.tax, 0))
   const raw = r2(taxable + tax)
   const total = input.roundOff === false ? raw : Math.round(raw)
+  if (amountError(input.paid ?? 0)) throw new Error('Enter the amount paid (0 to ₹1 crore)')
   const paid = r2(Number(input.paid ?? 0))
-  if (!(paid >= 0)) throw new Error('Enter the amount paid')
   if (paid > total + 0.001) throw new Error('Paid now can’t be more than the bill total')
   if (paid > 0 && !SUPPLIER_PAY_METHODS.includes(input.method)) throw new Error('Choose how it was paid')
   return { date, lines: out, taxable, tax, roundOff: r2(total - raw), total, paid, balance: r2(total - paid), supplierBillNo: String(input.supplierBillNo ?? '').trim().slice(0, 40), note: String(input.note ?? '').trim().slice(0, 255) }

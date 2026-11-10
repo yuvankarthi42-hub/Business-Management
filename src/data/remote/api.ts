@@ -7,7 +7,9 @@ import type { ImportItem } from '@/core/productImport'
 import { APP_VERSION, type Api, type ExportBundle } from '../api'
 import { compressImage, ensureStoredImage, LOGO_IMAGE } from '../media'
 import { cachedRead, clearAll, confirmedWrite, invalidate, notify, hasFresh, seed } from './cache'
-import { ApiError, auth, rpc, setSignedOutHandler, type TokenKind } from './http'
+import { ApiError, apiBase, auth, rpc, setSignedOutHandler, type TokenKind } from './http'
+import { clearCatalogIndex, hasCatalogIndex, loadCatalogIndex } from './catalogIndex'
+import { CATALOG_FULL_MAX } from '@/core/catalogIndex'
 import { isRead } from './policy'
 import { setFeedStart, setSyncMode, startSync } from './sync'
 import { restartLive, stopLive } from './live'
@@ -29,7 +31,7 @@ export function call<T>(name: string, ...args: unknown[]): Promise<T> {
 }
 
 // A token that stopped working (password changed, login turned off): forget cached data and show sign-in.
-setSignedOutHandler(() => { stopLive(); clearAll() })
+setSignedOutHandler(() => { stopLive(); clearAll(); void clearCatalogIndex() })
 
 const blobToDataUrl = (b: Blob) => new Promise<string>((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = () => rej(r.error); r.readAsDataURL(b) })
 
@@ -41,7 +43,14 @@ async function uploadPhoto(file: Blob, purpose: 'product' | 'category' = 'produc
 }
 async function uploadScreenshot(name: 'support.storeScreenshot' | 'admin.storeScreenshot', file: Blob) {
   const img = await compressImage(file, { maxBytes: 200 * 1024, maxSide: 1600 })
-  return (await call<{ url: string }>(name, { image: img.url, width: img.width, height: img.height })).url
+  return mediaUrl((await call<{ url: string }>(name, { image: img.url, width: img.width, height: img.height })).url)
+}
+/** Private screenshots come as signed "media/…" links of the API: the API's address goes in front. */
+async function mediaUrl(u: string) { return u.startsWith('media/') ? `${await apiBase()}/${u}` : u }
+type WithMessages = { messages: { images: string[] }[] }
+async function ticketLinks<T extends WithMessages>(t: T): Promise<T> {
+  if (!t.messages.some((m) => m.images.some((u) => u.startsWith('media/')))) return t
+  return { ...t, messages: await Promise.all(t.messages.map(async (m) => ({ ...m, images: await Promise.all(m.images.map(mediaUrl)) }))) }
 }
 
 /** The server sends photo links; the export screens expect the image data, so it is fetched here. */
@@ -74,9 +83,16 @@ export function createRemoteApi(shape: Api): Api {
     restartLive()
     return (await a.auth.me())?.user
   }) as Api['auth']['login']
+  // Own password: the answer is a new sign-in token (other devices are signed out).
+  a.auth.changePassword = (async (current: string, next: string) => {
+    const r = await call<{ token: string }>('auth.changePassword', current, next)
+    if (r?.token) auth.user = r.token
+    clearAll()
+    return r
+  }) as Api['auth']['changePassword']
   a.auth.demoLogin = notAvailable('Demo login') as Api['auth']['demoLogin']
   a.auth.demoUsers = (() => []) as unknown as Api['auth']['demoUsers']
-  a.auth.logout = (async () => { stopLive(); auth.user = null; auth.branch = null; clearAll() }) as Api['auth']['logout']
+  a.auth.logout = (async () => { stopLive(); auth.user = null; auth.branch = null; clearAll(); void clearCatalogIndex() }) as Api['auth']['logout']
   // App start-up: one call for the user, support tickets, pending QR orders and the change-feed position (it fills
   // the same cache entries those reads use). An older server without it: the separate reads, as before.
   let booting: Promise<void> | null = null
@@ -145,9 +161,12 @@ export function createRemoteApi(shape: Api): Api {
   }) as Api['admin']['endSupport']
 
   // ---- support tickets: the server also gets the browser and app version (helps the support team) ----
-  a.support.create = ((input: Parameters<Api['support']['create']>[0]) => call('support.create', {
+  a.support.create = (async (input: Parameters<Api['support']['create']>[0]) => ticketLinks(await call<Awaited<ReturnType<Api['support']['create']>>>('support.create', {
     ...input, browser: navigator.userAgent.replace(/^.*?(Chrome|Firefox|Safari|Edg)\/([\d.]+).*$/, '$1 $2').slice(0, 60), version: APP_VERSION,
-  })) as Api['support']['create']
+  }))) as Api['support']['create']
+  a.support.mine = (async () => Promise.all((await call<Awaited<ReturnType<Api['support']['mine']>>>('support.mine')).map(ticketLinks))) as Api['support']['mine']
+  a.admin.tickets = (async () => Promise.all((await call<Awaited<ReturnType<Api['admin']['tickets']>>>('admin.tickets')).map(ticketLinks))) as Api['admin']['tickets']
+  a.admin.ticket = (async (id: string) => ticketLinks(await call<Awaited<ReturnType<Api['admin']['ticket']>>>('admin.ticket', id))) as Api['admin']['ticket']
 
   // ---- files ----
   a.media.upload = ((file: Blob) => uploadPhoto(file)) as Api['media']['upload']
@@ -161,18 +180,26 @@ export function createRemoteApi(shape: Api): Api {
   a.dataExport.mine = (async () => withImageData(await call('dataExport.mine'))) as Api['dataExport']['mine']
   a.admin.exportCustomer = (async (id: string) => withImageData(await call('admin.exportCustomer', id))) as Api['admin']['exportCustomer']
 
-  // ---- products: read in pages of 300 and joined (each server answer stays small); same list, same cache entry ----
+  // ---- products: read in pages of 300 and joined (each server answer stays small); same list, same cache entry.
+  // A large shop (more than CATALOG_FULL_MAX products; the first page says how many): the light index instead —
+  // kept on this device, only changes read again (catalogIndex.ts). A device that already keeps one goes straight to it.
   a.products.list = (() => cachedRead('products.list', [], 'user', async () => {
+    const me = await a.auth.me()
+    const key = me ? `${me.business.id}:${me.user.id}:${auth.branch ?? ''}` : ''
+    if (me && (await hasCatalogIndex(key))) return loadCatalogIndex(key, me.business.id)
     const all: Awaited<ReturnType<Api['products']['list']>> = []
     let after: number | null = 0
     while (after !== null) {
-      const page: { rows: typeof all; next: number | null } = (await rpc<{ rows: typeof all; next: number | null }>('products.page', [after], 'user')).data
+      const page: { rows: typeof all; next: number | null; total?: number } = (await rpc<{ rows: typeof all; next: number | null; total?: number }>('products.page', [after], 'user')).data
+      if (me && after === 0 && (page.total ?? 0) > CATALOG_FULL_MAX) return loadCatalogIndex(key, me.business.id)
       all.push(...page.rows)
       after = page.next
     }
     const seen = new Set<string>()
     return all.filter((p) => !seen.has(p.id) && !!seen.add(p.id)) // a product added while paging is never shown twice
   })) as Api['products']['list']
+  /** Full products (sizes, add-ons, details, photo) for items from the light index; others come back as they are. */
+  a.products.full = (async (ids: string[]) => cachedRead('products.byIds', [ids], 'user')) as Api['products']['full']
 
   /** CSV import: photo links are compressed here when the site allows it, else kept as links (like the demo app). */
   a.products.importMany = (async (rows: (ImportItem & { row: number })[], opts: { onExisting: 'skip' | 'update'; fileName: string }) => {

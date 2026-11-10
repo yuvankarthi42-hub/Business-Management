@@ -30,7 +30,11 @@ export interface Env {
 export const ALL_BRANCHES = 'all'
 export const SUPPORT_MESSAGE = 'Support view is read-only — nothing can be changed from here.'
 
-export interface SupportClaim { adminId: string; adminName: string; reason: string; startedAt: string }
+export interface SupportClaim {
+  adminId: string; adminName: string; reason: string; startedAt: string
+  /** The admin's token_version when the view opened: signing the admin out everywhere ends the view too. */
+  atv?: number
+}
 
 /** The signed-in customer user, loaded once per request (cached in Kv between requests). */
 export interface Session {
@@ -101,6 +105,10 @@ export class Ctx {
   changeId: number | null = null
   /** The device that sent the request (x-device), so the change feed can skip its own changes. */
   origin: string | null = null
+  /** Sign-in requests only: the device token from an earlier sign-in on this browser (x-login-device). */
+  loginDevice: string | null = null
+  /** This session came from a password product support reset: only setting a new password is allowed. */
+  mustSetPassword = false
   /** The signed-in shop's session epoch (changes when users, settings, the subscription… change). */
   epoch: string | null = null
 
@@ -170,8 +178,7 @@ export class Ctx {
       this.swap(t, this.dbs.perShop ? prev.platform : t, 'shop')
       try {
         const out = await fn()
-        await this.flushAudits()
-        await this.logChange()
+        await this.saveAuditsAndChange()
         return out
       } finally { this.audits = []; this.swap(prev.shop, prev.platform, null) }
     })
@@ -191,9 +198,26 @@ export class Ctx {
 
   private audits: Record<string, string | number | boolean | null>[] = []
   /** An audit_logs row: inside a shop transaction kept until its end and written in one insert, else now. */
-  async auditRow(row: Record<string, string | number | boolean | null>) {
-    if (this.txOpen === 'shop') { this.audits.push(row); return }
+  /** `first`: ahead of the rows already waiting (as if it had been written straight away). */
+  async auditRow(row: Record<string, string | number | boolean | null>, opts: { first?: boolean } = {}) {
+    if (this.txOpen === 'shop') { if (opts.first) this.audits.unshift(row); else this.audits.push(row); return }
     await this.db.insert('audit_logs', row)
+  }
+  /**
+   * At the end of a shop transaction: its audit rows and its change-feed row. One database per shop: both in ONE
+   * round trip (part of the transaction); otherwise one after the other, as before.
+   */
+  private async saveAuditsAndChange() {
+    const change = this.changeStmt()
+    if (this.audits.length && change && this.db.writeBatch) {
+      const rows = this.audits
+      this.audits = []
+      const [, logged] = await this.db.writeBatch([{ insert: 'audit_logs', rows }, change])
+      await this.changeSaved(logged as unknown as { id?: unknown }[])
+      return
+    }
+    await this.flushAudits()
+    await this.logChange()
   }
   private async flushAudits() {
     if (!this.audits.length) return
@@ -204,9 +228,17 @@ export class Ctx {
 
   /** Change feed (one database per shop only): which action changed this shop, for the other devices. */
   async logChange() {
-    if (!this.changeName || this.changeLogged || !this.rawShop || !this.dbs.perShop || !this.shopId) return
+    const change = this.changeStmt()
+    if (!change) return
+    await this.changeSaved(await this.db.sql!(change.sql, change.args))
+  }
+  /** The change-feed row to write for this request (null: none — not a logged change, already written, or no feed). */
+  private changeStmt(): { sql: string; args: (string | number | null)[] } | null {
+    if (!this.changeName || this.changeLogged || !this.rawShop || !this.dbs.perShop || !this.shopId) return null
     const branch = this.session && this.session.branchId !== ALL_BRANCHES ? this.session.branchId : null
-    const rows = await this.db.sql!('INSERT INTO "change_log" ("business_id", "branch_id", "tag", "origin") VALUES (?, ?, ?, ?) RETURNING "id"', [Number(this.shopId), branch ? Number(branch) : null, this.changeName, this.origin])
+    return { sql: 'INSERT INTO "change_log" ("business_id", "branch_id", "tag", "origin") VALUES (?, ?, ?, ?) RETURNING "id"', args: [Number(this.shopId), branch ? Number(branch) : null, this.changeName, this.origin] }
+  }
+  private async changeSaved(rows: { id?: unknown }[]) {
     this.changeId = rows[0]?.id != null ? Number(rows[0].id) : null
     // Keep the feed small: now and then, drop rows older than two days (same transaction, uses the index).
     if (Math.random() < 0.02) await this.db.sql!('DELETE FROM "change_log" WHERE "created_at" < ?', [new Date(this.now.getTime() - 2 * 86_400_000).toISOString()])

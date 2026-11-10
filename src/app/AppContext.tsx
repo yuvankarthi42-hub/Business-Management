@@ -22,6 +22,8 @@ interface Me {
   features: Record<FeatureKey, boolean>
   /** A product admin is looking at this account (read-only support view). */
   support: { adminId: string; adminName: string; reason: string; startedAt: string } | null
+  /** Product support reset the password: only "Set a new password" is shown until it is done. */
+  mustSetPassword?: boolean
 }
 
 interface AppCtx {

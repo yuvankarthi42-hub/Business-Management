@@ -8,11 +8,14 @@ import { define, handler, publicRead, publicWrite, userRead, userWrite } from '.
 import { signToken, verifyToken } from '../core/tokens'
 import { loadBusiness } from '../domain/business'
 import { findLogin } from '../domain/directory'
+import { issueDeviceToken, WRONG_SHOP, lockedError, lockedMinutes, loginRateLimits, recordWrongPassword, wrongWithDevice } from '../domain/loginGuard'
+import { rateLimit } from '../domain/tracking'
 import { bumpEpoch } from '../domain/session'
-import { str } from '../domain/util'
+import { getSetting, putSetting, str } from '../domain/util'
 
 export const USER_TOKEN_TTL = 12 * 3600 // 12 h, then sign in again
-const LOCK_AFTER = 5, LOCK_MINUTES = 15
+/** Shop setting written when product support resets the owner's password: { userId, at }. Cleared by changePassword. */
+export const SUPPORT_RESET = 'supportReset'
 // Unknown sign-in names still cost one password check, so the reply time doesn't tell which names exist.
 let dummy: Promise<string> | null = null
 const dummyHash = () => (dummy ??= hashPassword('not-a-real-password'))
@@ -34,6 +37,8 @@ export async function meFor(c: Ctx) {
     branchLimit: { max: business.maxBranches ?? 1, used: branchesAll.length },
     features: s.features,
     support: s.support,
+    // Support reset the password: the app shows only "Set a new password" (the API refuses everything else).
+    ...(c.mustSetPassword ? { mustSetPassword: true } : {}),
     permissions: s.permissions === 'all' ? ('all' as const) : [...s.permissions],
   }
 }
@@ -46,6 +51,8 @@ define('auth', {
   login: { ...publicWrite(async (c, identifier: string, password: string) => {
     const id = String(identifier ?? '').trim().toLowerCase()
     if (!id || !password) throw new ApiError('Enter your username and password')
+    // Rate limits first (per address, and per login from that address), before any lookup or password check.
+    await loginRateLimits(c, 'shop', id)
     // Which shop: the platform's list of sign-in names (unique across every shop).
     let hit: { businessId: string; userId: string } | null = null
     let match: { col: 'phone' | 'username' | 'email'; value: string } | null = null
@@ -71,23 +78,36 @@ define('auth', {
       else if (u && u.can_login === false) why('this staff member has no app access')
       else if (u) row = u
     }
-    if (!row) { await checkPassword(password, await dummyHash()); throw new ApiError('Wrong mobile number or password', 401, 'BAD_LOGIN') }
-    if (row.locked_until && new Date(str(row.locked_until)).getTime() > Date.now()) throw new ApiError(`Too many wrong tries. Try again after ${LOCK_MINUTES} minutes.`, 429, 'LOCKED')
+    if (!row) { await checkPassword(password, await dummyHash()); throw new ApiError(WRONG_SHOP, 401, 'BAD_LOGIN') }
+    const account = `${str(row.business_id)}:${row.ROWID}`
+    const locked = await lockedMinutes(c, 'shop', row, account)
+    if (locked) throw lockedError(locked)
     if (!(await checkPassword(password, str(row.password_hash)))) {
-      const n = Number(row.failed_logins ?? 0) + 1
-      await c.db.update('users', row.ROWID, { failed_logins: n >= LOCK_AFTER ? 0 : n, locked_until: n >= LOCK_AFTER ? new Date(Date.now() + LOCK_MINUTES * 60_000).toISOString() : null })
-      throw new ApiError('Wrong mobile number or password', 401, 'BAD_LOGIN')
+      // Counted only now (a right password is never counted), in one atomic step.
+      await recordWrongPassword(c, c.db, 'users', row)
+      await wrongWithDevice(c, 'shop', account)
+      throw new ApiError(WRONG_SHOP, 401, 'BAD_LOGIN')
     }
     if (row.is_active === false) throw new ApiError('Your login has been turned off. Ask your shop owner.', 403, 'INACTIVE')
     const bundle = await loadBusiness(c, str(row.business_id))
-    if (!bundle) throw new ApiError('Wrong mobile number or password', 401, 'BAD_LOGIN')
+    if (!bundle) throw new ApiError(WRONG_SHOP, 401, 'BAD_LOGIN')
     if (subscriptionState(bundle.business).blocked) throw new ApiError(DEACTIVATED_MESSAGE, 403, 'DEACTIVATED')
     // An older or weaker hash (bcrypt, fewer iterations, no pepper yet) is replaced in the same write.
     const rehash = needsRehash(str(row.password_hash)) ? { password_hash: await hashPassword(password) } : {}
     await c.db.update('users', row.ROWID, { failed_logins: 0, locked_until: null, last_login_at: c.now.toISOString(), ...rehash })
     await c.platform.update('businesses', str(row.business_id), { last_login_at: c.now.toISOString() })
     const tv = Number(row.token_version ?? 1)
-    return { token: signToken({ t: 'u', uid: row.ROWID, bid: str(row.business_id), tv }, USER_TOKEN_TTL), branchId: str(row.default_branch_id), mustChangePassword: !!row.must_change_password }
+    // This browser's device token (lets it sign in while someone else's guessing has locked the account).
+    const deviceToken = await issueDeviceToken(c, 'shop', account, tv)
+    // Support reset this password: the session may only set a new password until that's done (app.ts).
+    // (Read with the shop's settings above — no extra read.)
+    const reset = bundle.supportReset
+    const pwc = !!reset && reset.userId === row.ROWID
+    return {
+      token: signToken({ t: 'u', uid: row.ROWID, bid: str(row.business_id), tv, ...(pwc ? { pwc: 1 } : {}) }, USER_TOKEN_TTL),
+      branchId: str(row.default_branch_id), mustChangePassword: !!row.must_change_password, deviceToken,
+      ...(pwc ? { passwordResetAt: String(reset!.at ?? '') } : {}),
+    }
   }), quiet: true },
 
   /** Public sign-up is closed: only the product admin creates customer accounts. */
@@ -129,6 +149,8 @@ define('auth', {
    * sign-in changes (it carries their token version).
    */
   checkPassword: userWrite(async (c, current: string) => {
+    // Guessing the current password from a signed-in session: limited per user (any address).
+    await rateLimit(c, 'pwcheck', 10, 'Too many tries. Please wait a minute and try again.', `${c.businessId}:${c.userId}`)
     const row = await c.db.get('users', c.userId)
     if (!row || !(await checkPassword(current, str(row.password_hash)))) throw new ApiError('Current password is wrong')
     return { proof: signToken({ t: 'pw', uid: c.userId, bid: c.businessId, tv: Number(row.token_version ?? 1) }, PW_PROOF_TTL) }
@@ -139,15 +161,18 @@ define('auth', {
    * hashed again; without one (or a stale one) it is checked here, as always. Other devices are signed out.
    */
   changePassword: userWrite(async (c, current: string, next: string, opts?: { proof?: string }) => {
+    await rateLimit(c, 'pwcheck', 10, 'Too many tries. Please wait a minute and try again.', `${c.businessId}:${c.userId}`)
     const row = await c.db.get('users', c.userId)
     if (!row) throw new ApiError('Current password is wrong')
     const proof = verifyToken<{ t?: string; uid?: string; bid?: string; tv?: number }>(opts?.proof)
     const proven = !!proof && proof.t === 'pw' && String(proof.uid) === c.userId && String(proof.bid) === c.businessId && Number(proof.tv) === Number(row.token_version ?? 1)
     if (!proven && !(await checkPassword(current, str(row.password_hash)))) throw new ApiError('Current password is wrong')
     const { assertPassword, hashPassword } = await import('../core/passwords')
-    assertPassword(next)
+    assertPassword(next, [str(row.phone), str(row.username), str(row.email)])
     const tv = Number(row.token_version ?? 1) + 1
     await c.db.update('users', c.userId, { password_hash: await hashPassword(next), must_change_password: false, password_changed_at: c.now.toISOString(), token_version: tv })
+    // Their own password now: the support-reset notice is done (the new token below has no restriction).
+    if ((await getSetting<{ userId?: string } | null>(c.db, c.businessId, SUPPORT_RESET, null))?.userId === c.userId) await putSetting(c.db, c.businessId, SUPPORT_RESET, null, c.userId)
     // Signs the other devices out (the shop's sign-in cache); the customers' QR menu is not affected.
     await bumpEpoch(c, c.businessId, { menu: false })
     return { token: signToken({ t: 'u', uid: c.userId, bid: c.businessId, tv }, USER_TOKEN_TTL) }

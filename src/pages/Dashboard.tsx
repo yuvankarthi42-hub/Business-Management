@@ -7,7 +7,7 @@ import { useMemo, useState } from 'react'
 import { useApp, useData } from '@/app/AppContext'
 import { Badge, Card, CardHeader, PageHeader, Segmented, Skeleton, Stat } from '@/components/ui'
 import { ORDER_TYPE_LABEL, PAYMENT_LABEL } from '@/core/config'
-import type { PaymentMethod } from '@/core/types'
+import type { PaymentMethod, Product } from '@/core/types'
 import { api } from '@/data'
 import { addDays, money, num, pctChange, rangeFor, timeAgo, type RangeKey } from '@/lib/format'
 import { AXIS, METHOD_COLOR, SERIES } from '@/lib/chart'
@@ -48,12 +48,21 @@ export default function Dashboard() {
   const { data: y } = useData(() => (range === 'today' ? api.reports.summary(rangeFor('yesterday').from, rangeFor('yesterday').to, TOP) : Promise.resolve(null)), [range])
   const { data: running = [] } = useData(() => api.orders.running())
   const { data: kots = [] } = useData(() => (mod('kitchen') ? api.kitchen.list() : Promise.resolve([])))
-  const { data: products = [] } = useData(() => api.products.list())
+  // The Low stock and Expiring soon cards come ready from the server (counts + first 3): the product list and batches
+  // are never loaded here. The Data Store setup (or if they can't be read): worked out from the list and batches.
+  const { data: alerts, error: alertsError } = useData(() => api.dashboard.alerts())
+  const big = alerts?.large === true ? alerts : null
+  const listed = alerts?.large === false || !!alertsError
+  const { data: products = [] } = useData(() => (listed ? api.products.list() : Promise.resolve([] as Product[])), [listed])
   const { data: recent = [] } = useData(() => api.orders.list({ status: 'completed', limit: 6 }))
   const vsLabel = range === 'today' ? 'vs yesterday' : range === 'yesterday' ? 'vs day before' : 'vs last period'
   const low = mod('inventory') ? products.filter((x) => x.active && x.trackStock && x.stock <= x.lowStockAt) : []
-  const { data: batches = [] } = useData(() => (mod('inventory') ? api.inventory.batches() : Promise.resolve([])))
+  const { data: batches = [] } = useData(() => (listed && mod('inventory') ? api.inventory.batches() : Promise.resolve([])), [listed])
   const expiring = batches.filter((b) => b.daysLeft !== null && b.daysLeft <= 7)
+  const lowCount = big ? (mod('inventory') ? big.low.count : 0) : low.length
+  const lowTop = big ? (mod('inventory') ? big.low.top : []) : low.slice(0, 3)
+  const soonCount = big ? (mod('inventory') ? big.expiring.count : 0) : expiring.length
+  const soonTop = big ? (mod('inventory') ? big.expiring.top : []) : expiring.slice(0, 3)
   const showProfit = can('reports.profit')
 
   const hourly = s?.series.map((r, i) => ({ ...r, prev: y?.series[i]?.sales ?? 0 })) ?? []
@@ -74,7 +83,7 @@ export default function Dashboard() {
           <p className="text-sm text-slate-700">
             Sales are <b>{money(s.sales)}</b>, {pctChange(s.sales, p.sales) >= 0 ? 'up' : 'down'} <b>{Math.abs(pctChange(s.sales, p.sales)).toFixed(0)}%</b> {vsLabel}.
             {' '}<b>{top.name}</b> is your best seller ({num(top.qty)} sold).
-            {low.length > 0 && <> {low.length} item{low.length > 1 ? 's are' : ' is'} running low on stock.</>}
+            {lowCount > 0 && <> {lowCount} item{lowCount > 1 ? 's are' : ' is'} running low on stock.</>}
           </p>
         </div>
       )}
@@ -185,7 +194,7 @@ export default function Dashboard() {
           <div className="grid grid-cols-3 gap-2 px-5 pt-3">
             {(['new', 'preparing', 'ready'] as const).map((st) => (
               <Link to="/kitchen" key={st} className="rounded-lg border border-slate-100 bg-slate-50 p-2.5 text-center hover:border-slate-200">
-                <p className="text-lg font-bold">{kots.filter((k) => k.status === st).length}</p>
+                <p className="text-lg font-bold">{kots.filter((k) => k.status === st && !k.cancel).length}</p>
                 <p className="text-[11px] capitalize text-slate-500">{st}</p>
               </Link>
             ))}
@@ -205,11 +214,11 @@ export default function Dashboard() {
 
         {/* Alerts + recent */}
         <Card>
-          {low.length > 0 && (
+          {lowCount > 0 && (
             <>
               <CardHeader title={<span className="flex items-center gap-1.5"><AlertTriangle className="h-4 w-4 text-amber-500" />Low stock</span>} action={<Link to="/inventory" className="text-xs font-medium text-brand-600 hover:underline">Inventory</Link>} />
               <ul className="px-5 pb-2 pt-2">
-                {low.slice(0, 3).map((x) => (
+                {lowTop.map((x) => (
                   <li key={x.id} className="flex items-center gap-2 py-1.5 text-sm">
                     <Thumb item={x} className="h-6 w-6 rounded text-base" /><span className="flex-1 truncate">{x.name}</span>
                     <Badge tone={x.stock <= 0 ? 'red' : 'amber'}>{x.stock <= 0 ? 'Out of stock' : `${x.stock} ${x.unit} left`}</Badge>
@@ -218,11 +227,11 @@ export default function Dashboard() {
               </ul>
             </>
           )}
-          {expiring.length > 0 && (
+          {soonCount > 0 && (
             <>
-              <CardHeader className={low.length ? 'border-t border-slate-100 pt-3' : ''} title={<span className="flex items-center gap-1.5"><CalendarClock className="h-4 w-4 text-orange-500" />Expiring soon</span>} action={<Link to="/inventory" className="text-xs font-medium text-brand-600 hover:underline">Expiry</Link>} />
+              <CardHeader className={lowCount ? 'border-t border-slate-100 pt-3' : ''} title={<span className="flex items-center gap-1.5"><CalendarClock className="h-4 w-4 text-orange-500" />Expiring soon</span>} action={<Link to="/inventory" className="text-xs font-medium text-brand-600 hover:underline">Expiry</Link>} />
               <ul className="px-5 pb-2 pt-2">
-                {expiring.slice(0, 3).map((b) => (
+                {soonTop.map((b) => (
                   <li key={b.id} className="flex items-center gap-2 py-1.5 text-sm">
                     {b.product && <Thumb item={b.product} className="h-6 w-6 rounded text-base" />}<span className="flex-1 truncate">{b.product?.name}</span>
                     <Badge tone={(b.daysLeft ?? 0) < 0 ? 'red' : 'orange'}>{(b.daysLeft ?? 0) < 0 ? 'Expired' : b.daysLeft === 0 ? 'Today' : `${b.daysLeft}d`} · {b.qty} {b.product?.unit}</Badge>
@@ -231,7 +240,7 @@ export default function Dashboard() {
               </ul>
             </>
           )}
-          <CardHeader title={`Recent ${t('invoice', true)}`} action={mod('orders') && <Link to="/orders" className="text-xs font-medium text-brand-600 hover:underline">View all</Link>} className={low.length || expiring.length ? 'border-t border-slate-100 pt-3' : ''} />
+          <CardHeader title={`Recent ${t('invoice', true)}`} action={mod('orders') && <Link to="/orders" className="text-xs font-medium text-brand-600 hover:underline">View all</Link>} className={lowCount || soonCount ? 'border-t border-slate-100 pt-3' : ''} />
           <ul className="px-5 pb-3 pt-1">
             {recent.map((o) => (
               <li key={o.id} className="flex items-center gap-2 py-1.5 text-sm">

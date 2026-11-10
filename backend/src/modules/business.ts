@@ -1,15 +1,17 @@
 // Business settings, sign-up setup, branches, roles and staff logins.
 import { COUNTRIES, normalizePhone } from '@/core/phone'
 import { branchLimitMessage } from '@/core/subscription'
-import { modulesFor, setupDefaultsFor } from '@/core/config'
+import { modulesFor, QR_BASE_URL_MAX, qrBaseUrlOk, setupDefaultsFor } from '@/core/config'
 import { FEATURE_MODULE, withFeatures, type FeatureKey } from '@/core/features'
 import { canEditBillFormat, cleanBillFormat, defaultBillFormat } from '@/core/billFormat'
+import { cleanScale, type BranchScale } from '@/core/scale'
 import { cleanStickers, stickerSettings } from '@/core/stickers'
 import { cleanGstin, GST_STATES, gstinError } from '@/core/gst'
 import { cleanLoyalty, loyaltyOf } from '@/core/loyalty'
-import type { BillingSettings, Branch, BranchPrinter, Business, ModuleKey, OrderType, Permission, Role, User } from '@/core/types'
+import type { BillingSettings, Branch, BranchPrinter, Business, ModuleKey, OrderType, Permission, QrSettings, Role, User } from '@/core/types'
 import { PERMISSIONS } from '@/core/config'
 import type { Ctx } from '../core/context'
+import type { Row } from '../db/types'
 import { ApiError, forbidden } from '../core/errors'
 import { assertPassword, hashPassword } from '../core/passwords'
 import { define, userRead, userWrite } from '../core/registry'
@@ -119,6 +121,30 @@ async function keepHiddenModules(c: Ctx, modules: Business['modules']): Promise<
   return out
 }
 
+/**
+ * QR settings as saved: only the known fields, each checked. The web address goes into every printed QR code and the
+ * "Open" link, so it must be empty (the app's own address) or http(s)://… — never javascript: or anything else.
+ */
+function cleanQr(input: unknown): Partial<QrSettings> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ApiError('Check the QR settings')
+  const q = input as Record<string, unknown>
+  const out: Partial<QrSettings> = {}
+  if (q.orderTypes !== undefined) {
+    if (!Array.isArray(q.orderTypes) || q.orderTypes.some((t) => !QR_ORDER_TYPES.includes(t as OrderType))) throw new ApiError('Choose the order types customers may use')
+    out.orderTypes = [...new Set(q.orderTypes as OrderType[])]
+  }
+  if (q.autoAccept !== undefined) {
+    if (typeof q.autoAccept !== 'boolean') throw new ApiError('Check the auto-accept setting')
+    out.autoAccept = q.autoAccept
+  }
+  if (q.baseUrl !== undefined) {
+    if (!qrBaseUrlOk(q.baseUrl)) throw new ApiError(`Enter a web address starting with http:// or https:// (${QR_BASE_URL_MAX} characters at most)`)
+    out.baseUrl = q.baseUrl as string
+  }
+  return out
+}
+const QR_ORDER_TYPES: OrderType[] = ['dine_in', 'takeaway', 'delivery']
+
 define('business', {
   update: userWrite(async (c, patch: Partial<Business>) => {
     const b = c.business
@@ -142,7 +168,7 @@ define('business', {
     if (patch.phone !== undefined) row.phone = cleanPhone(patch.phone, patch.defaultCountry ?? b.defaultCountry) || null
     if (patch.terminology) await putSetting(c.db, b.id, 'terminology', patch.terminology, c.userId)
     if (patch.modules) await putSetting(c.db, b.id, 'modules', await keepHiddenModules(c, patch.modules), c.userId)
-    if (patch.qr) await putSetting(c.db, b.id, 'qr', patch.qr, c.userId)
+    if (patch.qr) await putSetting(c.db, b.id, 'qr', cleanQr(patch.qr), c.userId)
     if (patch.stateCode !== undefined) {
       if (patch.stateCode && !GST_STATES[patch.stateCode]) throw new ApiError('Choose a state')
       await putSetting(c.db, b.id, 'gst', { stateCode: patch.stateCode || '' }, c.userId)
@@ -282,6 +308,20 @@ define('branches', {
     return saved
   }),
 
+  /** Save one branch's weighing scale setup. Same people as the printer (owner / manager, or cashiers of that branch). */
+  saveScale: userWrite(async (c, branchId: string, patch: Partial<BranchScale>) => {
+    if (!c.can('settings.manage') && !c.can('billing.create')) throw forbidden('You don’t have permission to change the weighing scale')
+    const br = await own(c, 'branches', branchId, 'Branch not found')
+    if (!c.s.allowed.includes(br.ROWID)) throw new ApiError('Branch not found', 404)
+    const cur = cleanScale(JSON.parse(str(br.scale_json) || '{}'))
+    const next = cleanScale(patch, cur)
+    const saved = { ...next, updatedAt: c.now.toISOString(), updatedBy: c.userId }
+    await c.db.update('branches', br.ROWID, { scale_json: JSON.stringify(saved) })
+    await audit(c, 'branch', br.ROWID, 'update', `${str(br.name)}: weighing scale ${next.enabled ? 'on' : 'off'}`, br.ROWID)
+    await bumpEpoch(c, c.businessId)
+    return saved
+  }),
+
   /** Save one branch's bill format (Settings → Printer and bill). Owner / manager, or "Change bill format" for own branches. */
   saveBillFormat: userWrite(async (c, branchId: string, input: unknown) => {
     if (!canEditBillFormat((p) => c.can(p))) throw forbidden('You don’t have permission to change the bill format')
@@ -297,6 +337,8 @@ define('branches', {
   list: userRead(async (c) => branchesWithCounts(c)),
 
   save: userWrite(async (c, input: Partial<Branch> & { name: string }) => {
+    // Adding or changing branches (names, bill series, open / closed): the owner only (an all-access role).
+    if (c.s.permissions !== 'all') throw new ApiError('Only the owner can add or change branches', 403, 'FORBIDDEN')
     const name = String(input.name ?? '').trim()
     if (!name) throw new ApiError('Enter a branch name')
     const all = await c.db.select('branches', { where: { business_id: c.businessId } })
@@ -338,13 +380,62 @@ define('branches', {
 
 const VALID_PERMS = new Set(PERMISSIONS.map((p) => p.key))
 
+
+// ---------- Who may manage which staff (enforced here, whatever the screen sends) ----------
+// Someone with "Manage staff & roles" who is not the owner (an all-access role) may not:
+//  • change the owner's account or any all-access user, or give the Owner (all-access) role;
+//  • give a role, or put a permission in a role, that has more than they have themselves;
+//  • change their own role, or their own role's permissions;
+//  • give access to a branch outside their own branches, or change staff who work in branches they don't manage.
+const allAccess = (c: Ctx) => c.s.permissions === 'all'
+const LABEL = new Map(PERMISSIONS.map((p) => [p.key as string, p.label]))
+async function roleRow(c: Ctx, id: string | null | undefined) { return id ? c.db.get('roles', String(id)) : null }
+async function rolePerms(c: Ctx, role: { ROWID: string; is_all_access?: unknown }): Promise<Set<string> | 'all'> {
+  if (role.is_all_access) return 'all'
+  return new Set((await c.db.select('role_permissions', { where: { role_id: role.ROWID } })).map((p) => str(p.permission)))
+}
+/** Permissions in `perms` the caller doesn't have (empty = may give them). */
+function beyondCaller(c: Ctx, perms: Set<string> | 'all'): string[] {
+  if (allAccess(c)) return []
+  if (perms === 'all') return ['*']
+  return [...perms].filter((p) => !c.can(p as Permission))
+}
+const tooMuch = (extra: string[]) => new ApiError(extra.includes('*')
+  ? 'Only the owner can give full (Owner) access'
+  : `You can’t give access you don’t have yourself: ${extra.map((p) => LABEL.get(p) ?? p).join(', ')}`, 403, 'FORBIDDEN')
+
+/** A staff member (new or existing) and the role / branches asked for: refused if beyond the caller. */
+async function assertMayManageUser(c: Ctx, target: Row | null, roleId: string | null, branchIds: string[]) {
+  if (target && target.ROWID === c.userId && roleId !== str(target.role_id || '') && (roleId || target.role_id)) throw new ApiError('You can’t change your own role', 403, 'FORBIDDEN')
+  if (allAccess(c)) return
+  if (target) {
+    const tRole = await roleRow(c, str(target.role_id))
+    if (str(target.username) || tRole?.is_all_access) throw new ApiError('Only the owner can change the owner’s account', 403, 'FORBIDDEN')
+    if (target.ROWID !== c.userId) {
+      const theirs = (await c.db.select('user_branches', { where: { user_id: target.ROWID } })).map((x) => str(x.branch_id))
+      const where = theirs.length ? theirs : [str(target.default_branch_id)]
+      if (where.some((b) => b && !c.s.allowed.includes(b))) throw new ApiError('This staff member works in a branch you don’t manage', 403, 'FORBIDDEN')
+    }
+  }
+  if (roleId) {
+    const r = await roleRow(c, roleId)
+    if (r) { const extra = beyondCaller(c, await rolePerms(c, r)); if (extra.length) throw tooMuch(extra) }
+  }
+  const outside = branchIds.filter((b) => !c.s.allowed.includes(b))
+  if (outside.length) throw new ApiError('You can only give access to the branches you work in', 403, 'FORBIDDEN')
+}
+
 define('roles', {
-  list: userRead(async (c) => loadRoles(c.db, c.businessId)),
+  list: userRead(async (c) => loadRoles(c.db, c.businessId), { anyPerm: ['users.manage', 'settings.manage'] }),
   save: userWrite(async (c, role: Omit<Role, 'businessId' | 'id'> & { id?: string }) => {
     const name = String(role.name ?? '').trim()
     if (!name) throw new ApiError('Enter a role name')
     const perms = ((role.permissions ?? []) as string[]).filter((p) => VALID_PERMS.has(p as Permission))
     let row = role.id ? await own(c, 'roles', role.id, 'Role not found') : null
+    // Only what the caller has may go into a role; nobody but the owner edits their own role or an all-access one.
+    const extra = beyondCaller(c, new Set(perms))
+    if (extra.length) throw tooMuch(extra)
+    if (row && !allAccess(c) && (row.is_all_access || row.ROWID === c.s.role.id)) throw new ApiError(row.is_all_access ? 'Only the owner can change the Owner role' : 'You can’t change your own role’s permissions', 403, 'FORBIDDEN')
     if (row) {
       if (Number(row.system_key) === E.RoleKey.owner) throw new ApiError('Owner role always has full access')
       await c.db.update('roles', row.ROWID, { name: name.slice(0, 60), uniq_key: `${c.businessId}:${keyPart(name)}` })
@@ -372,7 +463,11 @@ define('roles', {
 })
 
 define('users', {
-  list: userRead(async (c) => loadUsers(c.db, c.businessId)),
+  /** Staff list. Contact details and login names only for those who manage staff (others need names for pickers). */
+  list: userRead(async (c) => {
+    const all = await loadUsers(c.db, c.businessId)
+    return c.can('users.manage') || c.can('settings.manage') ? all : all.map((u) => ({ ...u, phone: '', email: '', username: undefined }))
+  }, { anyPerm: ['billing.create', 'orders.view', 'expenses.manage', 'users.manage', 'settings.manage', 'reports.view'] }),
   save: userWrite(async (c, u: Partial<User> & { name: string; phone: string; roleId: string }) => {
     const name = String(u.name ?? '').trim()
     if (!name) throw new ApiError('Enter the name')
@@ -382,19 +477,20 @@ define('users', {
     if (!canLogin && existing0?.ROWID === c.userId) throw new ApiError('You can’t turn off app access for yourself')
     if (!canLogin && existing0?.username) throw new ApiError('The owner’s login can’t be turned into a staff member without app access')
     const phone = cleanPhone(u.phone, c.business.defaultCountry, canLogin ? 'Enter the mobile number (used to sign in)' : 'Enter the mobile number')
-    const clash = await c.db.first('users', { phone })
+    const clash = await c.db.first('users', { business_id: c.businessId, phone })
     if (clash && clash.ROWID !== u.id) throw new ApiError('Mobile number already used by another user')
     const roleId = canLogin ? (await own(c, 'roles', u.roleId, 'Choose a role')).ROWID : (u.roleId ? (await own(c, 'roles', u.roleId, 'Choose a role')).ROWID : null)
     const email = String(u.email ?? '').trim().toLowerCase()
     if (email && !/^[^\s@'"\\]+@[^\s@'"\\]+\.[^\s@'"\\]+$/.test(email)) throw new ApiError('Enter a valid email')
     const branchList = (u.branchIds?.length ? u.branchIds : [c.writeBranch({ fallback: true })]).filter((id) => c.s.allBranches.some((b) => b.id === id))
     if (!branchList.length) throw new ApiError('Select at least one branch')
+    await assertMayManageUser(c, existing0, roleId, u.branchIds ? branchList : [])
     const existing = existing0
     if (existing && existing.ROWID === c.userId && u.active === false) throw new ApiError('You can’t turn off your own login')
     // A password is needed for a new login, or when app access is turned on for someone who had none.
     const needsPassword = canLogin && (!existing || !existing.password_hash || existing.can_login === false)
-    if (needsPassword) assertPassword(u.password)
-    else if (canLogin && u.password) assertPassword(u.password)
+    if (needsPassword) assertPassword(u.password, [phone, existing?.username ? str(existing.username) : null])
+    else if (canLogin && u.password) assertPassword(u.password, [phone, existing?.username ? str(existing.username) : null])
     const hash = canLogin && u.password ? await hashPassword(u.password) : null
     // Without app access nothing is a sign-in name, so the mobile / email can't be used to sign in (and are freed).
     const logins = canLogin ? { username: existing ? str(existing.username) || null : null, phone, email: email || null } : { username: null, phone: null, email: null }

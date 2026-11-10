@@ -4,11 +4,12 @@ import { randomBytes } from 'node:crypto'
 import type { Ticket, TicketCategory, TicketMessage, TicketPriority, TicketStatus } from '@/core/types'
 import type { Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
+import { mediaKeyOf, mediaLink, PRIVATE_PREFIX } from '../core/media'
 import { adminRead, adminWrite, define, userRead, userWrite } from '../core/registry'
 import { DuplicateError, type Row } from '../db/types'
 import { selectIn } from '../domain/orders'
 import { code, E, isId, nameOf, str, strOrNull } from '../domain/util'
-import { businessLite } from './admin/shared'
+import { adminLog, businessLite } from './admin/shared'
 import { storeImage } from './catalog'
 
 const MAX_IMAGES = 5
@@ -26,14 +27,21 @@ async function storeAdminScreenshot(c: Ctx, input: ImageInput) {
   const ok = (buf.subarray(0, 4).toString('latin1') === 'RIFF' && buf.subarray(8, 12).toString('latin1') === 'WEBP') || (buf[0] === 0xff && buf[1] === 0xd8) || (buf[0] === 0x89 && buf[1] === 0x50)
   if (!ok) throw new ApiError('That file is not a supported image')
   if (buf.length > SCREENSHOT_MAX) throw new ApiError(`Image is too large after compression (${Math.round(buf.length / 1024)} KB, the limit is ${Math.round(SCREENSHOT_MAX / 1024)} KB)`)
-  const key = `${PLATFORM_PREFIX}${randomBytes(9).toString('hex')}.${m[2] === 'jpeg' ? 'jpg' : m[2]}`
-  const url = await c.files.put(key, buf, m[1])
+  const name = `${PLATFORM_PREFIX}${randomBytes(9).toString('hex')}.${m[2] === 'jpeg' ? 'jpg' : m[2]}`
+  // A private store (L9): kept out of the public bucket, shown through short-lived signed links.
+  const priv = c.files.hasPrivate, key = priv ? PRIVATE_PREFIX + name : name
+  let url: string
+  if (priv) { await c.files.putPrivate(key, buf, m[1]); url = mediaLink(key, c.now.getTime()) } else url = await c.files.put(key, buf, m[1])
   await c.platform.insert('media_files', {
-    business_id: null, purpose: E.MediaPurpose.ticket, bucket: process.env.STRATUS_BUCKET || 'local', object_key: key, content_type: m[1], bytes: buf.length,
+    business_id: null, purpose: E.MediaPurpose.ticket, bucket: priv ? privateBucketName() : process.env.STRATUS_BUCKET || 'local', object_key: key, content_type: m[1], bytes: buf.length,
     width: input.width ? Math.round(input.width) : null, height: input.height ? Math.round(input.height) : null, original_bytes: input.originalBytes ? Math.round(input.originalBytes) : null, created_by: null,
   })
   return { url, bytes: buf.length }
 }
+
+export const privateBucketName = () => process.env.STRATUS_PRIVATE_BUCKET || 'private'
+/** A screenshot's link: signed and short-lived for private ones, the public address for older ones. */
+export const screenshotUrl = (c: Ctx, key: string) => key.startsWith(PRIVATE_PREFIX) ? mediaLink(key, c.now.getTime()) : c.files.url(key)
 
 /** Screenshot URLs sent back with a message → media rows. Only files uploaded by the same side are accepted. */
 async function mediaFor(c: Ctx, urls: unknown, side: 'customer' | 'admin'): Promise<string[]> {
@@ -41,9 +49,9 @@ async function mediaFor(c: Ctx, urls: unknown, side: 'customer' | 'admin'): Prom
   if (list.length > MAX_IMAGES) throw new ApiError('Up to 5 screenshots')
   const out: string[] = []
   for (const url of list) {
-    const key = c.files.keyOf(url)
+    const key = mediaKeyOf(url) ?? c.files.keyOf(url)
     const prefix = side === 'customer' ? `${c.businessId}/tickets/` : PLATFORM_PREFIX
-    if (!key || !key.startsWith(prefix)) throw new ApiError('Upload the screenshot again')
+    if (!key || !(key.startsWith(prefix) || key.startsWith(PRIVATE_PREFIX + prefix))) throw new ApiError('Upload the screenshot again')
     // Screenshots are kept with the tickets, in the platform database.
     const r = await c.platform.first('media_files', { object_key: key, business_id: side === 'customer' ? c.businessId : null, purpose: E.MediaPurpose.ticket })
     if (!r) throw new ApiError('Upload the screenshot again')
@@ -62,7 +70,7 @@ async function ticketsFrom(c: Ctx, rows: Row[]): Promise<(Ticket & { imageCount:
   ])
   const atts = msgs.length ? await selectIn(c, 'ticket_attachments', 'message_id', msgs.map((m) => m.ROWID)) : []
   const media = atts.length ? await selectIn(c, 'media_files', 'ROWID', atts.map((a) => str(a.media_id)), {}, c.platform) : []
-  const urlOf = new Map(media.map((m) => [m.ROWID, c.files.url(str(m.object_key))]))
+  const urlOf = new Map(media.map((m) => [m.ROWID, screenshotUrl(c, str(m.object_key))]))
   const imagesOf = (msgId: string) => atts.filter((a) => a.message_id === msgId).sort((a, b) => Number(a.sort_order) - Number(b.sort_order)).map((a) => urlOf.get(str(a.media_id))).filter((u): u is string => !!u)
   const bm = new Map(businesses.map((b) => [b.ROWID, b]))
   return rows.map((r) => {
@@ -201,7 +209,7 @@ define('admin', {
     }
   }),
 
-  replyTicket: adminWrite('customers.view', async (c, id: string, text: string, images: string[] = [], status?: TicketStatus) => {
+  replyTicket: adminWrite('tickets.manage', async (c, id: string, text: string, images: string[] = [], status?: TicketStatus) => {
     const a = c.requireAdmin()
     const t = await anyTicket(c, id)
     const body = String(text ?? '').trim()
@@ -218,7 +226,7 @@ define('admin', {
     })
   }),
 
-  updateTicket: adminWrite('customers.view', async (c, id: string, patch: { status?: TicketStatus; priority?: TicketPriority; assignedTo?: string | null }) => {
+  updateTicket: adminWrite('tickets.manage', async (c, id: string, patch: { status?: TicketStatus; priority?: TicketPriority; assignedTo?: string | null }) => {
     const t = await anyTicket(c, id)
     const up: Record<string, string | number | null> = { last_message_at: c.now.toISOString() }
     if (patch?.status !== undefined) {
@@ -239,8 +247,31 @@ define('admin', {
       }
     }
     await c.platform.update('support_tickets', t.ROWID, up)
+    // Admin log: who changed which ticket, and what.
+    const what = [patch?.status !== undefined && `status → ${patch.status}`, patch?.priority !== undefined && `priority → ${patch.priority}`, patch?.assignedTo !== undefined && `assigned → ${patch.assignedTo || 'nobody'}`].filter(Boolean).join(', ')
+    if (what) await adminLog(c, c.requireAdmin(), 'ticket', t.business_id ? { id: str(t.business_id), name: '' } : null, `Ticket #${t.ROWID}: ${what}`)
   }),
 
   /** Screenshot for an admin reply (≤ 1600 px / 200 KB, compressed in the browser). */
-  storeScreenshot: adminWrite('customers.view', async (c, input: ImageInput) => storeAdminScreenshot(c, input), { tx: 'none' }),
+  storeScreenshot: adminWrite('tickets.manage', async (c, input: ImageInput) => storeAdminScreenshot(c, input), { tx: 'none' }),
+
+  /** One-time move (L9): screenshots saved before the private store existed → private store, 100 per call.
+   *  Run until `left` is 0. Each file is copied, its row updated, then the public copy removed. */
+  moveScreenshots: adminWrite('team.manage', async (c) => {
+    if (!c.files.hasPrivate) throw new ApiError('Set STRATUS_PRIVATE_BUCKET first (a bucket that is not public)')
+    const rows = (await c.platform.select('media_files', { where: { purpose: E.MediaPurpose.ticket }, limit: 5000 }))
+      .filter((r) => !str(r.object_key).startsWith(PRIVATE_PREFIX) && r.bucket !== 'external')
+    let moved = 0, missing = 0
+    for (const r of rows.slice(0, 100)) {
+      const old = str(r.object_key), body = await c.files.get(old)
+      if (!body) { missing++; continue }
+      const key = PRIVATE_PREFIX + old
+      await c.files.putPrivate(key, body, str(r.content_type) || 'image/webp')
+      await c.platform.update('media_files', r.ROWID, { object_key: key, bucket: privateBucketName() })
+      await c.files.remove(old)
+      moved++
+    }
+    if (moved) await adminLog(c, c.requireAdmin(), 'ticket', null, `Moved ${moved} support screenshots to the private store`)
+    return { moved, missing, left: rows.length - moved }
+  }, { tx: 'none' }),
 })

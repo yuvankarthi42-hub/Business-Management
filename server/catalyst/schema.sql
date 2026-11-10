@@ -182,7 +182,8 @@ CREATE TABLE branches (
   is_active        BOOLEAN      NOT NULL DEFAULT true,
   invoice_prefix   VARCHAR(10),                         -- own bill series, e.g. 'AD-'; NULL = business series
   printer_json     TEXT,                                -- receipt printer setup: {transport, paper, mode, autoPrint, copies, cut, drawer, baudRate}
-  row_version      INT          NOT NULL DEFAULT 1
+  row_version      INT          NOT NULL DEFAULT 1,
+  scale_json       TEXT                                 -- weighing scale setup: {enabled, brand, baudRate, autoAdd, minGrams, roundGrams}
 );
 
 -- How a branch's bills look (Settings → Printer and bill): columns, top / bottom lines and their names, footer.
@@ -614,7 +615,8 @@ CREATE TABLE orders (
   points_earned    INT          NOT NULL DEFAULT 0,
   points_balance_after INT,                             -- customer's points after this bill (printed)
   updated_by       BIGINT       FK → users NULL,
-  row_version      INT          NOT NULL DEFAULT 1
+  row_version      INT          NOT NULL DEFAULT 1,
+  track_code       VARCHAR(32)                          -- QR orders: random code in the customer's tracking link (never the row id)
 );
 
 CREATE TABLE order_items (
@@ -948,6 +950,15 @@ CREATE TABLE ticket_attachments (
   message_id       BIGINT       NOT NULL FK → ticket_messages CASCADE,
   media_id         BIGINT       NOT NULL FK → media_files CASCADE, -- screenshots ≤ 1600 px / 200 KB, up to 5
   sort_order       INT          NOT NULL DEFAULT 0
+);
+
+-- Writes saved once per request (K-7): the answer of a stock change, expense, new product, staff advance or points
+-- change, so the same request sent again gets it back instead of saving twice. Older than 2 days: removed daily.
+CREATE TABLE request_log (
+  business_id      BIGINT       NOT NULL FK → businesses CASCADE,
+  uniq_key         VARCHAR(80)  NOT NULL UNIQUE,        -- '<business_id>:<request id>'
+  name             VARCHAR(60)  NOT NULL,               -- the action, e.g. inventory.adjust
+  answer_json      TEXT                                 -- its answer as JSON (NULL: too big to keep)
 );
 
 -- What the shop's staff did (Settings → Audit log).

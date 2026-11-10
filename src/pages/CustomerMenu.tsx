@@ -45,6 +45,73 @@ export default function CustomerMenu() {
   return <MenuApp menu={menu} tableId={tableParam} />
 }
 
+/** Typed text, once the typing stops (a paged menu's search is a server read). */
+function useSettled(v: string, ms = 300) {
+  const [s, setS] = useState(v)
+  useEffect(() => { const t = setTimeout(() => setS(v), ms); return () => clearTimeout(t) }, [v, ms])
+  return s
+}
+
+/**
+ * A paged menu's list (over 150 active items): "All" starts with the page that came with the menu; a category or a search (2+ letters)
+ * is read from the server; "more" adds the next page. Small shops never use it (their menu is all there).
+ */
+function useMenuPages(menu: Menu, cat: string, q: string) {
+  const text = useSettled(q.trim())
+  const on = !!menu.large
+  const key = `${text ? '' : cat}|${text}`
+  const [st, setSt] = useState<{ key: string; rows: Product[]; next: string | null; busy: boolean } | null>(null)
+  const shown = useRef<{ key: string; n: number }>({ key: '', n: 0 })
+  shown.current = { key: st?.key ?? '', n: st?.rows.length ?? 0 }
+  useEffect(() => {
+    if (!on || (!text && cat === 'specials')) return
+    // The menu was re-read (every few minutes) while the customer is further down this list: keep their place
+    // (prices and stock are checked again when the order is placed).
+    if (shown.current.key === key && shown.current.n > menu.products.length) return
+    if (!text && cat === 'all') { setSt({ key, rows: menu.products, next: menu.next ?? null, busy: false }); return }
+    if (text && text.length < 2) { setSt({ key, rows: [], next: null, busy: false }); return }
+    let alive = true
+    setSt({ key, rows: [], next: null, busy: true })
+    api.public.menuItems(menu.business.id, menu.branch.id, { cat: text ? '' : cat, q: text, after: null })
+      .then((r) => { if (alive) setSt({ key, rows: r.products, next: r.next, busy: false }) })
+      .catch(() => { if (alive) setSt({ key, rows: [], next: null, busy: false }) })
+    return () => { alive = false }
+  }, [on, key, menu]) // eslint-disable-line react-hooks/exhaustive-deps
+  const cur = st && st.key === key ? st : null
+  const more = () => {
+    if (!cur || !cur.next || cur.busy) return
+    const after = cur.next
+    setSt({ ...cur, busy: true })
+    api.public.menuItems(menu.business.id, menu.branch.id, { cat: text ? '' : cat, q: text, after })
+      .then((r) => setSt((s) => (s && s.key === key ? { key, rows: [...s.rows, ...r.products.filter((p) => !s.rows.some((x) => x.id === p.id))], next: r.next, busy: false } : s)))
+      .catch(() => setSt((s) => (s && s.key === key ? { ...s, busy: false } : s)))
+  }
+  const typing = q.trim() !== text
+  return { rows: cur?.rows ?? [], busy: !cur || cur.busy || typing, hasMore: !!cur?.next, more, short: !!text && text.length < 2 }
+}
+
+/** Under a paged menu's list: loading / nothing found / the next page (when the end of the list comes into view). */
+function MorePages({ pages }: { pages: ReturnType<typeof useMenuPages> }) {
+  const end = useRef<HTMLDivElement>(null)
+  const more = useRef(pages.more)
+  more.current = pages.more
+  useEffect(() => {
+    const el = end.current
+    if (!el || !pages.hasMore || typeof IntersectionObserver === 'undefined') return
+    const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) more.current() }, { rootMargin: '400px' })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [pages.hasMore, pages.rows.length])
+  if (pages.short) return <p className="px-4 py-6 text-center text-sm text-slate-500">Type 2 or more letters to search</p>
+  if (!pages.rows.length) return <p className="px-4 py-6 text-center text-sm text-slate-500">{pages.busy ? 'Loading…' : 'No items found'}</p>
+  if (!pages.hasMore && !pages.busy) return null
+  return (
+    <div ref={end} className="px-4 py-4 text-center">
+      {pages.busy ? <p className="text-sm text-slate-500">Loading…</p> : <Button variant="ghost" onClick={pages.more}>Show more</Button>}
+    </div>
+  )
+}
+
 function Message({ icon: Icon, title, text }: { icon: typeof XCircle; title: string; text: string }) {
   return (
     <div className="flex h-[100dvh] flex-col items-center justify-center bg-slate-50 px-8 text-center">
@@ -67,16 +134,21 @@ function MenuApp({ menu, tableId }: { menu: Menu; tableId: string | null }) {
   const [q, setQ] = useState('')
   const special = useMemo(() => new Map(menu.specialInfo.map((s) => [s.productId, s])), [menu])
 
+  // A paged menu (menu.large, over 150 active items): the list comes from the server a page at a time (categories, "more", search).
+  const paged = useMenuPages(menu, cat, q)
+  const serverList = !!menu.large && (!!q.trim() || cat !== 'specials')
   const list = useMemo(() => {
+    if (serverList) return paged.rows
     const s = q.trim().toLowerCase()
     if (s) return menu.products.filter((p) => p.name.toLowerCase().includes(s))
     if (cat === 'specials') return menu.specials
     return cat === 'all' ? menu.products : menu.products.filter((p) => p.categoryId === cat)
-  }, [menu, cat, q])
+  }, [menu, cat, q, serverList, paged.rows])
   const chips = [
     { value: 'all', label: 'All' },
     ...(menu.specials.length ? [{ value: 'specials', label: '🔥 Specials' }] : []),
-    ...menu.categories.filter((c) => menu.products.some((p) => p.categoryId === c.id)).map((c) => ({ value: c.id, label: <CategoryLabel c={c} /> })),
+    // A paged menu lists only the categories that have something to order (the server checked).
+    ...(menu.large ? menu.categories : menu.categories.filter((c) => menu.products.some((p) => p.categoryId === c.id))).map((c) => ({ value: c.id, label: <CategoryLabel c={c} /> })),
   ]
   const pick = (p: Product) => { if (!optionsJustClosed()) (needsOptions(p) ? setOptions(p) : cart.addProduct(p)) }
 
@@ -169,6 +241,7 @@ function MenuApp({ menu, tableId }: { menu: Menu; tableId: string | null }) {
           )
         })}
       </ul>
+      {serverList && <MorePages pages={paged} />}
 
       {cart.items.length > 0 && (
         <div className="safe-bottom fixed inset-x-0 bottom-0 z-20 mx-auto max-w-md p-3">
@@ -207,7 +280,7 @@ function Checkout({ menu, cart, type, table, onBack, onPlaced }: {
         type, tableId: table?.id ?? null, notes, guest, branchId: menu.branch.id,
         items: cart.items.map((i) => ({ productId: i.productId, variantId: i.variantId, addOnIds: i.addOns.map((a) => a.id), qty: i.qty, notes: i.notes })),
       })
-      id = r.orderId
+      id = r.trackCode ?? r.orderId // the tracking link carries the order's code (the demo app tracks by id)
     })
     setBusy(false)
     if (ok) {

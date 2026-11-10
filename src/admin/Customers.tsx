@@ -155,7 +155,7 @@ function CreateCustomerModal({ plans, onClose, onCreated }: { plans: PlanPrices;
             <Field required label="Username" hint="4–30 letters or numbers, no spaces">
               <Input required value={f.username} onChange={(e) => { setTouchedUser(true); set({ username: e.target.value.toLowerCase().replace(/\s/g, '') }) }} className="font-mono" autoCapitalize="none" spellCheck={false} />
             </Field>
-            <Field required label="Password" hint="At least 6 characters">
+            <Field required label="Password" hint="At least 8 characters">
               <div className="flex gap-1.5">
                 <Input required minLength={6} value={f.password} onChange={(e) => set({ password: e.target.value })} className="font-mono" autoComplete="new-password" />
                 <Button type="button" variant="secondary" icon={Wand2} onClick={() => set({ password: randomPassword() })} aria-label="New password" title="Generate a new password" />

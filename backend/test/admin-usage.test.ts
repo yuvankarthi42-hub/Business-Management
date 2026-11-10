@@ -10,7 +10,7 @@ const sameExceptTime = (a: Usage, b: Usage) => { const { usageAt: _a, ...x } = a
 
 test('admin.usage: bill counts from the daily copy (one database per shop), new shops read live, same numbers', async () => {
   const s = await withShop()
-  process.env.CRON_KEY = 'test-cron-key-123'
+  process.env.CRON_KEY = 'test-cron-key-123-0123456789abcdef'
   const shared = (s.env as unknown as { shared: { get(k: string): Promise<string | null> } }).shared
   try {
     await s.call('business.update', { billing: { taxEnabled: false } })
@@ -29,7 +29,7 @@ test('admin.usage: bill counts from the daily copy (one database per shop), new 
     assert.equal(!!(await shared.get('admin:usage')), PER_SHOP, 'Turso: a copy is kept')
 
     // The daily job counts every shop again: the same numbers as the live read.
-    await s.call('system.runDailyJobs', 'test-cron-key-123')
+    await s.call('system.runDailyJobs', 'test-cron-key-123-0123456789abcdef')
     const daily = await usage()
     sameExceptTime(daily, first)
 
@@ -59,7 +59,7 @@ test('admin.usage: bill counts from the daily copy (one database per shop), new 
     const st = JSON.parse(String(row.value_json))
     st.round.finishedOn = '2000-01-01'
     await platform.update('platform_settings', row.ROWID, { value_json: JSON.stringify(st) })
-    await s.call('system.runDailyJobs', 'test-cron-key-123')
+    await s.call('system.runDailyJobs', 'test-cron-key-123-0123456789abcdef')
     const next = await usage()
     assert.deepEqual(next.rows.map((r) => [r.id, r.bills7]).sort(), [[s.businessId, 4], [shop2.id, 1]].sort())
   } finally { delete process.env.CRON_KEY; s.close() }

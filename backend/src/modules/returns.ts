@@ -1,5 +1,6 @@
 // Returns, refunds and exchanges (sale_returns, sale_return_items). Each return is a credit note (CN-1001).
 // Same rules and return shapes as the app's mock API.
+import { lineShare } from '@/core/gst'
 import { r2 } from '@/core/pricing'
 import type { PaymentMethod, ReturnReason, SaleReturn } from '@/core/types'
 import { pointsForReturn } from '@/core/loyalty'
@@ -9,8 +10,8 @@ import { define, userRead, userWrite } from '../core/registry'
 import { DuplicateError, type Row } from '../db/types'
 import { clientUuid, loadOrder, selectIn } from '../domain/orders'
 import { movePoints } from '../domain/points'
-import { moveStock, stockProduct } from '../domain/stock'
-import { audit, code, E, moduleOn, fromMilli, fromMinor, nameOf, nameOrNull, nextNumber, str, strOrNull, toMilli, toMinor } from '../domain/util'
+import { moveStock, restorableStock, stockProduct, takeRestorable } from '../domain/stock'
+import { audit, code, E, moduleOn, fromMilli, fromMinor, nameOf, nameOrNull, nextNumber, str, strOrNull, toMilli, toMinor, quantity } from '../domain/util'
 
 export interface ReturnInput {
   orderId: string
@@ -43,6 +44,16 @@ export async function withLines(c: Ctx, rows: Row[]): Promise<SaleReturn[]> {
   return rows.map((r) => returnFrom(r, items))
 }
 
+/**
+ * Each bill line as billed, in paise: its value (with its own GST and its share of the bill discount) and its GST —
+ * stored when the bill was made. A return is worked out per line from these, so a bill mixing GST rates refunds each
+ * item its own amount. null for a line billed before these were stored (then the bill-wide ratio is used, as before).
+ */
+async function billedLines(c: Ctx, orderId: string) {
+  const rows = await c.db.select('order_items', { where: { business_id: c.businessId, order_id: orderId } })
+  return new Map(rows.map((r) => [r.ROWID, r.taxable_minor == null ? null : { value: Number(r.taxable_minor) + Number(r.tax_minor ?? 0), tax: Number(r.tax_minor ?? 0), milli: Number(r.qty_milli) }]))
+}
+
 /** Returns already made against a bill (oldest first) and their lines. */
 async function returnsOf(c: Ctx, orderId: string) {
   const rows = await c.db.select('sale_returns', { where: { business_id: c.businessId, order_id: orderId }, orderBy: [['CREATEDTIME', 'ASC']] })
@@ -60,18 +71,24 @@ define('returns', {
   /** What can still be returned from a bill (quantity already returned is taken off). */
   forOrder: userRead(async (c, orderId: string) => {
     const { order: o } = await billOf(c, orderId, 'Bill not found')
-    const done = await returnsOf(c, o.id)
+    const [done, billed] = await Promise.all([returnsOf(c, o.id), billedLines(c, o.id)])
+    const ratio = o.subtotal > 0 ? o.total / o.subtotal : 0
     return {
       returns: done.rows.map((r) => returnFrom(r, done.items)),
-      items: o.items.map((i) => { const returned = fromMilli(done.milli(i.id)); return { ...i, returned, returnable: r2(i.qty - returned) } }),
-      ratio: o.subtotal > 0 ? o.total / o.subtotal : 0,
+      items: o.items.map((i) => {
+        const returned = fromMilli(done.milli(i.id)), b = billed.get(i.id)
+        // What one unit gives back (for the screen's preview): this line's own value, else the bill-wide ratio.
+        const refundEach = b && b.milli > 0 ? fromMinor(b.value) / fromMilli(b.milli) : i.unitPrice * ratio
+        return { ...i, returned, returnable: r2(i.qty - returned), refundEach }
+      }),
+      ratio,
     }
-  }),
+  }, { anyPerm: ['orders.view', 'orders.cancel'] }),
 
   list: userRead(async (c, limit = 200) => {
     const rows = await c.db.select('sale_returns', { where: { business_id: c.businessId, branch_id: { in: c.scope() } }, orderBy: [['CREATEDTIME', 'DESC']], limit: Math.min(Math.max(1, Number(limit) || 200), 1000) })
     return withLines(c, rows)
-  }),
+  }, { anyPerm: ['orders.view', 'orders.cancel'] }),
 
   creditNote: userRead(async (c, number: string) => {
     // ZCQL values can't hold quotes — keep only what a credit note number can contain.
@@ -91,18 +108,24 @@ define('returns', {
 
     const { row, order: o } = await billOf(c, input.orderId, 'Only completed bills can be returned')
     if (o.status !== 'completed' || !o.invoiceNumber) throw new ApiError('Only completed bills can be returned')
-    const done = await returnsOf(c, o.id)
+    const [done, billed] = await Promise.all([returnsOf(c, o.id), billedLines(c, o.id)])
     const ratio = o.subtotal > 0 ? o.total / o.subtotal : 0
-    const lines: { it: typeof o.items[number]; qtyMilli: number; qty: number; amount: number; restock: boolean }[] = []
+    const lines: { it: typeof o.items[number]; qtyMilli: number; qty: number; amount: number; tax: number; restock: boolean }[] = []
     for (const l of input.lines ?? []) {
       const qtyMilli = toMilli(Number(l.qty) || 0)
       if (!(qtyMilli > 0)) continue
       const it = o.items.find((x) => x.id === l.orderItemId)
       if (!it) throw new ApiError('That item isn’t on this bill')
-      const left = toMilli(it.qty) - done.milli(it.id) - lines.filter((x) => x.it.id === it.id).reduce((a, x) => a + x.qtyMilli, 0)
+      quantity(l.qty, it.unit, it.name) // whole pieces unless sold in parts
+      const before = done.milli(it.id) + lines.filter((x) => x.it.id === it.id).reduce((a, x) => a + x.qtyMilli, 0)
+      const left = toMilli(it.qty) - before
       if (qtyMilli > left) throw new ApiError(`Only ${fromMilli(left)} of ${it.name} can be returned`)
       const qty = fromMilli(qtyMilli)
-      lines.push({ it, qtyMilli, qty, amount: r2(it.unitPrice * qty * ratio), restock: !!l.restock })
+      // This line's own value and GST (its rate, its share of the bill discount); older lines: the bill-wide ratio.
+      const b = billed.get(it.id)
+      const amount = b ? fromMinor(lineShare(b.value, b.milli, before, qtyMilli)) : r2(it.unitPrice * qty * ratio)
+      const tax = b ? fromMinor(lineShare(b.tax, b.milli, before, qtyMilli)) : (o.subtotal > 0 ? (o.tax * it.unitPrice * qty) / o.subtotal : 0)
+      lines.push({ it, qtyMilli, qty, amount, tax, restock: !!l.restock })
     }
     if (!lines.length) throw new ApiError('Choose at least one item to return')
 
@@ -110,8 +133,7 @@ define('returns', {
     const exact = lines.reduce((a, l) => a + l.amount, 0)
     const returnedBefore = fromMinor(done.rows.reduce((a, r) => a + Number(r.total_minor), 0))
     const total = r2(Math.max(0, Math.min(c.business.billing.roundOff ? Math.round(exact) : exact, o.total - returnedBefore)))
-    const gross = lines.reduce((a, l) => a + l.it.unitPrice * l.qty, 0)
-    const tax = o.subtotal > 0 ? r2(o.tax * gross / o.subtotal) : 0
+    const tax = r2(lines.reduce((a, l) => a + l.tax, 0))
     // A pending due on this bill is reduced first — nobody gets money back for something not paid for.
     const dueAdjusted = r2(Math.max(0, Math.min(total, o.balance)))
     const rest = r2(total - dueAdjusted)
@@ -154,16 +176,21 @@ define('returns', {
     } catch (e) {
       // Put the bill back so the return can be tried again.
       await c.db.update('orders', row.ROWID, before)
-      if (e instanceof DuplicateError) { const r = await c.db.first('sale_returns', { client_uuid: uuid }); if (r) return (await withLines(c, [r]))[0] }
+      if (e instanceof DuplicateError) { const r = await c.db.first('sale_returns', { business_id: c.businessId, client_uuid: uuid }); if (r) return (await withLines(c, [r]))[0] }
       throw e
     }
 
     const restock = lines.filter((l) => l.restock)
     if (restock.length && moduleOn(c, 'inventory')) {
-      const prows = await selectIn(c, 'products', 'ROWID', restock.map((l) => l.it.productId), { business_id: c.businessId })
+      // Only what the bill's sale actually took out (less what earlier returns gave back) goes back to stock.
+      const [prows, left] = await Promise.all([
+        selectIn(c, 'products', 'ROWID', restock.map((l) => l.it.productId), { business_id: c.businessId }),
+        restorableStock(c, o.id),
+      ])
       for (const l of restock) {
         const p = prows.find((x) => x.ROWID === l.it.productId)
-        if (p) await moveStock(c, stockProduct(p), branchId, l.qty, 'return', { refType: 'return', refId: ret.ROWID, note: `Returned — ${str(ret.number)} (${o.invoiceNumber})` })
+        const give = p ? takeRestorable(left, l.it.productId, l.qty) : 0
+        if (p && give > 0) await moveStock(c, stockProduct(p), branchId, give, 'return', { refType: 'return', refId: ret.ROWID, note: `Returned — ${str(ret.number)} (${o.invoiceNumber})` })
       }
     }
     // Loyalty: take back the points this part of the bill earned (in proportion, never more than were earned).

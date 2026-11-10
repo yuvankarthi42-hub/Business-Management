@@ -1,4 +1,5 @@
 import clsx from 'clsx'
+import { useFullLookup } from '@/features/fullProduct'
 import JsBarcode from 'jsbarcode'
 import { Minus, Plus, Printer, QrCode, ScanBarcode, Settings2, Tag, Trash2, Wand2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -252,7 +253,8 @@ export function LabelPrintModal({ initialIds = [], initial, onClose, title }: { 
   const [showOptions, setShowOptions] = useState(false)
   const { print, portal } = usePrint()
 
-  const byId = (id: string) => products.find((p) => p.id === id)
+  // A large shop's light rows have no textile details: the chosen items' full products are read (labels print them).
+  const byId = useFullLookup(products, rows.map((r) => r.id))
   const chosen = rows.map((r) => ({ ...r, p: byId(r.id) })).filter((r): r is { id: string; count: number; p: Product } => !!r.p)
   const missing = chosen.filter((r) => !r.p.barcode.trim())
   const printable = chosen.filter((r) => r.p.barcode.trim())

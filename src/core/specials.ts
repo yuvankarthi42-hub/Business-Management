@@ -1,3 +1,4 @@
+import { variantCount } from './catalogIndex'
 import type { Product, Special } from './types'
 
 /** Local calendar date as YYYY-MM-DD — specials are planned per business day. */
@@ -18,7 +19,7 @@ export function applySpecials(products: Product[], specials: Special[]) {
   }
   const priced = products.map((p) => {
     const sp = map.get(p.id)?.special
-    return sp && sp.specialPrice != null && !p.variants.length ? { ...p, price: sp.specialPrice } : p
+    return sp && sp.specialPrice != null && !variantCount(p) ? { ...p, price: sp.specialPrice } : p
   })
   const ordered = [...specials].sort((a, b) => a.sort - b.sort).map((s) => priced.find((p) => p.id === s.productId)).filter(Boolean) as Product[]
   return { products: priced, specials: ordered, info: map }

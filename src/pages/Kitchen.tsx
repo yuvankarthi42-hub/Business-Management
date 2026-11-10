@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { ChefHat, Clock, Maximize2, Undo2 } from 'lucide-react'
+import { Ban, ChefHat, Clock, Maximize2, Undo2 } from 'lucide-react'
 import { useState } from 'react'
 import { useApp, useData, useNow } from '@/app/AppContext'
 import { Badge, Button, EmptyState, Segmented, useAction } from '@/components/ui'
@@ -75,10 +75,12 @@ function Ticket({ k, now }: { k: KitchenTicket; now: number }) {
   const active = k.status === 'new' || k.status === 'preparing'
   const late = active && mins >= 20
   const warn = active && mins >= 12
-  const next = NEXT[k.status]
-  const prev = PREV[k.status]
+  // A cancel ticket (items taken off after the kitchen got them): one step — the kitchen has seen it.
+  const next = k.cancel ? (k.status === 'new' || k.status === 'preparing' || k.status === 'ready' ? { to: 'completed' as KotStatus, label: 'Got it — stop these', variant: 'secondary' as const } : undefined) : NEXT[k.status]
+  const prev = k.cancel ? undefined : PREV[k.status]
   return (
-    <article className={clsx('rounded-xl border bg-white shadow-card', late ? 'border-red-300 ring-2 ring-red-200' : 'border-slate-200')}>
+    <article className={clsx('rounded-xl border bg-white shadow-card', k.cancel && k.status !== 'completed' ? 'border-red-400 ring-2 ring-red-200' : late && !k.cancel ? 'border-red-300 ring-2 ring-red-200' : 'border-slate-200')}>
+      {k.cancel && <p className="flex items-center gap-1.5 rounded-t-xl bg-red-600 px-3.5 py-1.5 text-sm font-bold uppercase tracking-wide text-white"><Ban className="h-4 w-4" />Cancel — stop making</p>}
       <header className="flex items-start justify-between gap-2 border-b border-dashed border-slate-200 px-3.5 py-2.5">
         <div>
           <p className="text-[15px] font-bold">{k.number}</p>
@@ -93,9 +95,9 @@ function Ticket({ k, now }: { k: KitchenTicket; now: number }) {
         {k.items.map((i, idx) => (
           <li key={idx} className="text-sm">
             <div className="flex items-start gap-2">
-              <span className="min-w-[26px] rounded bg-slate-100 text-center text-sm font-bold">{i.qty}</span>
+              <span className={clsx('min-w-[26px] rounded text-center text-sm font-bold', i.qty < 0 ? 'bg-red-100 text-red-700' : 'bg-slate-100')}>{i.qty < 0 ? `−${-i.qty}` : i.qty}</span>
               <span className="mt-[3px]"><VegMark veg={i.isVeg} /></span>
-              <span className={clsx('flex-1 font-medium leading-snug', k.status === 'completed' && 'text-slate-500 line-through decoration-slate-300')}>{i.name}</span>
+              <span className={clsx('flex-1 font-medium leading-snug', (k.status === 'completed' || i.qty < 0) && 'line-through', k.status === 'completed' ? 'text-slate-500 decoration-slate-300' : i.qty < 0 && 'text-red-700 decoration-red-400')}>{i.name}</span>
             </div>
             {i.notes && <p className="ml-[54px] mt-0.5 rounded bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-800">⚠ {i.notes}</p>}
           </li>

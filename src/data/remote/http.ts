@@ -27,7 +27,7 @@ async function probe(u: string) {
     return r.ok && !!((await r.json()) as { ok?: boolean }).ok
   } catch { return false }
 }
-function apiBase(): Promise<string> {
+export function apiBase(): Promise<string> {
   if (CANDIDATES.length === 1) return Promise.resolve(CANDIDATES[0])
   chosen ??= (async () => {
     try { const s = sessionStorage.getItem(API_KEY); if (s && CANDIDATES.includes(s)) return s } catch { /* private mode */ }
@@ -63,6 +63,27 @@ export const deviceId = (() => {
   try { const v = sessionStorage.getItem('billpoodum.device') ?? randomId().slice(0, 20); sessionStorage.setItem('billpoodum.device', v); return v } catch { return randomId().slice(0, 20) }
 })()
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+// Device token from the server after a sign-in (kept in this browser, per login). Sent ONLY with that login's next
+// sign-in (x-login-device): it lets this browser sign in while someone else's wrong guesses have locked the
+// account. The server renews it on every sign-in and voids it when the password changes.
+const LOGIN_DEVICE_KEY = 'billpoodum.loginDevice'
+const LOGIN_CALLS = new Set(['auth.login', 'admin.login'])
+const loginKey = (name: string, args: unknown[]) => `${name}:${String(args[0] ?? '').trim().toLowerCase()}`
+function loginDevices(): Record<string, string> {
+  try { const v = JSON.parse(localStorage.getItem(LOGIN_DEVICE_KEY) || '{}'); return v && typeof v === 'object' ? v : {} } catch { return {} }
+}
+function saveLoginDevice(key: string, token: unknown) {
+  if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(token)) return
+  try {
+    const all = loginDevices()
+    delete all[key]
+    all[key] = token
+    const keys = Object.keys(all)
+    for (const k of keys.slice(0, Math.max(0, keys.length - 10))) delete all[k] // the 10 most recent logins on this browser
+    localStorage.setItem(LOGIN_DEVICE_KEY, JSON.stringify(all))
+  } catch { /* private mode: this visit only */ }
+}
 
 /** The change-feed note on signed-in answers (sync.ts listens). */
 let onFeed: (note: { latest: number; epoch?: string | null; own?: number | null }) => void = () => {}
@@ -108,6 +129,7 @@ async function rpcOnce<T>(name: string, args: unknown[], token: TokenKind, id: s
       ...(t ? { authorization: `Bearer ${t}` } : {}),
       ...(token === 'user' && auth.branch ? { 'x-branch': auth.branch } : {}),
     }
+    if (LOGIN_CALLS.has(name)) { const d = loginDevices()[loginKey(name, args)]; if (d) h['x-login-device'] = d }
     // API on another site (app on Slate): a "simple" request — plain text body, no extra headers — so the
     // browser sends it without a CORS pre-check. The sign-in token and branch travel inside the body.
     const base = await apiBase()
@@ -128,5 +150,6 @@ async function rpcOnce<T>(name: string, args: unknown[], token: TokenKind, id: s
     throw e
   }
   if (token === 'user' && body.feed && typeof body.feed === 'object') { try { onFeed(body.feed) } catch { /* never breaks the call */ } }
+  if (LOGIN_CALLS.has(name)) saveLoginDevice(loginKey(name, args), (body.data as { deviceToken?: unknown } | undefined)?.deviceToken)
   return { data: body.data as T, effects: body.effects }
 }

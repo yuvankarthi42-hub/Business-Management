@@ -1,7 +1,7 @@
 {
   "deployment": {
     "name": "daily",
-    "stack": "node18",
+    "stack": "node24",
     "type": "cron",
     "env_variables": {}
   },

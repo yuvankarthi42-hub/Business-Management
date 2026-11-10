@@ -1,4 +1,5 @@
 import { ArrowDown, ArrowUp, Copy, Flame, MonitorPlay, Plus, Trash2 } from 'lucide-react'
+import { variantCount } from '@/core/catalogIndex'
 import { Thumb } from '@/components/Thumb'
 import { useEffect, useMemo, useState } from 'react'
 import { useApp, useData } from '@/app/AppContext'
@@ -72,7 +73,7 @@ export default function Specials() {
                       <p className="text-xs text-slate-500">Regular {priceLabel(p)}</p>
                     </div>
                     <div className="w-28">
-                      <Input type="number" inputMode="decimal" placeholder={p.variants.length ? 'Sizes' : 'Offer ₹'} disabled={p.variants.length > 0}
+                      <Input type="number" inputMode="decimal" placeholder={variantCount(p) ? 'Sizes' : 'Offer ₹'} disabled={variantCount(p) > 0}
                         value={r.specialPrice ?? ''} onChange={(e) => set(i, { specialPrice: e.target.value === '' ? null : Number(e.target.value) })} className="h-9" title="Special price (optional)" />
                     </div>
                     <div className="w-36">
@@ -83,7 +84,7 @@ export default function Specials() {
                       <button disabled={i === rows.length - 1} onClick={() => move(i, 1)} className="p-1.5 text-slate-400 hover:text-slate-700 disabled:opacity-30" aria-label="Move down"><ArrowDown className="h-4 w-4" /></button>
                       <button onClick={() => setRows(rows.filter((_, j) => j !== i))} className="p-1.5 text-slate-400 hover:text-red-600" aria-label="Remove"><Trash2 className="h-4 w-4" /></button>
                     </div>
-                    {r.specialPrice != null && r.specialPrice < p.price && !p.variants.length && (
+                    {r.specialPrice != null && r.specialPrice < p.price && !variantCount(p) && (
                       <p className="w-full pl-14 text-xs font-medium text-emerald-700">Customer saves {money(p.price - r.specialPrice)} ({Math.round(((p.price - r.specialPrice) / p.price) * 100)}% off)</p>
                     )}
                   </li>

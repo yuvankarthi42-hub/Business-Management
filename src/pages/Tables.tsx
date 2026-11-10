@@ -19,7 +19,8 @@ export type TableState = 'available' | 'request' | 'occupied' | 'preparing' | 'r
 export function tableState(order: Order | undefined, kots: KitchenTicket[]): TableState {
   if (!order) return 'available'
   if (order.qrStatus === 'pending') return 'request'
-  const mine = kots.filter((k) => k.orderId === order.id)
+  // A cancel ticket isn't food being made: it never makes a table look "preparing".
+  const mine = kots.filter((k) => k.orderId === order.id && !k.cancel)
   if (mine.some((k) => k.status === 'ready')) return 'ready'
   if (mine.some((k) => k.status === 'new' || k.status === 'preparing')) return 'preparing'
   return 'occupied'
@@ -111,6 +112,7 @@ function TableOrderDrawer({ tableId, tables, running, onClose }: { tableId: stri
   const pick = (p: Product) => (needsOptions(p) ? setOptions(p) : cart.addProduct(p))
   const draft = () => ({ id: order?.id, type: 'dine_in' as const, tableId, customerId, items: cart.items, discount: cart.discount, notes: '', source: 'table' as const })
   const save = (kitchen: boolean) => run(async () => {
+    if (cart.discountOver) throw new Error('Discount can’t be more than the bill')
     const r = await api.orders.save(draft(), { sendToKitchen: kitchen })
     toast(r.kot ? `${r.kot.number} sent to kitchen` : 'Order saved')
   })
@@ -178,11 +180,11 @@ function TableOrderDrawer({ tableId, tables, running, onClose }: { tableId: stri
           <div className="space-y-3 border-t border-slate-100 bg-slate-50/60 p-3">
             <TotalsBlock totals={cart.totals} cart={cart} allowDiscount={can('billing.discount')} />
             <div className="grid grid-cols-2 gap-2">
-              <Button variant="secondary" icon={ChefHat} disabled={!pendingKot} onClick={() => save(true)}>{pendingKot ? 'Send to kitchen' : 'All sent'}</Button>
-              <Button variant="secondary" disabled={!dirty || !cart.items.length} onClick={() => save(false)}>Save</Button>
+              <Button variant="secondary" icon={ChefHat} disabled={!pendingKot || cart.discountOver} onClick={() => save(true)}>{pendingKot ? 'Send to kitchen' : 'All sent'}</Button>
+              <Button variant="secondary" disabled={!dirty || !cart.items.length || cart.discountOver} onClick={() => save(false)}>Save</Button>
             </div>
             {can('billing.create') && (
-              <Button variant="success" size="lg" block icon={ReceiptText} disabled={!cart.items.length} onClick={() => setPay(true)}>Generate {t('invoice')} · {money(cart.totals.total)}</Button>
+              <Button variant="success" size="lg" block icon={ReceiptText} disabled={!cart.items.length || cart.discountOver} onClick={() => setPay(true)}>Generate {t('invoice')} · {money(cart.totals.total)}</Button>
             )}
           </div>
         </div>

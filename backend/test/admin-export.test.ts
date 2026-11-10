@@ -57,7 +57,7 @@ test('admin team: create, roles, last super, deactivate', async () => {
     await assert.rejects(s.call('admin.saveAdmin', { name: 'M', username: 'lakshmi', role: 'manager', password: 'mgr12345' }), /already taken/)
     await assert.rejects(s.call('admin.saveAdmin', { name: 'M', username: 'admin1', role: 'manager', password: 'mgr12345' }), /already taken/)
     await assert.rejects(s.call('admin.saveAdmin', { name: 'M', username: 'mgr1', role: 'boss', password: 'mgr12345' }), /Choose a role/)
-    await assert.rejects(s.call('admin.saveAdmin', { name: 'M', username: 'mgr1', role: 'manager', password: '123' }), /at least 6/)
+    await assert.rejects(s.call('admin.saveAdmin', { name: 'M', username: 'mgr1', role: 'manager', password: '123' }), /at least 8/)
     const mgr = await s.call<A>('admin.saveAdmin', { name: 'Meena', username: 'Mgr1', role: 'manager', password: 'mgr12345' })
     assert.equal(mgr.username, 'mgr1')
     assert.equal(mgr.role, 'manager')

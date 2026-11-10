@@ -10,6 +10,7 @@
 //  · history = whatsapp_messages (sender platform, kind renewal_reminder, business_id = the customer)
 //  · a reminder an admin sent by hand also gets an admin_audit_logs row (action reminder) whose detail ends in
 //    "msg <whatsapp_messages ROWID>" — that is what makes it trigger 'manual' with the admin's name in the log.
+import { createHash, timingSafeEqual } from 'node:crypto'
 import type { PlatformWhatsApp, ReminderLog, ReminderSettings } from '@/core/types'
 import { daysText, REMINDER_SAMPLE, reminderTemplateErrors } from '@/core/reminders'
 import type { AdminSession, Ctx } from '../../core/context'
@@ -297,6 +298,9 @@ async function nextShops(c: Ctx, after: string | null, n: number): Promise<strin
   return ids.filter((id) => !after || idBefore(after, id)).slice(0, n)
 }
 
+/** Saved-once request records (request_log) are kept this long. */
+const oldRequests = (c: Ctx) => new Date(c.now.getTime() - 2 * DAY).toISOString()
+
 export interface DailyRun { busy: boolean; sent: number; shops: number; idle: boolean }
 
 /**
@@ -362,15 +366,19 @@ export async function runDailyBatch(c: Ctx, opts: { remindersFromHour?: number }
             const capFor = () => Math.max(shops > 0 ? 0 : 1, Math.floor((cfg.requestBudget - END_RESERVE - used() - 1) / PER_CUSTOMER))
             let due: string[], more = false
             if (c.dbs.perShop && db.sqlMany) {
-              // One round trip: this shop's bill counts and who has expired points.
+              // One round trip: this shop's bill counts, who has expired points, and saved-once records past 2 days.
               const q = usageQuery(c, bid), cap = capFor()
-              const [u, d] = await db.sqlMany([q, { sql: 'SELECT DISTINCT "customer_id" AS id FROM "customer_points" WHERE "business_id" = ? AND "remaining" > 0 AND "expires_on" < ? LIMIT ?', args: [Number(bid), today, cap + 1] }])
+              const [u, d] = await db.sqlMany([q, { sql: 'SELECT DISTINCT "customer_id" AS id FROM "customer_points" WHERE "business_id" = ? AND "remaining" > 0 AND "expires_on" < ? LIMIT ?', args: [Number(bid), today, cap + 1] },
+                { sql: 'DELETE FROM "request_log" WHERE "business_id" = ? AND "created_at" < ?', args: [Number(bid), oldRequests(c)] }])
               usage.set(bid, usageFromRow(u[0]))
               due = d.map((r) => String(r.id))
               if (due.length > cap) { due = due.slice(0, cap); more = true }
             } else {
               const rows = await db.select('customer_points', { where: { business_id: bid, remaining: { gt: 0 }, expires_on: { lt: today } } })
               due = [...new Set(rows.map((r) => str(r.customer_id)))]
+              // Saved-once records past 2 days (a retry never comes that late).
+              const old = await db.select('request_log', { where: { business_id: bid, CREATEDTIME: { lt: oldRequests(c) } }, limit: 500 })
+              if (old.length) await db.deleteMany('request_log', old.map((r) => r.ROWID))
             }
             for (const cid of due) await expireCustomerPoints(db, bid, cid, today)
             shops++
@@ -419,17 +427,24 @@ export async function runDailyJobs(c: Ctx) {
   return sent
 }
 
+/** CRON_KEY (32+ characters), compared in constant time. Unset or short → every call refused. */
+function cronKeyOk(key: unknown) {
+  const want = String(process.env.CRON_KEY ?? '')
+  const sent = String(key ?? '')
+  if (want.length < 32 || !sent) return false
+  const a = createHash('sha256').update(sent).digest(), b = createHash('sha256').update(want).digest()
+  return timingSafeEqual(a, b)
+}
+
 define('system', {
   /** Called by the daily Catalyst Cron with the CRON_KEY secret (no user or admin session). */
   runDailyJobs: publicWrite(async (c, key?: string) => {
-    const want = process.env.CRON_KEY
-    if (!want || String(key ?? '') !== want) throw new ApiError('Not allowed', 403, 'FORBIDDEN')
+    if (!cronKeyOk(key)) throw new ApiError('Not allowed', 403, 'FORBIDDEN')
     return runDailyJobs(c)
   }),
   /** One hourly run (an hourly scheduler, e.g. Cloudflare Cron): a batch of shops and reminders within the budgets. */
   runDailyBatch: publicWrite(async (c, key?: string) => {
-    const want = process.env.CRON_KEY
-    if (!want || String(key ?? '') !== want) throw new ApiError('Not allowed', 403, 'FORBIDDEN')
+    if (!cronKeyOk(key)) throw new ApiError('Not allowed', 403, 'FORBIDDEN')
     return runDailyBatch(c)
   }),
 })
@@ -471,7 +486,11 @@ define('admin', {
   }),
 
   /** Today's automatic reminders, now (same rules as the daily job: once per customer per day). */
-  runReminders: adminWrite('customers.renew', async (c) => sendReminders(c, { trigger: 'auto' }), { tx: 'none' }),
+  runReminders: adminWrite('customers.renew', async (c) => {
+    const n = await sendReminders(c, { trigger: 'auto' })
+    await adminLog(c, c.requireAdmin(), 'reminder', null, `Renewal reminders run now: ${n} sent`)
+    return n
+  }, { tx: 'none' }),
 
   sendReminder: adminWrite('customers.renew', async (c, businessId: string) => {
     const a = c.requireAdmin()

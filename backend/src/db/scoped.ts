@@ -3,7 +3,7 @@
 // including the single-database setups (Catalyst, tests) where it would otherwise go unnoticed.
 import type { DbKind } from './migrate'
 import { PLATFORM_TABLES, SHARED_TABLES, TABLES, type TableName } from './schema.gen'
-import type { Db, WriteOp } from './types'
+import type { Db, Row, SelectOptions, Value, WriteOp } from './types'
 
 const ALL = Object.keys(TABLES) as TableName[]
 const ON: Record<DbKind, Set<string>> = {
@@ -22,7 +22,7 @@ export function scoped(db: Db, kind: DbKind): Db {
     ...(db.sql ? { sql: (s: string, a?: (string | number | null)[]) => db.sql!(s, a) } : {}),
     ...(db.sqlMany ? { sqlMany: (x: { sql: string; args?: (string | number | null)[] }[]) => db.sqlMany!(x) } : {}),
     ...(db.sqlReads ? { sqlReads: (x: { sql: string; args?: (string | number | null)[] }[]) => db.sqlReads!(x) } : {}),
-    ...(db.writeBatch ? { writeBatch: (ops: WriteOp[]) => (ops.forEach((o) => check('insert' in o ? o.insert : o.update)), db.writeBatch!(ops)) } : {}),
+    ...(db.writeBatch ? { writeBatch: (ops: WriteOp[]) => (ops.forEach((o) => { if (!('sql' in o)) check('insert' in o ? o.insert : o.update) }), db.writeBatch!(ops)) } : {}),
     ...(db.describe ? { describe: () => db.describe!() } : {}),
     aggregate: (t, o) => (check(t), db.aggregate(t, o)),
     select: (t, o) => (check(t), db.select(t, o)),
@@ -40,6 +40,19 @@ export function scoped(db: Db, kind: DbKind): Db {
 }
 
 /** Catalogue tables a bill only reads: kept for the rest of the request once read (Ctx.memoCatalog). */
+
+const productRows = new WeakMap<Map<string, Promise<unknown>>, Map<string, Row>>()
+/** `{ business_id, ROWID: id | { in: ids } }` and nothing else (no order, limit or other filter) → those ids; otherwise null. */
+function idsOnly(o: SelectOptions | undefined): { biz: Value; ids: string[] } | null {
+  const w = o?.where
+  if (!w || o.orderBy?.length || o.limit !== undefined || o.offset) return null
+  const keys = Object.keys(w)
+  if (keys.length !== 2 || !('business_id' in w) || !('ROWID' in w)) return null
+  const biz = w.business_id, id = w.ROWID
+  if (biz === null || typeof biz === 'object') return null
+  const ids: string[] | null = typeof id === 'string' ? [id] : id && typeof id === 'object' && 'in' in id ? id.in.map((x) => String(x)) : null
+  return ids && ids.length ? { biz, ids: [...new Set(ids)] } : null
+}
 const MEMO = new Set<string>(['products', 'product_variants', 'product_addons', 'product_prices', 'price_lists', 'daily_specials', 'categories', 'tax_rates', 'media_files'])
 
 /**
@@ -54,12 +67,27 @@ export function memoized(db: Db, memo: Map<string, Promise<unknown>>): Db {
     if (!hit) { hit = run(); memo.set(key, hit); hit.catch(() => memo.delete(key)) }
     return hit.then((v) => structuredClone(v))
   }
-  const wrote = (t: TableName) => { if (MEMO.has(t)) for (const k of [...memo.keys()]) if (k.split('|')[1] === t) memo.delete(k) }
+  // Product rows already read in this request, by id: a later "these products by id" read (the bill's stock step
+  // after its pricing read) is answered from them — the same rows, one round trip less.
+  let byId = productRows.get(memo)
+  if (!byId) productRows.set(memo, (byId = new Map()))
+  const products = byId
+  const selectProducts = async (o: SelectOptions | undefined): Promise<Row[]> => {
+    const ids = idsOnly(o)
+    if (ids && ids.ids.every((id) => { const r = products.get(id); return !!r && String(r.business_id) === String(ids.biz) })) return ids.ids.map((id) => structuredClone(products.get(id)!))
+    const rows = await read('select', 'products', [o], () => db.select('products', o))
+    for (const r of rows) products.set(String(r.ROWID), r)
+    return rows
+  }
+  const wrote = (t: TableName) => {
+    if (MEMO.has(t)) for (const k of [...memo.keys()]) if (k.split('|')[1] === t) memo.delete(k)
+    if (t === 'products') products.clear()
+  }
   const w = <T>(t: TableName, run: () => Promise<T>) => { wrote(t); return run() }
   return {
     ...db,
     transaction: (fn) => db.transaction((tx) => fn(memoized(tx, memo))),
-    select: (t, o) => read('select', t, [o], () => db.select(t, o)),
+    select: (t, o) => (t === 'products' ? selectProducts(o) : read('select', t, [o], () => db.select(t, o))),
     first: (t, wh, o) => read('first', t, [wh, o], () => db.first(t, wh, o)),
     get: (t, id) => read('get', t, [id], () => db.get(t, id)),
     insert: (t, r) => w(t, () => db.insert(t, r)),

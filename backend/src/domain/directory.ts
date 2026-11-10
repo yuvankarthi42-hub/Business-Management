@@ -18,7 +18,7 @@ export interface Logins { username?: string | null; phone?: string | null; email
 const keyOf = (kind: LoginKind, v: string) => (kind === 'phone' ? v.trim() : v.trim().toLowerCase())
 const TAKEN: Record<LoginKind, string> = {
   username: 'This username is already taken',
-  phone: 'This mobile number is already used by another account',
+  phone: 'This mobile number can’t be used for a login. Try another one.',
   email: '',
 }
 

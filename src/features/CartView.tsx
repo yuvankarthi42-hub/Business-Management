@@ -71,10 +71,13 @@ export function TotalsBlock({ totals, cart, allowDiscount, big }: { totals: Tota
                 <button key={m} type="button" onClick={() => { setMode(m); apply(raw, m) }} className={clsx('px-1.5 py-0.5', mode === m ? 'bg-slate-800 text-white' : 'text-slate-500')}>{m === 'amt' ? '₹' : '%'}</button>
               ))}
             </div>
-            <input value={raw} onChange={(e) => apply(e.target.value)} inputMode="decimal" placeholder="0" className="h-7 w-16 rounded-md border border-slate-200 px-2 text-right text-sm focus:border-brand-500 focus:outline-none" />
+            <input value={raw} onChange={(e) => apply(e.target.value)} inputMode="decimal" placeholder="0" aria-invalid={cart.discountOver || undefined} className={clsx('h-7 w-16 rounded-md border px-2 text-right text-sm focus:outline-none', cart.discountOver ? 'border-red-400 text-red-700 focus:border-red-500' : 'border-slate-200 focus:border-brand-500')} />
             <span className="w-16 text-right tabular text-emerald-700">-{money(r2(totals.discount - (cart.pointsOff ?? 0)))}</span>
           </div>
         </div>
+      ) : null}
+      {allowDiscount && cart && billing.discountEnabled ? (
+        cart.discountOver && <p role="alert" className="text-right text-xs font-medium text-red-600">More than the bill — the discount can be at most {money(totals.subtotal, { decimals: true })}</p>
       ) : r2(totals.discount - (cart?.pointsOff ?? 0)) > 0 && <Line l="Discount" r={`-${money(r2(totals.discount - (cart?.pointsOff ?? 0)), { decimals: true })}`} />}
       {!!cart?.pointsOff && <div className="flex justify-between text-violet-700"><span>Points used ({cart.points})</span><span className="tabular">−{money(cart.pointsOff, { decimals: true })}</span></div>}
       {billing.taxEnabled && billing.taxMode === 'inclusive' && totals.tax > 0 && <Line l="Taxable value" r={money(taxableValue(totals), { decimals: true })} />}

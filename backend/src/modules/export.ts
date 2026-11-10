@@ -8,7 +8,7 @@ import { adminWrite, define, userRead } from '../core/registry'
 import type { Row, Where } from '../db/types'
 import type { TableName } from '../db/schema.gen'
 import { loadOrders } from '../domain/orders'
-import { audit, E, fromBp, fromMilli, fromMinor, nameOf, nameOrNull, r2, str } from '../domain/util'
+import { audit, E, fromBp, fromMilli, fromMinor, nameOf, nameOrNull, r2, str, hasAllBranches } from '../domain/util'
 import { adminLog, findBiz } from './admin/shared'
 
 /** Most rows read per table (newest kept). A shop reaching this should export by date range instead. */
@@ -143,6 +143,8 @@ define('dataExport', {
   /** The owner downloads everything their business has (Settings → Audit & Data). Not in support view. */
   mine: userRead(async (c) => {
     if (c.s.support) throw new ApiError(SUPPORT_MESSAGE, 403, 'SUPPORT_VIEW')
+    // The export holds every branch's data: only someone who can open every branch may download it.
+    if (!hasAllBranches(c)) throw new ApiError('Downloading all data needs access to every branch', 403, 'FORBIDDEN')
     const out = await exportTables(c, c.businessId, false)
     await audit(c, 'settings', null, 'export', `Data export: ${rowCount(out)} rows, ${out.images.length} photos`)
     return out

@@ -67,11 +67,12 @@ const secretsDb = (c: Ctx, owner: Owner) => (owner === 'platform' ? c.platform :
 export const tokenRow = (c: Ctx, owner: Owner, businessId: string | null) => secretsDb(c, owner).first('secrets', { uniq_key: secretKey(owner, businessId) })
 export async function saveToken(c: Ctx, owner: Owner, businessId: string | null, token: string): Promise<Row> {
   const db = secretsDb(c, owner)
-  const patch = { value: token, last4: token.slice(-4) }
+  // uniq_key goes with the value: the encrypted token is tied to this row (core/crypto.ts).
+  const patch = { value: token, last4: token.slice(-4), uniq_key: secretKey(owner, businessId) }
   const ex = await tokenRow(c, owner, businessId)
   if (ex) return db.update('secrets', ex.ROWID, patch)
   try {
-    return await db.insert('secrets', { owner_type: E.SecretOwner[owner], business_id: businessId, kind: E.SecretKind.whatsapp_token, uniq_key: secretKey(owner, businessId), ...patch })
+    return await db.insert('secrets', { owner_type: E.SecretOwner[owner], business_id: businessId, kind: E.SecretKind.whatsapp_token, ...patch })
   } catch (e) {
     if (!(e instanceof DuplicateError)) throw e
     const again = await tokenRow(c, owner, businessId)
@@ -396,7 +397,7 @@ define('campaigns', {
   update: userWrite(async (c, id: string, message: string, productIds: string[]) => {
     const r = isId(id) ? await c.db.first('campaigns', { ROWID: id, business_id: c.businessId }) : null
     if (r) await c.db.update('campaigns', r.ROWID, checkCampaign(message, productIds))
-  }),
+  }, { perm: 'customers.manage' }), // the same people who may create one (the offer text goes to customers)
   /** The offer was shared with this customer by hand (WhatsApp link from the phone). Once per customer. */
   markSent: userWrite(async (c, id: string, customerId: string) => {
     const camp = isId(id) ? await c.db.first('campaigns', { ROWID: id, business_id: c.businessId }) : null
@@ -408,6 +409,6 @@ define('campaigns', {
       body: str(camp.message) || '-', status: E.WaMessageStatus.sent, status_at: c.now.toISOString(), created_by: c.actorId,
     })
     await c.db.update('campaigns', camp.ROWID, { sent_count: Number(camp.sent_count ?? 0) + 1 })
-  }),
+  }, { perm: 'customers.manage' }),
 })
 

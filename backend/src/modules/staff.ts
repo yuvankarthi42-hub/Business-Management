@@ -9,7 +9,7 @@ import { DuplicateError, type AggFn, type Row } from '../db/types'
 import { selectIn } from '../domain/orders'
 import { allowedBranches, loadRoles, loadUsers, payColumns } from '../domain/people'
 import { bumpEpoch } from '../domain/session'
-import { audit, bizDay, bizDayStart, code, E, fromMinor, nameOf, own, str, strOrNull, toMinor } from '../domain/util'
+import { audit, bizDay, bizDayStart, code, E, fromMinor, nameOf, own, str, strOrNull, toMinor, money, hasAllBranches } from '../domain/util'
 
 const perm = { perm: 'users.manage' } as const
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -60,6 +60,19 @@ async function staffInScope(c: Ctx) {
   return users
     .filter((u) => u.active && allowedBranches(u, roles.find((r) => r.id === u.roleId), all).some((b) => sc.has(b)))
     .map((u) => ({ user: u, role: roles.find((r) => r.id === u.roleId)?.name ?? '' }))
+}
+
+/**
+ * One staff member, only if they work in at least one of the signed-in user's branches (users with every branch
+ * reach everyone). Otherwise "not found", as for another shop's staff.
+ */
+async function staffMember(c: Ctx, userId: string) {
+  const u = await own(c, 'users', userId, 'Staff member not found')
+  if (hasAllBranches(c)) return u
+  const theirs = (await c.db.select('user_branches', { where: { user_id: u.ROWID } })).map((x) => str(x.branch_id))
+  const where = theirs.length ? theirs : [str(u.default_branch_id)]
+  if (!where.some((b) => b && c.s.allowed.includes(b))) throw new ApiError('Staff member not found', 404, 'NOT_FOUND')
+  return u
 }
 
 const daysIn = (month: string) => { const [y, m] = month.split('-').map(Number); return new Date(Date.UTC(y, m, 0)).getUTCDate() }
@@ -144,7 +157,7 @@ define('staff', {
 
   mark: userWrite(async (c, userId: string, date: string, patch: { status?: AttendanceStatus; checkIn?: string | null; checkOut?: string | null; note?: string } = {}) => {
     futureCheck(c, date)
-    const u = await own(c, 'users', userId, 'Staff member not found')
+    const u = await staffMember(c, userId)
     const branchId = c.writeBranch({ fallback: true })
     if (patch.status) code(E.AttendanceStatus, patch.status)
     // One row per person per day (uniq_key): marking again updates it.
@@ -171,7 +184,8 @@ define('staff', {
   markAll: userWrite(async (c, date: string, userIds: string[]) => {
     futureCheck(c, date)
     const branchId = c.writeBranch({ fallback: true })
-    const mine = new Set((await c.db.select('users', { where: { business_id: c.businessId } })).map((u) => u.ROWID))
+    // Only staff of the branches this view covers (like the attendance list).
+    const mine = new Set((await staffInScope(c)).map((x) => x.user.id))
     const ids = [...new Set((userIds ?? []).map(String))].filter((id) => mine.has(id))
     if (!ids.length) return 0
     const marked = new Set((await selectIn(c, 'attendance', 'user_id', ids, { business_id: c.businessId, work_date: date })).map((a) => str(a.user_id)))
@@ -187,9 +201,9 @@ define('staff', {
   }, perm),
 
   setPay: userWrite(async (c, userId: string, pay: StaffPay) => {
-    const u = await own(c, 'users', userId, 'Staff member not found')
+    const u = await staffMember(c, userId)
     if (!pay || !['monthly', 'daily'].includes(pay.type)) throw new ApiError('Choose monthly or daily')
-    if (!(pay.amount >= 0)) throw new ApiError('Enter a valid salary')
+    money(pay?.amount, 'Salary')
     if (!(pay.commissionPct >= 0 && pay.commissionPct <= 50)) throw new ApiError('Commission must be between 0 and 50%')
     await c.db.update('users', u.ROWID, payColumns({ type: pay.type, amount: r2(pay.amount), commissionPct: r2(pay.commissionPct) }))
     await bumpEpoch(c, c.businessId) // the cached session holds users
@@ -197,8 +211,8 @@ define('staff', {
   }, perm),
 
   giveAdvance: userWrite(async (c, userId: string, input: { amount: number; method: PaymentMethod; note?: string; date?: string }) => {
-    const u = await own(c, 'users', userId, 'Staff member not found')
-    if (!(Number(input?.amount) > 0)) throw new ApiError('Enter the advance amount')
+    const u = await staffMember(c, userId)
+    money(input?.amount, 'Advance', { positive: true })
     const m = method(input.method)
     const today = bizDay(c)
     const date = input.date || today
@@ -224,7 +238,7 @@ define('staff', {
     if (!row.pay) throw new ApiError('Set the salary first')
     if (row.paid) throw new ApiError(`Salary for ${month} is already paid`)
     const m = method(input?.method)
-    const bonus = r2(Math.max(0, Number(input.bonus) || 0)), deduction = r2(Math.max(0, Number(input.deduction) || 0))
+    const bonus = money(input?.bonus ?? 0, 'Bonus'), deduction = money(input?.deduction ?? 0, 'Deduction')
     const net = r2(row.basePay + row.commission + bonus - deduction - row.advances)
     const branchId = c.writeBranch({ fallback: true })
     let sp: Row

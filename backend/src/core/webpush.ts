@@ -44,8 +44,9 @@ export function vapidHeader(endpoint: string, keys: { publicKey: string; private
   return `vapid t=${head}.${claims}.${b64u(sig)}, k=${keys.publicKey}`
 }
 
-/** Only real push services are called (never an address a browser could make up to reach our network). */
-const PUSH_HOSTS = /^https:\/\/([a-z0-9-]+\.)*(googleapis\.com|push\.apple\.com|push\.services\.mozilla\.com|notify\.windows\.com|push\.microsoft\.com)(:\d+)?\//i
+/** Only real push services are called (never an address a browser could make up to reach our network):
+ *  the browsers' own push hosts exactly (Apple / Windows use numbered sub-hosts), port 443 only. */
+const PUSH_HOSTS = /^https:\/\/(fcm\.googleapis\.com|updates\.push\.services\.mozilla\.com|([a-z0-9-]+\.)*push\.apple\.com|[a-z0-9-]+\.notify\.windows\.com|([a-z0-9-]+\.)*push\.microsoft\.com)(:443)?\//i
 export const isPushEndpoint = (u: string) => typeof u === 'string' && u.length <= 500 && PUSH_HOSTS.test(u)
 
 export class WebPushSender implements PushSender {

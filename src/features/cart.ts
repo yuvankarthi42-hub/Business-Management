@@ -18,9 +18,11 @@ export function useCart(initial: OrderItem[] = [], initialDiscount = 0, billingO
   /** Total before points — what the points limit (% of the bill) is worked out on. */
   const totalBeforePoints = useMemo(() => (pointsOff ? computeTotals(items, discount, billing).total : totals.total), [items, discount, pointsOff, billing, totals.total])
   const count = useMemo(() => r2(items.reduce((a, i) => a + i.qty, 0)), [items])
+  /** The discount typed is more than the bill (the server refuses it; before, it was quietly cut to the bill). */
+  const discountOver = discount > totals.subtotal + 0.001
 
   return {
-    items, discount, totals, count, points, pointsOff, totalBeforePoints,
+    items, discount, totals, count, points, pointsOff, totalBeforePoints, discountOver,
     setItems, setDiscount, setPoints,
     add: (item: OrderItem) => setItems((x) => mergeInto(x, item)),
     addProduct: (p: Product) => setItems((x) => mergeInto(x, makeItem(p, billing))),

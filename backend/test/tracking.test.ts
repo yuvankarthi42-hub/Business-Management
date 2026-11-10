@@ -14,7 +14,7 @@ test('order tracking: cached status (no database read until something changes), 
     await s.call('business.update', { billing: { taxEnabled: false }, modules: { billing: true, kitchen: true, qrOrdering: true, products: true }, qr: { orderTypes: ['takeaway'], autoAccept: false, baseUrl: '' } })
     const dosa = await s.call<P>('products.save', { name: 'Dosa', price: 60, sendToKitchen: true })
     s.setToken(null)
-    const placed = await s.call<{ orderId: string; number: string }>('public.placeOrder', s.businessId, { type: 'takeaway', tableId: null, items: [{ productId: dosa.id, variantId: null, addOnIds: [], qty: 1, notes: '' }], guest: { name: 'Anu', phone: '9811122233', address: '' }, notes: '' })
+    const placed = await s.call<{ orderId: string; number: string; trackCode: string }>('public.placeOrder', s.businessId, { type: 'takeaway', tableId: null, items: [{ productId: dosa.id, variantId: null, addOnIds: [], qty: 1, notes: '' }], guest: { name: 'Anu', phone: '9811122233', address: '' }, notes: '' })
 
     // First look reads the database; asking again while nothing changed is answered from the cache.
     const v1 = await s.call<View>('public.order', s.businessId, placed.orderId)
@@ -33,8 +33,8 @@ test('order tracking: cached status (no database read until something changes), 
 
     // Track my order: by number, with or without the prefix.
     const digits = placed.number.replace(/\D/g, '')
-    assert.equal((await s.call<{ orderId: string }>('public.track', s.businessId, placed.number)).orderId, placed.orderId)
-    assert.equal((await s.call<{ orderId: string }>('public.track', s.businessId, ` ${digits} `)).orderId, placed.orderId)
+    assert.equal((await s.call<{ orderId: string }>('public.track', s.businessId, placed.number)).orderId, placed.trackCode)
+    assert.equal((await s.call<{ orderId: string }>('public.track', s.businessId, ` ${digits} `)).orderId, placed.trackCode)
     await assert.rejects(s.call('public.track', s.businessId, '999999'), /No order with that number/)
     await assert.rejects(s.call('public.track', s.businessId, ''), /Enter your order number/)
     // At most 10 tries a minute from one address.

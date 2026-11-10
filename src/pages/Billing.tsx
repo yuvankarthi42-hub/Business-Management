@@ -6,6 +6,8 @@ import { useApp, useData } from '@/app/AppContext'
 import { Badge, Button, Chips, Drawer, SearchInput, Segmented, Select, useAction, useToast } from '@/components/ui'
 import { ORDER_TYPE_LABEL, usesRetailPos } from '@/core/config'
 import SuperBilling from '@/features/supermarket/SuperBilling'
+import { WeightModal } from '@/features/supermarket/WeightModal'
+import { makeItem } from '@/core/orderItem'
 import type { OrderType, PaymentMethod, Product } from '@/core/types'
 import { api, type OrderDraft, type PaymentInput } from '@/data'
 import { money, timeAgo } from '@/lib/format'
@@ -52,10 +54,14 @@ function TileBilling() {
   const busyTables = new Set(running.filter((o) => o.id !== orderId).map((o) => o.tableId))
   const kitchenOn = mod('kitchen') && type !== 'counter'
 
+  // A branch with a weighing scale weighs loose items (kg / g) before they go on the bill; others add 1 as before.
+  const scaleOn = !!me?.branch.scale?.enabled
+  const [weighFor, setWeighFor] = useState<Product | null>(null)
   const pick = useCallback((p: Product) => {
     if (needsOptions(p)) setOptions(p)
+    else if (scaleOn && (p.unit === 'kg' || p.unit === 'g')) setWeighFor(p)
     else cart.addProduct(p)
-  }, [cart])
+  }, [cart, scaleOn])
 
   const newBill = () => {
     cart.reset(); setCustomerId(null); setOrderId(null); setOrderNumber(null); setTableId(null); setSuccess(null); setMethod('cash')
@@ -70,6 +76,7 @@ function TileBilling() {
   // A bill is saved once: taps while saving are ignored, and a retry after a dropped connection reuses its id.
   const { once, saving } = useSaveOnce()
   const checkout = async (pays: PaymentInput[]) => {
+    if (cart.discountOver) { toast('Discount can’t be more than the bill', 'error'); return false }
     const d = draft()
     const r = await once({ bill: billKey, d, pays }, async () => {
       let id = ''
@@ -82,6 +89,7 @@ function TileBilling() {
 
   const quickPay = () => {
     if (!cart.items.length) return toast('Add at least one item', 'error')
+    if (cart.discountOver) return toast('Discount can’t be more than the bill', 'error')
     if (type === 'dine_in' && !tableId) return toast(`Select a ${t('table').toLowerCase()}`, 'error')
     if (new URLSearchParams(location.search).get('cn')) return setPayOpen(true) // exchange: pay with the credit note
     checkout([{ method, amount: cart.totals.total }])
@@ -89,6 +97,7 @@ function TileBilling() {
 
   const hold = async () => {
     if (!cart.items.length) return
+    if (cart.discountOver) return toast('Discount can’t be more than the bill', 'error')
     const d = { ...draft(), pointsToRedeem: undefined }
     const ok = await once({ hold: billKey, d }, () => run(async () => {
       const r = await api.orders.save(d, { sendToKitchen: kitchenOn })
@@ -171,12 +180,12 @@ function TileBilling() {
         </div>
         <div className="flex gap-2">
           {kitchenOn && !orderId && (
-            <Button variant="secondary" size="lg" icon={ChefHat} onClick={hold} disabled={!cart.items.length || saving} title="Save as running order and send to kitchen">KOT</Button>
+            <Button variant="secondary" size="lg" icon={ChefHat} onClick={hold} disabled={!cart.items.length || saving || cart.discountOver} title="Save as running order and send to kitchen">KOT</Button>
           )}
           {orderId && kitchenOn && cart.items.some((i) => i.qty > i.kotQty) && (
-            <Button variant="secondary" size="lg" icon={ChefHat} onClick={hold} disabled={saving}>Send new</Button>
+            <Button variant="secondary" size="lg" icon={ChefHat} onClick={hold} disabled={saving || cart.discountOver}>Send new</Button>
           )}
-          <Button variant="success" size="lg" className="flex-1" onClick={quickPay} disabled={!cart.items.length || saving}>
+          <Button variant="success" size="lg" className="flex-1" onClick={quickPay} disabled={!cart.items.length || saving || cart.discountOver}>
             {saving ? 'Saving…' : <>Collect {money(cart.totals.total)}</>}
           </Button>
         </div>
@@ -223,6 +232,7 @@ function TileBilling() {
       {mobileCart && <Drawer open onClose={() => setMobileCart(false)} title={`Current ${t('invoice')}`} width="max-w-full sm:max-w-md"><div className="h-full">{billPanel}</div></Drawer>}
 
       <ItemOptionsModal product={options} onClose={() => setOptions(null)} onAdd={cart.add} />
+      <WeightModal product={weighFor} onClose={() => setWeighFor(null)} onAdd={(qty) => { if (weighFor) cart.add(makeItem(weighFor, billing, { qty })) }} />
       <PaymentModal open={payOpen} onClose={() => setPayOpen(false)} total={cart.totals.total} customerId={customerId} onCustomerChange={setCustomerId} onConfirm={checkout} />
       <BillSuccessModal orderId={success} onClose={newBill} onNew={newBill} />
 

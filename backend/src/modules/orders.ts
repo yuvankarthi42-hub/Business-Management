@@ -5,7 +5,7 @@ import { qrSettings } from '@/core/config'
 import { applySpecials } from '@/core/specials'
 import { featuresFor, withFeatures } from '@/core/features'
 import { subscriptionState } from '@/core/subscription'
-import type { Customer, DiningTable, KotStatus, Order, OrderType, PaymentMethod } from '@/core/types'
+import type { Customer, DiningTable, KotStatus, Order, OrderType, PaymentMethod, Permission } from '@/core/types'
 import type { Ctx, Session } from '../core/context'
 import { ApiError } from '../core/errors'
 import { define, publicRead, publicWrite, userRead, userWrite } from '../core/registry'
@@ -14,20 +14,23 @@ import { DEFAULT_SEQ, loadBusiness } from '../domain/business'
 import { loadCategories, loadProducts, wholesaleList } from '../domain/catalog'
 import {
   customerFrom, kitchenDelta, kotsFrom, loadOrder, loadOrders, paymentFrom, priceItems, selectIn, settle, tableFrom, withItems, writeOrder, clientUuid,
-  type OrderDraft, type PaymentInput,
+  type OrderDraft, type PaymentInput, type WriteInfo,
 } from '../domain/orders'
 import { movePoints, pointsFrom } from '../domain/points'
-import { moveStock, stockProduct } from '../domain/stock'
-import { audit, bizDay, bizDayStart, code, cursorArg, moduleOn, E, fromMinor, isId, keyPart, nameOf, own, readSequence, str, toMinor } from '../domain/util'
+import { moveStock, restorableStock, stockProduct, takeRestorable } from '../domain/stock'
+import { audit, bizDay, bizDayStart, code, cursorArg, moduleOn, E, fromMinor, isId, keyPart, nameOf, own, readSequence, str, toMinor, money, mayUseBranch, assertBranch } from '../domain/util'
 import { idBefore } from '@/core/paging'
 import { cleanPhone } from './business'
-import { buildView, markPushOn, rateLimit, trackedView } from '../domain/tracking'
+import { buildView, countIn, ensureTrackCode, limitIn, markPushOn, rateLimit, trackedView, trackRef } from '../domain/tracking'
 import { cachedPublic, rememberTableBranch, tableBranch } from '../domain/menuCache'
 import { cachedStats } from '../domain/statsCache'
-import { featureFlags } from '../domain/session'
+import { featureFlagsFor } from '../domain/session'
 import { isPushEndpoint } from '../core/webpush'
 import { orderNumberCandidates, trackStage, trackStamp, TRACK_WINDOW_MS } from '@/core/tracking'
 import { createHash } from 'node:crypto'
+import { QR_MENU_FULL_MAX } from '@/core/catalogIndex'
+import type { Product, Special } from '@/core/types'
+import { afterKey, nameLike, type Arg } from '../domain/productSql'
 import { specialsFor } from './catalog'
 
 /** Customer GST columns from the form (throws a readable error for a wrong GSTIN). */
@@ -45,6 +48,10 @@ const one = async (c: Ctx, id: string) => (await loadOrder(c, id, { inScope: fal
 /** Merge a QR request into the table's running order (if any), then send to kitchen. */
 async function acceptQr(c: Ctx, orderId: string) {
   const { row, order } = await loadOrder(c, orderId, { inScope: false })
+  // Only a QR order still waiting: accepting twice (a double tap, a repeated request) never merges its items again,
+  // and an order already billed, merged or cancelled is never touched.
+  if (Number(row.status) !== E.OrderStatus.open) throw new ApiError('This order is no longer waiting', 409)
+  if (order.qrStatus !== 'pending') return one(c, row.ROWID)
   await c.db.update('orders', row.ROWID, { qr_status: E.QrStatus.accepted })
   let target = order
   if (row.table_id) {
@@ -65,7 +72,7 @@ async function acceptQr(c: Ctx, orderId: string) {
 async function guestSession(c: Ctx, businessId: string, branchId?: string | null, tableId?: string | null): Promise<{ branch: Row }> {
   if (!isId(businessId)) throw new ApiError('Menu not found', 404)
   try { await c.useShop(businessId) } catch { throw new ApiError('Menu not found', 404) }
-  const [bundle, flags] = await Promise.all([loadBusiness(c, businessId), featureFlags(c.platform)])
+  const [bundle, flags] = await Promise.all([loadBusiness(c, businessId), featureFlagsFor(c)])
   if (!bundle) throw new ApiError('Menu not found', 404)
   // QR ordering / specials not released to this shop: the menu and TV board see them as off (core/features.ts).
   const features = featuresFor(flags, businessId)
@@ -118,6 +125,8 @@ async function restoreCreditNote(c: Ctx, returnId: string, amount: number) {
 
 /** orders.list without a date range: at most this many (newest first). */
 const LIST_NEWEST = 50
+/** Who may read customers (names, phones, dues): billing, orders, customers, payments or reports — not kitchen staff. */
+const CUSTOMER_READ: Permission[] = ['billing.create', 'orders.view', 'customers.manage', 'payments.view', 'payments.collect', 'reports.view']
 
 define('orders', {
   /** `limit`: only the newest n (e.g. the dashboard's last 6 bills) — never more than 500 without a date range. */
@@ -133,7 +142,7 @@ define('orders', {
     const rows = [...new Map([...created, ...billed].map((r) => [r.ROWID, r])).values()]
     const list = (await withItems(c, rows)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     return want ? list.slice(0, want) : list
-  }),
+  }, { anyPerm: ['dashboard.view', 'orders.view', 'reports.view'] }),
   /**
    * The Orders screen, page by page: `limit` (50) bills created or billed in the range, newest first, after `before`
    * (the last bill the screen has). `count` / `billed` are for the whole filter (the header), not just this page.
@@ -184,22 +193,24 @@ define('orders', {
       billedMinor = uniq.filter((r) => Number(r.status) === E.OrderStatus.completed).reduce((a, r) => a + Number(r.total_minor ?? 0), 0)
     }
     return { rows: await withItems(c, pageRows), next, count, billed: fromMinor(billedMinor) }
-  }),
-  running: userRead(async (c) => loadOrders(c, { ...inScope(c), status: E.OrderStatus.open }, { orderBy: [['CREATEDTIME', 'ASC']] })),
+  }, { anyPerm: ['orders.view', 'billing.create'] }),
+  running: userRead(async (c) => loadOrders(c, { ...inScope(c), status: E.OrderStatus.open }, { orderBy: [['CREATEDTIME', 'ASC']] }), { anyPerm: ['billing.create', 'orders.view', 'tables.manage', 'dashboard.view'] }),
   get: userRead(async (c, id: string) => {
     const { order } = await loadOrder(c, id)
     const [pays, kots] = await Promise.all([c.db.select('payments', { where: { business_id: c.businessId, order_id: order.id } }), moduleOn(c, 'kitchen') ? c.db.select('kitchen_tickets', { where: { business_id: c.businessId, order_id: order.id } }) : []])
     return { order, payments: pays.map(paymentFrom), kots: await kotsFrom(c, kots) }
-  }),
+  }, { anyPerm: ['orders.view', 'billing.create'] }),
 
   /** Create/update a running order (tables, mobile). Optionally sends new items to the kitchen. */
   save: userWrite(async (c, draft: OrderDraft, opts: { sendToKitchen?: boolean } = {}) => {
     if (draft.type === 'dine_in' && !draft.tableId) throw new ApiError('Select a table')
     if (draft.tableId && !draft.id && await c.db.first('orders', { ...inScope(c), status: E.OrderStatus.open, table_id: draft.tableId })) throw new ApiError('This table already has a running order')
+    // The items' catalogue rows are read once: pricing and the kitchen ticket share them (the order writes none).
+    c.memoCatalog()
     const id = await writeOrder(c, { ...draft, pointsToRedeem: undefined }) // points are used only when the bill is paid (checkout)
     const kot = opts.sendToKitchen && c.business.modules.kitchen ? await kitchenDelta(c, id) : null
     return { order: await one(c, id), kot }
-  }),
+  }, { anyPerm: ['billing.create', 'tables.manage'] }),
 
   /** Move a customer order on the orders board (New → Packing → Ready). Delivered happens when it's paid. */
   setFulfilment: userWrite(async (c, orderId: string, stage: 'new' | 'packing' | 'ready') => {
@@ -223,33 +234,34 @@ define('orders', {
 
   /** Fast billing: create + (kitchen) + settle. A retried request returns the bill already made. */
   checkout: userWrite(async (c, draft: OrderDraft, pays: PaymentInput[]) => {
-    if (!draft?.items?.length) throw new ApiError('Add at least one item')
+    if (!Array.isArray(draft?.items) || !draft.items.length) throw new ApiError('Add at least one item')
     // Prices, variants, add-ons and specials are read first, outside the shop's write lock (and checked:
     // a wrong item fails here). Inside the transaction the same reads come from memory.
     c.memoCatalog()
     await priceItems(c, draft.items, new Map(), c.businessId, undefined, true) // warm-up read only; the checks run in writeOrder
     await selectIn(c, 'products', 'ROWID', draft.items.map((i) => String(i.productId)), { business_id: c.businessId }) // what settle() reads for stock
     if (draft.items.some((i) => i.priceTier === 'wholesale')) await wholesaleList(c)
-    const id = await c.tx(async () => {
+    // `done`: the finished bill as settle saved it (one database per shop) — else it is read after the commit.
+    const { id, done } = await c.tx(async (): Promise<{ id: string; done: Order | null }> => {
       // A running order opened on the Billing page: update that same order, send the kitchen only what it
       // hasn't seen yet, and bill it — never a second order (which would send every item to the kitchen again).
       if (draft.id) {
         const { row } = await loadOrder(c, draft.id)
-        if (Number(row.status) === E.OrderStatus.completed) return row.ROWID // same request sent twice: already billed
+        if (Number(row.status) === E.OrderStatus.completed) return { id: row.ROWID, done: null } // same request sent twice: already billed
         if (Number(row.status) !== E.OrderStatus.open) throw new ApiError('This order is no longer running')
         await writeOrder(c, draft)
         if (c.business.modules.kitchen && draft.type !== 'counter') await kitchenDelta(c, row.ROWID)
-        await settle(c, row.ROWID, pays)
-        return row.ROWID
+        return { id: row.ROWID, done: await settle(c, row.ROWID, pays) }
       }
-      const info: { existing?: boolean } = {}
+      const info: WriteInfo = {}
       const id = await writeOrder(c, { ...draft, id: undefined }, { info })
-      if (info.existing) return id // same request sent twice: the bill already made
-      if (c.business.modules.kitchen && draft.type !== 'counter') await kitchenDelta(c, id)
-      await settle(c, id, pays)
-      return id
+      if (info.existing) return { id, done: null } // same request sent twice: the bill already made
+      const kitchen = c.business.modules.kitchen && draft.type !== 'counter'
+      if (kitchen) await kitchenDelta(c, id)
+      // The order just written is passed on (not read back) — unless the kitchen ticket changed its lines.
+      return { id, done: await settle(c, id, pays, kitchen ? undefined : info.written) }
     })
-    return one(c, id) // after the commit: read without holding the lock
+    return done ?? one(c, id) // otherwise after the commit: read without holding the lock
   }, { perm: 'billing.create', tx: 'manual' }),
 
   settle: userWrite(async (c, orderId: string, pays: PaymentInput[], patch?: { discount?: number; customerId?: string | null }) => {
@@ -262,9 +274,10 @@ define('orders', {
     if (patch && (patch.customerId !== undefined || patch.discount !== undefined)) {
       if (patch.discount !== undefined && !c.can('billing.discount') && patch.discount !== order.discount) throw new ApiError('You do not have permission to give a discount', 403)
       await writeOrder(c, { id: order.id, type: order.type, tableId: order.tableId, customerId: patch.customerId !== undefined ? patch.customerId : order.customerId, items: order.items, discount: patch.discount ?? order.discount, notes: order.notes, source: order.source })
+      return (await settle(c, orderId, pays)) ?? one(c, orderId)
     }
-    await settle(c, orderId, pays)
-    return one(c, orderId)
+    // Nothing changed since it was read just now: settle uses it as it is.
+    return (await settle(c, orderId, pays, { row, order })) ?? one(c, orderId)
   }, { perm: 'billing.create' }),
 
   cancel: userWrite(async (c, orderId: string, reason: string) => {
@@ -281,8 +294,16 @@ define('orders', {
     // Paid with a credit note: the customer gets that credit back (never more than the note was worth).
     for (const p of pays) if (p.return_id) await restoreCreditNote(c, str(p.return_id), fromMinor(p.amount_minor))
     if (wasBilled && moduleOn(c, 'inventory')) {
-      const prows = await selectIn(c, 'products', 'ROWID', order.items.map((i) => i.productId), { business_id: c.businessId })
-      for (const i of order.items) { const p = prows.find((x) => x.ROWID === i.productId); if (p) await moveStock(c, stockProduct(p), str(row.branch_id), i.qty, 'return', { note: `Cancelled — ${order.invoiceNumber}`, refType: 'order', refId: row.ROWID }) }
+      // Only what this bill's sale actually took out goes back (none if Inventory was off or the item untracked then).
+      const [prows, left] = await Promise.all([
+        selectIn(c, 'products', 'ROWID', order.items.map((i) => i.productId), { business_id: c.businessId }),
+        restorableStock(c, row.ROWID),
+      ])
+      for (const i of order.items) {
+        const p = prows.find((x) => x.ROWID === i.productId)
+        const give = p ? takeRestorable(left, i.productId, i.qty) : 0
+        if (p && give > 0) await moveStock(c, stockProduct(p), str(row.branch_id), give, 'return', { note: `Cancelled — ${order.invoiceNumber}`, refType: 'order', refId: row.ROWID })
+      }
     }
     // Loyalty: points the bill earned go away; points used on it come back.
     if (wasBilled && order.customerId) {
@@ -301,6 +322,7 @@ define('orders', {
     const { row } = await loadOrder(c, orderId)
     if (Number(row.status) !== E.OrderStatus.open) throw new ApiError('Order not found', 404)
     const to = await own(c, 'dining_tables', toTableId, 'Table not found')
+    assertBranch(c, to.branch_id, 'Table not found')
     if (await c.db.first('orders', { ...inScope(c), status: E.OrderStatus.open, table_id: to.ROWID })) throw new ApiError('Target table is occupied')
     const from = row.table_id ? str(row.table_id) : null
     await c.db.update('orders', row.ROWID, { table_id: to.ROWID, order_type: E.OrderType.dine_in, updated_by: c.actorId })
@@ -308,13 +330,14 @@ define('orders', {
     const kots = await c.db.select('kitchen_tickets', { where: { business_id: c.businessId, order_id: row.ROWID } })
     if (kots.length) await c.db.updateMany('kitchen_tickets', kots.map((k) => ({ ROWID: k.ROWID, table_label: str(to.label) })))
     await audit(c, 'order', row.ROWID, 'update', `transfer ${from} -> ${to.ROWID}`, str(row.branch_id))
-  }),
+  }, { anyPerm: ['tables.manage', 'billing.create'] }),
 
   /** Merge: move the other table's items into the primary order and link the table. */
   mergeTables: userWrite(async (c, primaryOrderId: string, otherTableId: string) => {
     const { order: primary } = await loadOrder(c, primaryOrderId)
     if (primary.status !== 'open' || !primary.tableId) throw new ApiError('Order not found', 404)
     const t = await own(c, 'dining_tables', otherTableId, 'Table not found')
+    assertBranch(c, t.branch_id, 'Table not found')
     const other = (await loadOrders(c, { ...inScope(c), status: E.OrderStatus.open, table_id: t.ROWID }))[0]
     if (other) {
       await writeOrder(c, { id: primary.id, type: primary.type, tableId: primary.tableId, customerId: primary.customerId, items: [...primary.items, ...other.items.map((i) => ({ ...i, id: `new_${i.id}` }))], discount: primary.discount + other.discount, notes: primary.notes, source: primary.source }, { trustedDiscount: true })
@@ -329,7 +352,7 @@ define('orders', {
     }
     await c.db.update('dining_tables', t.ROWID, { merged_into_id: primary.tableId })
     await audit(c, 'order', primary.id, 'update', `merge ${t.ROWID}`)
-  }),
+  }, { anyPerm: ['tables.manage', 'billing.create'] }),
 })
 
 define('payments', {
@@ -383,7 +406,7 @@ define('kitchen', {
     if (!c.inScope(str(k.branch_id))) throw new ApiError('Ticket not found', 404)
     const at = c.now.toISOString()
     await c.db.update('kitchen_tickets', k.ROWID, { status: code(E.KotStatus, status), ...(status === 'preparing' ? { started_at: at } : status === 'ready' ? { ready_at: at } : status === 'completed' ? { completed_at: at } : {}) })
-  }),
+  }, { anyPerm: ['kitchen.view', 'tables.manage', 'billing.create'] }),
 })
 
 define('tables', {
@@ -395,6 +418,7 @@ define('tables', {
     try {
       if (t.id) {
         const ex = await own(c, 'dining_tables', t.id, 'Table not found')
+        assertBranch(c, ex.branch_id, 'Table not found')
         return tableFrom(await c.db.update('dining_tables', ex.ROWID, { ...data, uniq_key: `${str(ex.branch_id)}:${keyPart(label)}` }))
       }
       const branchId = c.writeBranch()
@@ -403,12 +427,13 @@ define('tables', {
   }, { perm: 'settings.manage' }),
   remove: userWrite(async (c, id: string) => {
     const t = await own(c, 'dining_tables', id, 'Table not found')
+    assertBranch(c, t.branch_id, 'Table not found')
     if (await c.db.first('orders', { business_id: c.businessId, status: E.OrderStatus.open, table_id: t.ROWID })) throw new ApiError('Table has a running order')
     // Old bills point at the table, so it is hidden rather than deleted.
     await c.db.update('dining_tables', t.ROWID, { is_active: false, uniq_key: `${str(t.branch_id)}:removed-${t.ROWID}` })
   }, { perm: 'settings.manage' }),
   /** Unlink a merged table without closing the primary order. */
-  unmerge: userWrite(async (c, id: string) => { const t = await own(c, 'dining_tables', id, 'Table not found'); await c.db.update('dining_tables', t.ROWID, { merged_into_id: null }) }),
+  unmerge: userWrite(async (c, id: string) => { const t = await own(c, 'dining_tables', id, 'Table not found'); assertBranch(c, t.branch_id, 'Table not found'); await c.db.update('dining_tables', t.ROWID, { merged_into_id: null }) }, { anyPerm: ['tables.manage', 'billing.create'] }),
 })
 
 define('customers', {
@@ -416,7 +441,7 @@ define('customers', {
     const [rows, list] = await Promise.all([c.db.select('customers', { where: { business_id: c.businessId, is_active: true } }), wholesaleList(c)])
     const stats = await customerStats(c)
     return rows.map((r) => ({ ...customerFrom(r, list?.ROWID ?? null), stats: stats(r.ROWID) }))
-  }),
+  }, { anyPerm: CUSTOMER_READ }),
   /** One customer with totals (a bill's drawer) — instead of the whole list. null when not found. */
   one: userRead(async (c, id: string) => {
     if (!isId(id)) return null
@@ -424,15 +449,16 @@ define('customers', {
     if (!r) return null
     const stats = await customerStats(c, [r.ROWID])
     return { ...customerFrom(r, list?.ROWID ?? null), stats: stats(r.ROWID) }
-  }),
+  }, { anyPerm: CUSTOMER_READ }),
   history: userRead(async (c, customerId: string) => {
     await own(c, 'customers', customerId, 'Customer not found')
     const [orders, pays] = await Promise.all([
       loadOrders(c, { customer_id: customerId, status: { ne: E.OrderStatus.open } }, { limit: 500 }),
       c.db.select('payments', { where: { business_id: c.businessId, customer_id: customerId, is_voided: false }, orderBy: [['CREATEDTIME', 'DESC']], limit: 1000 }),
     ])
-    return { orders, payments: pays.map(paymentFrom) }
-  }),
+    // Staff limited to some branches see this customer's bills and payments in those branches only.
+    return { orders: orders.filter((o) => mayUseBranch(c, o.branchId)), payments: pays.filter((p) => mayUseBranch(c, p.branch_id)).map(paymentFrom) }
+  }, { anyPerm: ['customers.manage', 'orders.view'] }),
   save: userWrite(async (c, input: Partial<Customer> & { name: string }) => {
     const name = String(input.name ?? '').trim()
     if (!name) throw new ApiError('Enter the name')
@@ -440,6 +466,12 @@ define('customers', {
     const key = phone ? `${c.businessId}:${phone}` : null
     if (key) { const dup = await c.db.first('customers', { phone_key: key }); if (dup && dup.ROWID !== input.id) throw new ApiError('A customer with this phone already exists') }
     const list = input.priceTier !== undefined ? await wholesaleList(c) : null
+    // Putting a customer on the wholesale list gives them wholesale prices on every bill: same permission as
+    // changing prices (taking them off it, or saving them unchanged, needs nothing more).
+    if (input.priceTier === 'wholesale' && list && !c.can('billing.price') && !c.can('settings.manage')) {
+      const was = input.id && isId(input.id) ? await c.db.first('customers', { ROWID: input.id, business_id: c.businessId }) : null
+      if (str(was?.price_list_id) !== list.ROWID) throw new ApiError('Putting a customer on the wholesale list needs the “Change item price” permission', 403, 'FORBIDDEN')
+    }
     const email = String(input.email ?? '').trim().toLowerCase()
     // GST: a business customer's GSTIN (B2B bills); the state comes from it, or is chosen for other-state buyers.
     const gst = input.gstin !== undefined || input.stateCode !== undefined ? customerGst(input) : {}
@@ -467,7 +499,7 @@ define('customers', {
     ])
     const ref = (r: Row) => (r.return_id ? str(rets.find((x) => x.ROWID === str(r.return_id))?.number) : r.order_id ? str(orders.find((x) => x.ROWID === str(r.order_id))?.invoice_number) : '')
     return rows.map((r) => pointsFrom(r, ref(r)))
-  }),
+  }, { anyPerm: ['billing.create', 'customers.manage', 'orders.view'] }),
 
   /** Owner adds or removes points by hand (festival gift, correction) — always with a reason. */
   adjustPoints: userWrite(async (c, customerId: string, points: number, reason: string) => {
@@ -485,9 +517,9 @@ define('customers', {
   collectDue: userWrite(async (c, customerId: string, amount: number, method: PaymentMethod, reference = '') => {
     await own(c, 'customers', customerId, 'Customer not found')
     if (!['cash', 'upi', 'card', 'bank'].includes(method)) throw new ApiError('Choose how it was paid')
-    let left = r2(Number(amount))
-    if (!(left > 0)) throw new ApiError('Enter an amount')
+    let left = money(amount, 'Amount', { positive: true })
     const dues = (await c.db.select('orders', { where: { business_id: c.businessId, customer_id: customerId, status: E.OrderStatus.completed, balance_minor: { gt: 0 } }, orderBy: [['billed_at', 'ASC']] }))
+      .filter((o) => mayUseBranch(c, o.branch_id)) // dues of the user's own branches only
     const outstanding = r2(dues.reduce((a, o) => a + fromMinor(o.balance_minor), 0))
     if (left > outstanding + 0.001) throw new ApiError(`Amount is more than outstanding (${outstanding})`)
     const branchId = c.writeBranch({ fallback: true })
@@ -529,12 +561,53 @@ export interface PublicOrderInput {
 }
 
 /** Endpoints that work without staff login (customer QR menu, TV display). */
+
+// ---------- a paged QR menu (over QR_MENU_FULL_MAX active items, one database per shop) ----------
+// The phone gets the first page, the categories that have something to order and today's specials; each category,
+// "more" and search is then one page from the server (public.menuItems) — never the whole catalogue.
+const MENU_PAGE = 30
+
+/** Is this shop's menu paged? One count of the active items (inactive ones are never on the menu); never on the Data Store. */
+async function menuIsLarge(c: Ctx) {
+  if (!c.dbs.perShop || !c.db.sql) return false
+  const [r] = await c.db.sql('SELECT COUNT(*) AS n FROM "products" WHERE "business_id" = ? AND "is_active" = 1', [Number(c.business.id)])
+  return Number(r?.n ?? 0) > QR_MENU_FULL_MAX
+}
+/** What a customer may order here: active, and (with Inventory on) not sold out in this branch — as the full menu. */
+function orderable(c: Ctx, branchId: string): { join: string; where: string; args: Arg[] } {
+  if (!c.business.modules.inventory) return { join: '', where: '', args: [] }
+  return {
+    join: 'LEFT JOIN (SELECT "product_id", SUM("qty_milli") AS "st" FROM "branch_stock" WHERE "business_id" = ? AND "branch_id" = ? GROUP BY "product_id") s ON s."product_id" = p."id"',
+    where: ' AND NOT (p."track_stock" = 1 AND COALESCE(s."st", 0) <= 0)',
+    args: [Number(c.business.id), Number(branchId)],
+  }
+}
+const menuProducts = (c: Ctx, branchId: string, ids: string[]) =>
+  ids.length ? loadProducts(c, { ids, activeOnly: true, branches: [branchId], withExpiry: false, withStock: !!c.business.modules.inventory, forCustomers: true }) : Promise.resolve([] as Product[])
+
+/** One page of the menu: a category (or all), a name search, after the last row shown. Special prices applied. */
+async function menuPage(c: Ctx, branchId: string, specials: Special[], o: { cat?: string | null; q?: string; after?: string | null }) {
+  const ok = orderable(c, branchId)
+  const cat = o.cat && isId(o.cat) ? { sql: ' AND p."category_id" = ?', args: [Number(o.cat)] as Arg[] } : { sql: '', args: [] as Arg[] }
+  const q = nameLike(o.q), k = afterKey(o.after)
+  const rows = await c.db.sql!(
+    `SELECT p."id", p."sort_order" FROM "products" p ${ok.join} WHERE p."business_id" = ? AND p."is_active" = 1${ok.where}${cat.sql}${q.sql}${k.sql} ORDER BY p."sort_order", p."id" LIMIT ?`,
+    [...ok.args, Number(c.business.id), ...cat.args, ...q.args, ...k.args, MENU_PAGE + 1],
+  )
+  const more = rows.length > MENU_PAGE
+  const mine = more ? rows.slice(0, MENU_PAGE) : rows
+  const last = mine[mine.length - 1]
+  const products = applySpecials(await menuProducts(c, branchId, mine.map((r) => String(r.id))), specials).products
+  return { products, next: more && last ? `${Number(last.sort_order)}:${Number(last.id)}` : null }
+}
+
 /** The QR menu (read from the database; public.menu keeps a copy in the shared cache). */
 async function buildMenu(c: Ctx, businessId: string, branchId?: string | null, tableId?: string | null) {
   const { branch } = await guestSession(c, businessId, branchId, tableId)
   const b = c.business
   // QR ordering off: the page only says so (CustomerMenu) — no catalogue, table or specials reads.
   const on = !!b.modules.qrOrdering
+  if (on && (await menuIsLarge(c))) return buildLargeMenu(c, branch)
   const [products, cats, tables, specials] = !on ? [[], [], [], []] as never : await Promise.all([
     loadProducts(c, { activeOnly: true, branches: [branch.ROWID], withExpiry: false, withStock: !!b.modules.inventory, forCustomers: true }), loadCategories(c),
     b.modules.tables ? c.db.select('dining_tables', { where: { business_id: b.id, branch_id: branch.ROWID, is_active: true } }) : [], b.modules.specials ? specialsFor(c, b.id, bizDay(c)) : [],
@@ -550,12 +623,42 @@ async function buildMenu(c: Ctx, businessId: string, branchId?: string | null, t
   }
 }
 
+/** A paged menu (over QR_MENU_FULL_MAX active items): the first page, the categories with something to order, today's specials (same fields as the full one). */
+async function buildLargeMenu(c: Ctx, branch: Row) {
+  const b = c.business
+  const ok = orderable(c, branch.ROWID)
+  const [cats, tables, specials, catIds] = await Promise.all([
+    loadCategories(c),
+    b.modules.tables ? c.db.select('dining_tables', { where: { business_id: b.id, branch_id: branch.ROWID, is_active: true } }) : [],
+    b.modules.specials ? specialsFor(c, b.id, bizDay(c)) : [],
+    c.db.sql!(`SELECT DISTINCT p."category_id" AS id FROM "products" p ${ok.join} WHERE p."business_id" = ? AND p."is_active" = 1 AND p."category_id" IS NOT NULL${ok.where}`, [...ok.args, Number(b.id)]),
+  ])
+  const [first, specialRows] = await Promise.all([
+    menuPage(c, branch.ROWID, specials, {}),
+    menuProducts(c, branch.ROWID, [...new Set(specials.map((x) => x.productId))]),
+  ])
+  const sp = applySpecials(b.modules.inventory ? specialRows.filter((p) => !(p.trackStock && p.stock <= 0)) : specialRows, specials)
+  const has = new Set(catIds.map((r) => String(r.id)))
+  return {
+    business: { id: b.id, name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, address: b.address, phone: b.phone, defaultCountry: b.defaultCountry ?? 'IN', currencySymbol: b.currencySymbol, billing: b.billing, modules: b.modules, terminology: b.terminology, qr: qrSettings(b) },
+    categories: cats.filter((x) => has.has(x.id)), products: first.products, specials: sp.specials,
+    specialInfo: [...sp.info.entries()].map(([productId, v]) => ({ productId, tag: v.special.tag, originalPrice: v.originalPrice, specialPrice: v.special.specialPrice })),
+    tables: tables.map((t) => ({ id: t.ROWID, label: str(t.label) })),
+    branch: { id: branch.ROWID, name: str(branch.name), address: str(branch.address), phone: str(branch.phone) },
+    branchCount: c.s.allBranches.length,
+    /** Paged: more of "All", each category and search come from public.menuItems. */
+    large: true as const, next: first.next,
+  }
+}
+
 /** The TV specials board (public.specials keeps a copy in the shared cache). */
 async function buildSpecials(c: Ctx, businessId: string) {
   await guestSession(c, businessId)
   const b = c.business
-  // Specials off: an empty board, without reading the catalogue.
-  const sp = b.modules.specials ? applySpecials(await loadProducts(c, { activeOnly: true, withExpiry: false, forCustomers: true }), await specialsFor(c, b.id, bizDay(c))) : applySpecials([], [])
+  // Specials off: an empty board, without reading the catalogue. On: only today's specials' items are read.
+  const specials = b.modules.specials ? await specialsFor(c, b.id, bizDay(c)) : []
+  const ids = [...new Set(specials.map((x) => x.productId))]
+  const sp = applySpecials(ids.length ? await loadProducts(c, { ids, activeOnly: true, withExpiry: false, forCustomers: true }) : [], specials)
   return { business: { name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, currencySymbol: b.currencySymbol, qr: qrSettings(b), qrOn: b.modules.qrOrdering, specialsOn: !!b.modules.specials }, items: sp.specials.map((p) => ({ product: p, ...sp.info.get(p.id)! })) }
 }
 
@@ -573,8 +676,36 @@ define('public', {
     return cachedPublic(c, businessId, `menu:${br}`, async () => ({ value: await buildMenu(c, businessId, br || branchId, null), tz: c.business.timezone }))
   }),
 
+  /**
+   * A paged menu (over QR_MENU_FULL_MAX active items), one page at a time (CustomerMenu): `cat` = a category id ('' = all), `q` = a name search,
+   * `after` = the last row's key. Category pages are kept in the shared cache like the menu; searches are not.
+   */
+  menuItems: publicRead(async (c, businessId: string, branchId: string, input?: { cat?: string | null; q?: string | null; after?: string | null }) => {
+    if (!isId(businessId) || !isId(branchId)) throw new ApiError('Menu not found', 404)
+    const cat = input?.cat && isId(input.cat) ? String(input.cat) : ''
+    const q = String(input?.q ?? '').trim().slice(0, 100)
+    const after = /^-?\d{1,9}:\d{1,16}$/.test(String(input?.after ?? '')) ? String(input?.after) : ''
+    // Every read that isn't a cached copy (searches, a page not kept yet) is limited per network.
+    const build = async () => {
+      await rateLimit(c, `menuq:${businessId}`, 120, 'Too many requests from this network. Please wait a minute and try again.')
+      const { branch } = await guestSession(c, businessId, branchId)
+      const b = c.business
+      if (!b.modules.qrOrdering || branch.ROWID !== branchId || !(await menuIsLarge(c))) return { value: { products: [] as Product[], next: null as string | null }, tz: b.timezone }
+      const specials = b.modules.specials ? await specialsFor(c, b.id, bizDay(c)) : []
+      return { value: await menuPage(c, branch.ROWID, specials, { cat, q, after }), tz: b.timezone }
+    }
+    if (q) return (await build()).value
+    return cachedPublic(c, businessId, `menup:${branchId}:${cat || 'all'}:${after || '0'}`, build)
+  }),
+
   placeOrder: publicWrite(async (c, businessId: string, input: PublicOrderInput) => {
+    if (!isId(businessId)) throw new ApiError('Shop not found', 404)
+    // Generous for a family on the restaurant's wifi; stops scripted floods of fake orders.
+    await rateLimit(c, `place:${businessId}`, 20, 'Too many orders from this network. Please wait a minute and try again.')
     const { branch } = await guestSession(c, businessId, input?.branchId, input?.tableId)
+    // The items' catalogue rows are read once: the price check here, the stock check and the order's own pricing
+    // share them (an order writes none).
+    c.memoCatalog()
     const b = c.business
     const st = subscriptionState(b, c.now)
     if (st.blocked || st.readOnly || !b.modules.qrOrdering) throw new ApiError('Online ordering is not available right now')
@@ -586,7 +717,15 @@ define('public', {
     guest.phone = cleanPhone(input.guest?.phone, b.defaultCountry, input.type !== 'dine_in' ? 'Enter your mobile number' : undefined)
     if (input.type !== 'dine_in' && !guest.name) throw new ApiError('Enter your name')
     if (input.type === 'delivery' && guest.address.length < 8) throw new ApiError('Enter the full delivery address')
+    // Flood limits (a family orders 1–3 times; scripted fake orders hit these): per table, per phone, per shop.
+    const busy = 'Too many orders right now. Please ask the staff or try again in a few minutes.'
+    if (table) await limitIn(c, `qrt:${b.id}:${table.ROWID}`, 10, 10, busy)
+    if (guest.phone) await limitIn(c, `qrp:${b.id}:${guest.phone}`, 5, 10, busy)
+    await limitIn(c, `qrs:${b.id}`, 200, 60, 'This shop is getting too many online orders right now. Please order at the counter.')
+    // Many orders from one network in a short time: they wait for staff even when orders are accepted automatically.
+    const manyFromHere = (await countIn(c, `qra:${b.id}:${c.ip || 'unknown'}`, 5)) > 3
     if (!Array.isArray(input.items) || !input.items.length || input.items.length > 40) throw new ApiError('Add items to your order')
+    if (input.items.some((i) => i?.addOnIds != null && !Array.isArray(i.addOnIds))) throw new ApiError('Check the add-ons on your order')
     const items = input.items.map((i) => ({ id: '', productId: String(i.productId), name: '', variantId: i.variantId ?? null, variantName: null, addOns: (i.addOnIds ?? []).map((id) => ({ id: String(id), name: '', price: 0 })), qty: Math.min(50, Math.max(1, Math.round(Number(i.qty)))), unit: '', unitPrice: 0, taxRate: 0, notes: String(i.notes ?? '').slice(0, 120), kotQty: 0 }))
     // Re-priced from the catalogue; stock checked in this branch.
     const priced = await priceItems(c, items, new Map(), b.id, [branch.ROWID])
@@ -601,30 +740,42 @@ define('public', {
     }
     // The writes are one transaction (reads above stay outside it, so the shop's lock is held briefly).
     return c.tx(async () => {
-    // Link to an existing customer by phone, or create one.
+    // Link to an existing customer by phone, or create one (not opted into offers: the shop asks them first).
     let customerId: string | null = null
+    let customer: Row | null = null
     if (guest.phone) {
       const key = `${b.id}:${guest.phone}`
       let cu = await c.db.first('customers', { phone_key: key })
       if (!cu) {
-        try { cu = await c.db.insert('customers', { business_id: b.id, name: guest.name || 'Guest', phone: guest.phone, phone_key: key, address: guest.address || null, notes: 'Created from QR order', marketing_opt_in: true, is_active: true }) }
+        try { cu = await c.db.insert('customers', { business_id: b.id, name: guest.name || 'Guest', phone: guest.phone, phone_key: key, address: guest.address || null, notes: 'Created from QR order', marketing_opt_in: false, is_active: true }) }
         catch (e) { if (!(e instanceof DuplicateError)) throw e; cu = await c.db.first('customers', { phone_key: key }) }
       }
       customerId = cu?.ROWID ?? null
+      customer = cu ?? null
     }
-    const id = await writeOrder(c, { type: input.type, tableId: table?.ROWID ?? null, customerId, items: priced, discount: 0, notes: String(input.notes ?? '').slice(0, 200), source: 'qr' }, { qr: { guest, branchId: branch.ROWID, auto: qr.autoAccept } })
-    if (qr.autoAccept) await acceptQr(c, id)
-    const o = await one(c, id)
-    await c.db.insert('audit_logs', { business_id: b.id, branch_id: branch.ROWID, user_id: null, entity: E.AuditEntity.order, entity_id: id, action: E.AuditAction.create, detail: `qr place ${o.number} ${input.type}` })
-    return { orderId: id, number: o.number }
+    // A repeated request (same request id) returns the order already placed — accepted / logged once only.
+    const info: { existing?: boolean } = {}
+    const id = await writeOrder(c, { type: input.type, tableId: table?.ROWID ?? null, customerId, items: priced, discount: 0, notes: String(input.notes ?? '').slice(0, 200), source: 'qr' }, { qr: { guest, branchId: branch.ROWID, auto: qr.autoAccept }, info, customerRow: customer })
+    if (qr.autoAccept && !info.existing && !manyFromHere) await acceptQr(c, id)
+    // The order's row (read once): its number, and the customer's tracking link — a random code, never the row id
+    // (kept if the request is repeated).
+    const row = await c.db.get('orders', id)
+    if (!row) throw new ApiError('Order not found', 404)
+    const number = str(row.order_number)
+    const trackCode = await ensureTrackCode(c, row)
+    // Written with the order's other audit rows, in one insert when the order is saved (first, as before).
+    if (!info.existing) await c.auditRow({ business_id: b.id, branch_id: branch.ROWID, user_id: null, entity: E.AuditEntity.order, entity_id: id, action: E.AuditAction.create, detail: `qr place ${number} ${input.type}` }, { first: true })
+    return { orderId: id, number, trackCode }
     })
   }),
 
   /** Status for the customer's tracking screen — only that one order is exposed. */
   /** The tracking screen. Answered from the shared cache while nothing in the shop changed (no database read). */
-  order: publicRead(async (c, businessId: string, orderId: string) => {
-    if (!isId(businessId) || !isId(orderId)) throw new ApiError('Order not found', 404)
-    return trackedView(c, businessId, orderId)
+  order: publicRead(async (c, businessId: string, ref: string) => {
+    if (!isId(businessId)) throw new ApiError('Order not found', 404)
+    // A tracking screen asks when opened / refreshed: room for many customers on one wifi, none for counting.
+    await rateLimit(c, `order:${businessId}`, 120, 'Too many tries. Please wait a minute and try again.')
+    return trackedView(c, businessId, await trackRef(c, businessId, String(ref ?? '')))
   }),
   /** "Track my order": today's or yesterday's order with this number → its id for the tracking screen. */
   track: publicRead(async (c, businessId: string, number: string) => {
@@ -640,17 +791,20 @@ define('public', {
     const since = new Date(c.now.getTime() - TRACK_WINDOW_MS).toISOString()
     const [hit] = await c.db.select('orders', { where: { business_id: businessId, order_number: { in: want }, CREATEDTIME: { gte: since } }, orderBy: [['ROWID', 'DESC']], limit: 1 })
     if (!hit) throw new ApiError('No order with that number today. Check the number on your order screen or bill.', 404)
-    return { orderId: hit.ROWID, number: str(hit.order_number) }
+    // The tracking screen opens with the order's code (made now for counter orders), not its row id.
+    return { orderId: await ensureTrackCode(c, hit), number: str(hit.order_number) }
   }),
   /** Browser push key for "Notify me" (null = push not set up: the page shows Refresh only). */
   pushKey: publicRead(async (c) => ({ publicKey: c.push?.publicKey ?? null })),
-  subscribePush: { ...publicWrite(async (c, businessId: string, orderId: string, sub: { endpoint?: string; keys?: { p256dh?: string; auth?: string } }) => {
+  subscribePush: { ...publicWrite(async (c, businessId: string, ref: string, sub: { endpoint?: string; keys?: { p256dh?: string; auth?: string } }) => {
     if (!c.push) throw new ApiError('Notifications are not available')
-    if (!isId(businessId) || !isId(orderId)) throw new ApiError('Order not found', 404)
+    if (!isId(businessId)) throw new ApiError('Order not found', 404)
     await rateLimit(c, `push:${businessId}`, 20, 'Too many tries. Please wait a minute and try again.')
+    // Only someone with the order's tracking link (its code) can follow it.
+    const orderId = await trackRef(c, businessId, String(ref ?? ''))
+    try { await c.useShop(businessId) } catch { throw new ApiError('Order not found', 404) }
     const endpoint = String(sub?.endpoint ?? ''), p256dh = String(sub?.keys?.p256dh ?? ''), auth = String(sub?.keys?.auth ?? '')
     if (!isPushEndpoint(endpoint) || !/^[A-Za-z0-9_-]{80,120}$/.test(p256dh) || !/^[A-Za-z0-9_-]{16,40}$/.test(auth)) throw new ApiError('This browser can’t receive notifications')
-    try { await c.useShop(businessId) } catch { throw new ApiError('Order not found', 404) }
     const view = await buildView(c, businessId, orderId)
     const stage = trackStage(view)
     if (stage === 'done' || stage === 'rejected') return { ok: true, stage }
@@ -669,7 +823,7 @@ define('public', {
 
   specials: publicRead(async (c, businessId: string) => {
     if (!isId(businessId)) throw new ApiError('Not found', 404)
-    return cachedPublic(c, businessId, 'specials', async () => ({ value: await buildSpecials(c, businessId), tz: c.business.timezone }))
+    return cachedPublic(c, businessId, 'specials', async () => ({ value: await buildSpecials(c, businessId), tz: c.business.timezone }), 'board')
   }),
 })
 

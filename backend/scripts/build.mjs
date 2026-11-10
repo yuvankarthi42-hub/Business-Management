@@ -14,7 +14,8 @@ async function fn(name, entry, type) {
   mkdirSync(out, { recursive: true })
   await build({
     entryPoints: [join(here, '..', 'src', entry)],
-    bundle: true, platform: 'node', target: 'node18', format: 'cjs', outfile: join(out, 'index.js'),
+    bundle: true, platform: 'node', target: 'node18', // runs on Node 24 (the Catalyst stack); node18 output keeps a rollback possible
+    format: 'cjs', outfile: join(out, 'index.js'),
     alias: { '@': join(root, 'src') },
     external: ['zcatalyst-sdk-node'], // installed by Catalyst from package.json below
     legalComments: 'none', sourcemap: false, minify: false, logLevel: 'warning',
@@ -27,7 +28,7 @@ async function fn(name, entry, type) {
   const cfgPath = join(out, 'catalyst-config.json')
   const prev = existsSync(cfgPath) ? JSON.parse(readFileSync(cfgPath, 'utf8')) : {}
   writeFileSync(cfgPath, JSON.stringify({
-    deployment: { name, stack: 'node18', type, env_variables: { ...(prev.deployment?.env_variables ?? {}) } },
+    deployment: { name, stack: 'node24', type, env_variables: { ...(prev.deployment?.env_variables ?? {}) } },
     execution: { main: 'index.js' },
   }, null, 2) + '\n')
   console.log(`Built catalyst/functions/${name} (${type})`)

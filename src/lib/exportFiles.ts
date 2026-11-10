@@ -1,17 +1,12 @@
 // Customer data export: one Excel workbook (a sheet per table) or a ZIP of CSV files + product photos.
 // JSZip is loaded only when someone exports.
 import type { ExportBundle } from '@/data'
+import { csv } from './csv'
 
 type Cell = string | number | boolean | null
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'business'
 const stamp = () => new Date().toISOString().slice(0, 10)
 
-function csv(rows: Record<string, Cell>[]) {
-  if (!rows.length) return ''
-  const head = Object.keys(rows[0])
-  const esc = (v: Cell) => { const t = v == null ? '' : String(v); return /[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
-  return [head.map(esc).join(','), ...rows.map((r) => head.map((h) => esc(r[h])).join(','))].join('\r\n')
-}
 
 const xmlEsc = (s: string) => s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 const col = (i: number) => { let s = ''; i++; while (i) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26) } return s }

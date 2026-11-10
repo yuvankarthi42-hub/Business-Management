@@ -45,7 +45,7 @@ test('loyalty: earn on bills, use points as a discount before GST, return / canc
     await assert.rejects(s.call('business.update', { loyalty: { enabled: true, spendPerPoint: -1 } }), /Spend/)
     const biz = await s.call<{ billing: { taxRates: { id: string; rate: number }[] } }>('business.update', { loyalty: { enabled: true }, billing: { taxEnabled: true, taxMode: 'inclusive', roundOff: true } })
     const r5 = biz.billing.taxRates.find((t) => t.rate === 5)!.id
-    const silk = await s.call<P>('products.save', { name: 'Silk Saree', price: 10800, taxRateId: r5 })
+    const silk = await s.call<P>('products.save', { name: 'Silk Saree', price: 10800, unit: 'mtr', taxRateId: r5 })
 
     // Earn: ₹10,800 → 108 points, printed on the bill.
     const o1 = await s.call<O>('orders.checkout', draft([line(silk)], { customerId: cu.id }), [{ method: 'cash', amount: 10800 }])

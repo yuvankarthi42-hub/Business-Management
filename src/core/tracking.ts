@@ -14,6 +14,8 @@ export interface TrackView {
   kitchen: 'new' | 'preparing' | 'ready' | 'completed' | null
   paymentStatus: PaymentStatus
   fulfilment: Order['fulfilment'] | null
+  /** The order's tracking code (what the customer's link and notifications carry). */
+  code?: string | null
 }
 
 export type TrackStage = 'sent' | 'confirmed' | 'preparing' | 'ready' | 'done' | 'rejected'

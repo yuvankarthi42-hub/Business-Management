@@ -10,7 +10,7 @@ import type { Db } from '../db/types'
 import { loadBusiness } from './business'
 import { allowedBranches, permissionsOf, roleFrom, userFrom } from './people'
 import { getPlatformSetting, str } from './util'
-import { bumpMenu } from './menuCache'
+import { bumpBoard, bumpMenu } from './menuCache'
 
 export interface UserClaims { t: 'u'; uid: string; bid: string; tv: number; sup?: SupportClaim }
 export interface AdminClaims { t: 'a'; aid: string; tv: number }
@@ -24,7 +24,15 @@ export async function bumpEpoch(c: Ctx, businessId: string | 'global', opts: { m
   if (businessId !== 'global') c.emit({ kind: 'session', shop: String(businessId), branch: null })
   // Subscription / account / settings changes also change what the QR menu may show (a password change doesn't:
   // menu: false keeps the customers' cached menu).
-  if (businessId !== 'global' && opts.menu !== false) c.afterCommit(() => bumpMenu(c, String(businessId)))
+  if (businessId !== 'global' && opts.menu !== false) c.afterCommit(async () => { await bumpMenu(c, String(businessId)); await bumpBoard(c, String(businessId)) })
+}
+
+/** The feature flags, read once per request (the public feature check and the guest session both need them). */
+const requestFlags = new WeakMap<Ctx, Promise<FeatureFlags>>()
+export function featureFlagsFor(c: Ctx): Promise<FeatureFlags> {
+  let p = requestFlags.get(c)
+  if (!p) { p = featureFlags(c.platform); requestFlags.set(c, p); p.catch(() => requestFlags.delete(c)) }
+  return p
 }
 
 export async function featureFlags(db: Db): Promise<FeatureFlags> {

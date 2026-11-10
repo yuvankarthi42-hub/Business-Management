@@ -2,12 +2,17 @@
 // Auth, branch access, read-only / support-view rules and permissions are all checked here, before any
 // handler runs — so changing a request in the browser can never reach another business or branch.
 import express, { type Request, type Response } from 'express'
-import { Ctx, type Env } from './core/context'
+import { Ctx, type Env, type SupportClaim } from './core/context'
+import { GZIP_ACTIONS, sendJsonText } from './core/gzipReply'
+import { adminCan } from '@/core/adminRoles'
+import type { AdminRole } from '@/core/types'
+import { E, nameOf, str } from './domain/util'
 import { ApiError } from './core/errors'
-import { handler, handlerNames, type Handler } from './core/registry'
+import { resolveClientIp, setupKeyOk } from './core/clientIp'
+import { checkArgs, handler, handlerNames, type Handler } from './core/registry'
 import { verifyToken } from './core/tokens'
-import { DuplicateError } from './db/types'
-import { featureFlags, loadSession, type AdminClaims, type UserClaims } from './domain/session'
+import { DuplicateError, type Row } from './db/types'
+import { featureFlagsFor, loadSession, type AdminClaims, type UserClaims } from './domain/session'
 import { loadAdmin } from './modules/admin/auth'
 import './modules'
 import { checkSchema } from './modules/admin/schema'
@@ -15,7 +20,7 @@ import { touchActivity } from './domain/directory'
 import { moduleOffError, moduleOffRead } from '@/core/moduleGuards'
 import { FEATURE_ACTIONS, featureOffAction, featureOn } from '@/core/features'
 import { afterOrderWrite } from './domain/tracking'
-import { bumpMenu } from './domain/menuCache'
+import { bumpBoard, bumpMenu } from './domain/menuCache'
 import { RawJson } from './core/rawJson'
 import { bumpReports } from './domain/reportCache'
 import { bumpCustomerStats } from './domain/statsCache'
@@ -23,6 +28,19 @@ import { moduleOn } from './domain/util'
 import { flushEvents, orderIdsFor, recordsFor } from './events/publish'
 import type { HubEvent } from './events/hub'
 import { ALL_BRANCHES } from './core/context'
+import { checkMediaLink, contentTypeOf } from './core/media'
+
+/** The admin behind a support view is still active, may open support views, and hasn't been signed out since. */
+async function supportAdminOk(c: Ctx, sup: SupportClaim): Promise<boolean> {
+  if (!/^\d{1,20}$/.test(String(sup.adminId ?? ''))) return false
+  const a = await c.platform.get('platform_admins', String(sup.adminId))
+  if (!a || a.is_active === false) return false
+  if (!adminCan(nameOf(E.AdminRole, a.role) as AdminRole, 'customers.support')) return false
+  return sup.atv === undefined || Number(a.token_version ?? 1) === Number(sup.atv)
+}
+
+/** The only actions a session may use until it sets a new password after a support reset. */
+const SET_PASSWORD_OK = new Set(['auth.me', 'auth.boot', 'auth.checkPassword', 'auth.changePassword', 'auth.setLanguage'])
 
 /** Writes that can change a customer's totals (dues, purchases, last visit). */
 const CUSTOMER_WRITES = /^(orders|payments|returns|customers|points|public)\./
@@ -38,6 +56,9 @@ const SETTINGS_WRITES = /^(business|branches)\./
 const publicCopies = (name: string, c: Ctx) => SETTINGS_WRITES.test(name) || moduleOn(c, 'qrOrdering') || moduleOn(c, 'specials')
 // A bill's stock change matters only when an item sold out (or came back): the menu shows no stock numbers.
 const menuChanged = (name: string, c: Ctx) => (MENU_WRITES.test(name) || (!!c.effects.stock?.length && c.soldOutChanged)) && publicCopies(name, c)
+/** What the TV specials board shows: the specials, their products, the shop's name / logo / settings (no stock). */
+const BOARD_WRITES = /^(products|specials|branches|business)\./
+const boardChanged = (name: string, c: Ctx) => BOARD_WRITES.test(name) && (SETTINGS_WRITES.test(name) || moduleOn(c, 'specials'))
 /** Order tracking (QR customers' tracking screen, "Notify me") exists only with QR ordering on. */
 const tracks = (name: string, c: Ctx) => TRACKING_WRITES.test(name) && moduleOn(c, 'qrOrdering')
 
@@ -117,8 +138,7 @@ export function createApp(envFor: (req: Request) => Env) {
 
   // First-time setup only: GET /schema-check with header x-setup-key = SETUP_KEY → which tables / columns are missing.
   app.get('/schema-check', async (req, res) => {
-    const want = process.env.SETUP_KEY
-    if (!want || want.length < 16 || req.header('x-setup-key') !== want) { res.status(403).json({ error: { message: 'Not allowed', code: 'FORBIDDEN' } }); return }
+    if (!setupKeyOk(req.header('x-setup-key'))) { res.status(403).json({ error: { message: 'Not allowed', code: 'FORBIDDEN' } }); return }
     try { res.json({ data: await checkSchema(envFor(req)) }) }
     catch (e) { res.status(500).json({ error: { message: (e as Error).message, code: 'SERVER_ERROR' } }) }
   })
@@ -126,10 +146,34 @@ export function createApp(envFor: (req: Request) => Env) {
   // After a deploy that adds a migration: POST /migrate with header x-setup-key → every database up to date.
   // (Shop databases are also brought up to date on their first request, so this is optional.)
   app.post('/migrate', async (req, res) => {
-    const want = process.env.SETUP_KEY
-    if (!want || want.length < 16 || req.header('x-setup-key') !== want) { res.status(403).json({ error: { message: 'Not allowed', code: 'FORBIDDEN' } }); return }
+    if (!setupKeyOk(req.header('x-setup-key'))) { res.status(403).json({ error: { message: 'Not allowed', code: 'FORBIDDEN' } }); return }
     try { res.json({ data: await envFor(req).dbs.migrateAll() }) }
     catch (e) { res.status(500).json({ error: { message: (e as Error).message, code: 'SERVER_ERROR' } }) }
+  })
+
+  // After a deploy: GET /ip-check with x-setup-key (and a made-up X-Forwarded-For) → which address rate limits use.
+  // The answer must be your real address, not the made-up one (core/clientIp.ts).
+  app.get('/ip-check', (req, res) => {
+    if (!setupKeyOk(req.header('x-setup-key'))) { res.status(403).json({ error: { message: 'Not allowed', code: 'FORBIDDEN' } }); return }
+    const { ip, via } = resolveClientIp(req)
+    res.json({ data: { ip, via, source: process.env.CLIENT_IP_SOURCE || 'default', forwardedFor: req.header('x-forwarded-for') ?? null, peer: req.socket?.remoteAddress ?? null } })
+  })
+
+  // Private support screenshots (L9): only through a signed link that is still valid (core/media.ts).
+  app.get(/^\/media\/(p\/.+)$/, async (req: Request, res: Response) => {
+    const key = String((req.params as Record<string, string>)[0] ?? '')
+    const deny = () => { res.status(404).setHeader('Cache-Control', 'no-store'); res.end() }
+    if (!checkMediaLink(key, req.query.e, req.query.s)) return deny()
+    try {
+      const body = await envFor(req).files.getPrivate(key)
+      if (!body) return deny()
+      res.setHeader('Content-Type', contentTypeOf(key))
+      res.setHeader('Cache-Control', 'private, max-age=1800')
+      res.setHeader('X-Content-Type-Options', 'nosniff')
+      res.setHeader('Content-Security-Policy', "default-src 'none'")
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin')
+      res.end(body)
+    } catch { deny() }
   })
 
   app.post('/rpc/:name', async (req: Request, res: Response) => {
@@ -143,7 +187,9 @@ export function createApp(envFor: (req: Request) => Env) {
       const c = new Ctx(env, await env.dbs.platform(), (hdr('x-request-id') ?? '').slice(0, 40) || null)
       const device = (hdr('x-device') ?? '').trim()
       c.origin = /^[A-Za-z0-9_-]{6,40}$/.test(device) ? device : null
-      c.ip = String(req.header('x-forwarded-for') ?? req.ip ?? '').split(',')[0].trim().slice(0, 64)
+      const loginDevice = (hdr('x-login-device') ?? '').trim()
+      c.loginDevice = /^[A-Za-z0-9_-]{43}$/.test(loginDevice) ? loginDevice : null
+      c.ip = resolveClientIp(req).ip.slice(0, 64)
       const token = (hdr('authorization') ?? '').replace(/^Bearer\s+/i, '')
       const claims = verifyToken<Record<string, unknown>>(token)
       if (h.access === 'user') {
@@ -151,9 +197,17 @@ export function createApp(envFor: (req: Request) => Env) {
         await openShop(c, String(claims.bid))
         c.session = await loadSession(c, claims as unknown as UserClaims, hdr('x-branch') ?? undefined)
         if (!c.session) throw new ApiError('Please sign in again', 401, 'UNAUTHORIZED')
+        // Support view: only while that admin is still active, still allowed support views, and not signed out.
+        if (c.session.support && !(await supportAdminOk(c, c.session.support))) throw new ApiError('The support view has ended. Open it again from the admin panel.', 401, 'UNAUTHORIZED')
         if (h.write) c.assertWritable({ readOnlyOk: h.readOnlyOk })
         else if (c.session.business.status === 'deactivated' && !c.session.support) throw new ApiError('This account has been deactivated. Please contact the product admin.', 403, 'DEACTIVATED')
+        // After product support reset the password: nothing but setting a new one (and reading who you are).
+        if (claims.pwc) {
+          c.mustSetPassword = true
+          if (!SET_PASSWORD_OK.has(name)) throw new ApiError('Support reset your password. Set a new password to continue.', 403, 'PASSWORD_CHANGE_REQUIRED')
+        }
         if (h.perm) c.requirePerm(h.perm)
+        if (h.anyPerm && !h.anyPerm.some((p) => c.can(p))) throw new ApiError('You don’t have permission to do this', 403, 'FORBIDDEN')
         // A feature the product admin hasn't released to this customer: never runs (core/features.ts).
         const notReleased = featureOffAction(name, c.session.features)
         if (notReleased && 'error' in notReleased) throw new ApiError(notReleased.error, 403, 'FEATURE_OFF')
@@ -178,14 +232,16 @@ export function createApp(envFor: (req: Request) => Env) {
           c.session = await loadSession(c, claims as unknown as UserClaims, hdr('x-branch') ?? undefined)
         } catch { c.session = null }
       }
-      const args = Array.isArray(req.body?.args) ? req.body.args : []
+      // Arguments of the wrong kind (a missing object, text where a list belongs…): refused before the handler runs.
+      const args = checkArgs(h.args, Array.isArray(req.body?.args) ? req.body.args : [])
+      if (!args) throw new ApiError('Check the request', 400, 'BAD_REQUEST')
       // Customer QR actions (order, tracking) of a shop that doesn't have QR Orders released: refused before any shop read.
-      if (h.access === 'public' && FEATURE_ACTIONS[name] && !featureOn(await featureFlags(c.platform), FEATURE_ACTIONS[name].feature, String(args[0] ?? ''))) {
+      if (h.access === 'public' && FEATURE_ACTIONS[name] && !featureOn(await featureFlagsFor(c), FEATURE_ACTIONS[name].feature, String(args[0] ?? ''))) {
         throw new ApiError('Online ordering is not available right now', 403, 'FEATURE_OFF')
       }
       if (h.write && h.access !== 'admin' && !h.quiet) c.changeName = name
       let data: unknown
-      try { data = await run(c, h, args) } catch (e) { await c.finish(false); throw e }
+      try { data = await run(c, h, args, name) } catch (e) { await c.finish(false); throw e }
       await c.finish(true)
       if (h.write && h.access !== 'admin' && c.hasShop) {
         // Writes without a transaction still tell the other devices (one extra small write).
@@ -198,13 +254,16 @@ export function createApp(envFor: (req: Request) => Env) {
         if (!TODAY_ONLY.test(name) && c.shopId) await bumpReports(c, c.shopId).catch((e) => console.error(`[${name}] report cache`, e))
         // QR menu / TV board copies are stale now (catalogue, settings, or stock changed by a bill).
         if (menuChanged(name, c) && c.shopId) await bumpMenu(c, c.shopId).catch((e) => console.error(`[${name}] menu cache`, e))
+        if (boardChanged(name, c) && c.shopId) await bumpBoard(c, c.shopId).catch((e) => console.error(`[${name}] board cache`, e))
         if (c.session) await touchActivity(c)
       }
       if (c.events) await sendEvents(c, h, name, args, data)
       const feed = await feedNote(c, h, name)
       const rest = { ...(Object.keys(c.effects).length ? { effects: c.effects } : {}), ...(feed ? { feed } : {}) }
       // A cached copy that is already JSON text (QR menu, TV board): written as it is — the same bytes res.json would send.
-      if (data instanceof RawJson) { const more = JSON.stringify(rest); res.type('application/json').send(`{"data":${data.text}${more === '{}' ? '' : `,${more.slice(1, -1)}`}}`); return }
+      if (data instanceof RawJson) { const more = JSON.stringify(rest); sendJsonText(req, res, name, `{"data":${data.text}${more === '{}' ? '' : `,${more.slice(1, -1)}`}}`); return }
+      // The customers' QR menu answers go gzipped (core/gzipReply.ts); every other answer as before.
+      if (GZIP_ACTIONS.has(name)) { sendJsonText(req, res, name, JSON.stringify({ data: data === undefined ? null : data, ...rest })); return }
       res.json({ data: data === undefined ? null : data, ...rest })
     } catch (e) {
       if (e instanceof ApiError) { res.status(e.status).json({ error: { message: e.message, code: e.code } }); return }
@@ -218,10 +277,35 @@ export function createApp(envFor: (req: Request) => Env) {
 }
 
 /** The handler, inside the transaction its `tx` option asks for. */
-function run(c: Ctx, h: Handler, args: unknown[]) {
+async function run(c: Ctx, h: Handler, args: unknown[], name: string) {
   const mode = h.tx ?? (h.write && h.access !== 'public' ? 'auto' : 'none')
   if (!h.write || mode !== 'auto') return h.run(c, ...args)
-  return h.access === 'admin' ? c.platformTx(() => h.run(c, ...args)) : c.tx(() => h.run(c, ...args))
+  if (h.access === 'admin') return c.platformTx(() => h.run(c, ...args))
+  if (!h.once || !c.requestId || !c.hasShop) return c.tx(() => h.run(c, ...args))
+  // Saved once per request id: the first answer is kept with the change, in the same transaction.
+  const key = `${c.businessId}:${c.requestId}`.slice(0, 80)
+  try {
+    return await c.tx(async () => {
+      const done = await c.db.first('request_log', { uniq_key: key })
+      if (done) { c.changeName = null; return replay(done, name) } // nothing changed: no change-feed entry
+      const data = await h.run(c, ...args)
+      const json = JSON.stringify(data === undefined ? null : data)
+      await c.db.insert('request_log', { business_id: c.businessId, uniq_key: key, name, answer_json: json.length <= ANSWER_MAX ? json : null })
+      return data
+    })
+  } catch (e) {
+    // The same request arrived twice at the same moment: the other copy saved it first — answer as it did.
+    if (e instanceof DuplicateError) { const done = await c.db.first('request_log', { uniq_key: key }); if (done) { c.changeName = null; return replay(done, name) } }
+    throw e
+  }
+}
+/** The kept answer has to fit a Data Store text column. */
+const ANSWER_MAX = 9_000
+/** A request already saved: its answer again (nothing runs or saves). */
+function replay(done: Row, name: string) {
+  if (str(done.name) !== name) throw new ApiError('Duplicate request', 409)
+  if (done.answer_json == null) throw new ApiError('This was already saved. Refresh to see it.', 409, 'DUPLICATE')
+  return JSON.parse(str(done.answer_json)) as unknown
 }
 
 /** A token for a shop whose database is gone (customer deleted) means: sign in again. */

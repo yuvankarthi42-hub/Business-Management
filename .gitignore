@@ -19,3 +19,8 @@ catalyst/functions/daily/index.js
 *.zip
 .env.prod
 dist-prod
+
+# Every environment file (any name), but keep the committed examples.
+.env*
+**/.env*
+!*.example

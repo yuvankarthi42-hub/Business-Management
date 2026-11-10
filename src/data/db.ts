@@ -8,7 +8,7 @@ import type {
 import { seedAdminTeam, seedPlatform } from './seedPlatform'
 import { dropHealthEvents, dropSmsReminders, fixFutureDemoTimes, markContractors, seedStaffAndWholesale, seedSupport } from './seedOps'
 import { buildSeed, demoSpecials } from './seed'
-import { addFoodDemo, addRetailDemos, addTextileDemo, addTextileHsn, addVegAutoDemos, seedDemoBatches } from './seedRetail'
+import { addFoodDemo, addMobileDemo, addRetailDemos, addTextileDemo, addTextileHsn, addVegAutoDemos, seedDemoBatches } from './seedRetail'
 import { normalizePhone } from '@/core/phone'
 
 export interface DB {
@@ -55,7 +55,7 @@ export interface DB {
 }
 
 const KEY = 'billpoodum.db' // legacy localStorage key (moved to IndexedDB on first load)
-const VERSION = 28
+const VERSION = 29
 const IDB_NAME = 'billpoodum'
 const IDB_STORE = 'kv'
 
@@ -132,6 +132,7 @@ function migrate(parsed: DB): DB | null {
   if (parsed.version === 25) { addTextileHsn(parsed); parsed.version = 26 } // HSN on the saree shop's categories
   if (parsed.version === 26) { addVegAutoDemos(parsed); normalizeAllPhones(parsed); seedPlatform(parsed); parsed.version = 27 } // vegetable shop + auto spares demo shops
   if (parsed.version === 27) { releaseDemoFeatures(parsed); parsed.version = 28 } // QR Orders / Daily Specials / GST report became release flags
+  if (parsed.version === 28) { addMobileDemo(parsed); normalizeAllPhones(parsed); seedPlatform(parsed); parsed.version = 29 } // mobile shop demo
   return parsed.version === VERSION ? parsed : null
 }
 
@@ -171,6 +172,7 @@ function freshSeed(save = true): DB {
   addFoodDemo(fresh)
   addTextileDemo(fresh)
   addVegAutoDemos(fresh)
+  addMobileDemo(fresh)
   normalizeAllPhones(fresh)
   seedDemoBatches(fresh)
   seedPlatform(fresh)

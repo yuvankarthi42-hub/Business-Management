@@ -94,6 +94,15 @@ export function splitLineTax(items: Pick<OrderItem, 'qty' | 'unitPrice' | 'taxRa
   return out
 }
 
+/**
+ * Returns: the part of a bill line's amount (in paise) for `nowMilli` more of it, after `beforeMilli` already went
+ * back. Worked out on the running quantity, so all the parts of a line add up exactly to the line.
+ */
+export function lineShare(wholeMinor: number, lineMilli: number, beforeMilli: number, nowMilli: number): number {
+  if (!(lineMilli > 0)) return 0
+  return Math.round((wholeMinor * (beforeMilli + nowMilli)) / lineMilli) - Math.round((wholeMinor * beforeMilli) / lineMilli)
+}
+
 // ---------- Monthly GST summary (GSTR-1 / GSTR-3B) ----------
 
 export interface GstLine { hsn: string; name: string; unit: string; qty: number; rate: number; taxable: number; tax: number }

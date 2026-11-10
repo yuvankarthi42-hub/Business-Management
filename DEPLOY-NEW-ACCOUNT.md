@@ -52,6 +52,9 @@ Keep this list in a **password manager**. Never paste these in chat, email or Gi
 | 24 | `DAILY_REQUEST_BUDGET` | Daily jobs: most outgoing requests one run may make. Default `40` | — | daily, api | Optional (leave unset) |
 | 25 | `DAILY_CPU_BUDGET_MS` | Daily jobs: CPU time after which a run stops starting new shops. Default `7` | — | daily, api | Optional (leave unset) |
 | 26 | `DAILY_REMINDER_HOUR` | Hourly runs only: renewal reminders go from this hour (IST). Default `9` | — | api | Optional (leave unset) |
+| 27 | `CLIENT_IP_SOURCE` | Where rate limits read the visitor's address: `catalyst` (default in production) or `cloudflare` (only when the API is put behind Cloudflare later). Check it with Step 7.5 | — | api | Optional (leave unset) |
+| 28 | `TRUSTED_PROXIES` | Extra proxy addresses to skip when reading the visitor's address (comma-separated, e.g. `203.0.113.0/24`). Only if Step 7.5 shows a proxy address instead of yours | Step 7.5 | api | Optional (leave unset) |
+| 29 | `CF_EDGE_SECRET` | Only with `CLIENT_IP_SOURCE=cloudflare` (later): a random secret your Cloudflare rule sends as `X-Edge-Auth`, so the `CF-Connecting-IP` header is trusted only from Cloudflare | Generate | api | Not now |
 
 Not needed in this setup: `CRON_KEY`, `CATALYST_TZ_OFFSET_MIN`, `TURSO_LOCATION` (leave them unset).
 (#16–#18 were the AppSail live-update settings `EVENTS_SECRET`, `EVENTS_URL`, `EVENTS_PUBLIC_URL` — removed: on Catalyst
@@ -63,7 +66,7 @@ open screens check for changes every 30–60 s. If they are still set on `api` f
 
 Deploy only a build whose tests all pass. Do this on the computer that has the project folder.
 
-**0.1 Requirements (once):** Node.js **18 or newer** (check with `node -v`).
+**0.1 Requirements (once):** Node.js **24** (the same as the Catalyst functions; check with `node -v`). Node 18 still runs the tests, but test on 24 before a deploy.
 
 **0.2 Install the packages** (project folder):
 
@@ -182,7 +185,7 @@ It prints `VAPID_PUBLIC_KEY=…` (#13) and `VAPID_PRIVATE_KEY=…` (#14). Skip i
 ## Step 5 — The `api` function (15 min)
 
 1. **Serverless → Functions → Create Function**
-   - Type **Advanced I/O**, name **`api`** (exactly), stack **Node.js 18**.
+   - Type **Advanced I/O**, name **`api`** (exactly), stack **Node.js 24**.
    - Upload **`api.zip`** (from the project folder).
 2. Open **Functions → api** and copy its address, ending in `/server/api`, e.g.
    `https://kadai-kalanjiyam-1234567.catalystserverless.in/server/api` → this is your **API URL**.
@@ -218,7 +221,7 @@ It prints `VAPID_PUBLIC_KEY=…` (#13) and `VAPID_PRIVATE_KEY=…` (#14). Skip i
 
 ## Step 6 — The `daily` function (5 min)
 
-1. **Functions → Create Function** → type **Cron**, name **`daily`**, stack **Node.js 18** → upload **`daily.zip`**.
+1. **Functions → Create Function** → type **Cron**, name **`daily`**, stack **Node.js 24** → upload **`daily.zip`**.
 2. **Environment Variables:** add these **required** ones, with the **same** values as on `api`:
 
 | Name | Value |
@@ -325,6 +328,20 @@ time" line should take well under a few seconds.
 `TURSO_GROUP` / `TURSO_ORG` wrong.
 
 The test shop is deleted at the end; in Turso you may briefly see a `kk-shop-…` database appear and disappear.
+
+### 7.5 Check the visitor address used for rate limits (1 min)
+
+Sign-in limits and the QR tracking limits count per visitor address. Make sure a visitor can't fake it — send a
+made-up address and check the API ignores it:
+
+```bash
+curl -s <api-url>/ip-check -H "x-setup-key: <SETUP_KEY>" -H "X-Forwarded-For: 1.2.3.4"
+```
+
+✔ Expected: `"ip"` is **your own internet address** (compare with https://ifconfig.me), never `1.2.3.4`.
+✘ If `"ip"` shows `1.2.3.4`: don't go live — the gateway isn't adding its own entry; tell the developer.
+✘ If `"ip"` shows a Zoho / proxy address (the same for everyone): put that address (or its range) in `TRUSTED_PROXIES`
+on `api` and check again.
 
 ## Step 8 — The web app on Slate (15 min)
 

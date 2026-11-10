@@ -1,4 +1,5 @@
 // Categories, products (save, CSV import, in-store barcodes), photos and daily specials.
+import { MAX_BILL_ITEMS } from '@/core/limits'
 import { randomBytes } from 'node:crypto'
 import { templateFor } from '@/core/config'
 import type { ImportItem } from '@/core/productImport'
@@ -9,11 +10,13 @@ import type { Category, Product, Special } from '@/core/types'
 import { nextInStoreBarcode } from '@/lib/barcode'
 import type { Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
+import { selectIn } from '../domain/orders'
+import { mediaLink, PRIVATE_PREFIX } from '../core/media'
 import { define, userRead, userWrite } from '../core/registry'
 import { DuplicateError, type Row } from '../db/types'
-import { categoryFrom, loadCategories, loadProductPage, loadProducts, mediaMap, productColumns, syncOptions, wholesaleList, withCostFor } from '../domain/catalog'
+import { categoryFrom, lightChangesSince, lightIndexPage, loadCategories, loadProductPage, loadProducts, mediaMap, productColumns, syncOptions, wholesaleList, withCostFor } from '../domain/catalog'
 import { moveStock, moveStockMany, stockProduct, type BatchInput } from '../domain/stock'
-import { audit, bizDay, E, fromMinor, fromMinorOrNull, isId, json, keyPart, own, str, toMilli, toMinor } from '../domain/util'
+import { audit, bizDay, E, fromMinor, fromMinorOrNull, isId, json, keyPart, own, str, toMilli, toMinor, money, quantity } from '../domain/util'
 
 /** Products per products.page answer (keeps one answer's CPU small for 2,000-item shops). */
 export const PRODUCT_PAGE = 300
@@ -40,8 +43,11 @@ export async function storeImage(c: Ctx, purpose: Purpose, input: { image: strin
   const lim = LIMITS[purpose]
   const main = decodeImage(input.image, lim.main)
   const id = randomBytes(9).toString('hex')
-  const key = `${c.businessId}/${purpose}s/${id}.${main.ext}`
-  const url = await c.files.put(key, main.buf, main.type)
+  // Support screenshots go to the private store when there is one (L9): shown only through short-lived signed links.
+  const priv = purpose === 'ticket' && c.files.hasPrivate
+  const key = `${priv ? PRIVATE_PREFIX : ''}${c.businessId}/${purpose}s/${id}.${main.ext}`
+  let url: string
+  if (priv) { await c.files.putPrivate(key, main.buf, main.type); url = mediaLink(key, c.now.getTime()) } else url = await c.files.put(key, main.buf, main.type)
   let thumbKey: string | null = null, thumbUrl: string | null = null
   if (input.thumb && lim.thumb) {
     const t = decodeImage(input.thumb, lim.thumb)
@@ -50,7 +56,7 @@ export async function storeImage(c: Ctx, purpose: Purpose, input: { image: strin
   }
   // Ticket screenshots are kept with the tickets (platform database); product photos in the shop's.
   const row = await (purpose === 'ticket' ? c.platform : c.db).insert('media_files', {
-    business_id: c.businessId, purpose: E.MediaPurpose[purpose], bucket: process.env.STRATUS_BUCKET || 'local', object_key: key, thumb_key: thumbKey,
+    business_id: c.businessId, purpose: E.MediaPurpose[purpose], bucket: priv ? process.env.STRATUS_PRIVATE_BUCKET || 'private' : process.env.STRATUS_BUCKET || 'local', object_key: key, thumb_key: thumbKey,
     content_type: main.type, bytes: main.buf.length, width: input.width ? Math.round(input.width) : null, height: input.height ? Math.round(input.height) : null,
     original_bytes: input.originalBytes ? Math.round(input.originalBytes) : null, created_by: purpose === 'ticket' ? null : c.actorId,
   })
@@ -172,9 +178,46 @@ define('products', {
    */
   page: userRead(async (c, after?: number) => {
     if (!c.dbs.perShop) return { rows: withCostFor(c, await loadProducts(c)), next: null }
-    const at = Math.max(0, Math.floor(Number(after) || 0))
+    // A sane page start (a huge number can't be a page of this shop: the database would refuse it).
+    const at = Math.min(1_000_000_000, Math.max(0, Math.floor(Number(after) || 0)))
     const page = await loadProductPage(c, at, PRODUCT_PAGE)
-    return { rows: withCostFor(c, page.rows), next: page.next }
+    // The first page also says how many there are: a large shop's app switches to the light index (catalogIndex.ts).
+    const total = at === 0 && page.next !== null ? await c.db.count('products', { business_id: c.businessId }) : undefined
+    return { rows: withCostFor(c, page.rows), next: page.next, ...(total !== undefined ? { total } : {}) }
+  }),
+
+  /**
+   * The light product index of a large shop (src/core/catalogIndex.ts), one database per shop only:
+   * `{ after }` = the whole index in pages (id order); `{ since }` = only what changed after that time.
+   */
+  index: userRead(async (c, input?: { after?: string | null; since?: string | null }) => {
+    if (!c.dbs.perShop) throw new ApiError('The product index is not used on this setup')
+    const since = input?.since
+    if (since != null) {
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(String(since))) throw new ApiError('Bad time')
+      return lightChangesSince(c, String(since))
+    }
+    return lightIndexPage(c, input?.after ?? null)
+  }),
+
+  /**
+   * One active product by barcode (or SKU): a large shop's scan that isn't in the device's index yet (added on
+   * another device a moment ago). null = not found.
+   */
+  byBarcode: userRead(async (c, code: string) => {
+    const s = String(code ?? '').trim()
+    if (!s || s.length > 40) return null
+    const hit = (await c.db.first('products', { barcode_key: `${c.businessId}:${s}` })) ?? (await c.db.first('products', { business_id: c.businessId, sku: s }))
+    if (!hit || hit.is_active === false) return null
+    return withCostFor(c, await loadProducts(c, { ids: [hit.ROWID] }))[0] ?? null
+  }),
+
+  /** Full products (variants, add-ons, details, photos) for items opened from the light index — up to 100 at a time. */
+  byIds: userRead(async (c, ids: string[]) => {
+    const want = [...new Set((Array.isArray(ids) ? ids : []).map(String).filter((x) => isId(x)))]
+    if (want.length > 100) throw new ApiError('Up to 100 products at a time')
+    if (!want.length) return []
+    return withCostFor(c, await loadProducts(c, { ids: want }))
   }),
 
   save: userWrite(async (c, input: Partial<Product> & { name: string; openingBatch?: BatchInput }) => {
@@ -220,9 +263,22 @@ define('products', {
     const b = c.business
     const branch = c.writeBranch({ fallback: true })
     // Validate everything first, so a bad row doesn't leave a half-done import.
+    // A tax rate must be one of this shop's own (never another shop's row id).
+    const shopRates = new Set((await c.db.select('tax_rates', { where: { business_id: c.businessId } })).map((r) => r.ROWID))
     const seen = new Set<string>()
     for (const it of rows) {
+      if (it.taxRateId && !shopRates.has(String(it.taxRateId))) throw new ApiError(`Row ${it.row + 2}: choose one of your tax rates`)
       if (!String(it.name ?? '').trim() || !(Number(it.price) >= 0)) throw new ApiError(`Row ${it.row + 2}: name and a valid price are needed`)
+      // Same limits as the product form: prices 0 … ₹1 crore, lists as lists, opening stock whole unless sold in parts.
+      const at = `Row ${it.row + 2}`
+      money(it.price, `${at} price`)
+      if (it.mrp != null) money(it.mrp, `${at} MRP`)
+      if (it.wholesalePrice != null) money(it.wholesalePrice, `${at} wholesale price`)
+      if (it.costPrice != null) money(it.costPrice, `${at} cost price`)
+      if ((it.variants != null && !Array.isArray(it.variants)) || (it.addOns != null && !Array.isArray(it.addOns))) throw new ApiError(`${at}: check the sizes and add-ons`)
+      for (const v of it.variants ?? []) money(v.price, `${at} size price`)
+      for (const a of it.addOns ?? []) money(a.price, `${at} add-on price`)
+      if (it.stock != null && Number(it.stock) !== 0) quantity(it.stock, it.unit || 'pc', `${at} stock`)
       const code = cleanBarcode(it.barcode)
       if (code) { if (seen.has(code)) throw new ApiError(`Row ${it.row + 2}: barcode ${code} is used twice in the file`); seen.add(code) }
     }
@@ -397,8 +453,13 @@ define('specials', {
   /** Replace the specials list for one day. */
   save: userWrite(async (c, date: string, rows: Omit<Special, 'id' | 'businessId' | 'date'>[]) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new ApiError('Choose a date')
-    const prods = new Set((await c.db.select('products', { where: { business_id: c.businessId } })).map((p) => p.ROWID))
-    for (const r of rows ?? []) if (!isId(r.productId) || !prods.has(r.productId)) throw new ApiError('An item in the list was not found')
+    if (rows != null && (!Array.isArray(rows) || rows.length > MAX_BILL_ITEMS)) throw new ApiError('Check the specials list')
+    for (const r of rows ?? []) if (!isId(r?.productId)) throw new ApiError('An item in the list was not found')
+    // Only the chosen items are read (not the whole catalogue): each must be this shop's.
+    const want = [...new Set((rows ?? []).map((r) => String(r.productId)))]
+    const prods = new Set(want.length ? (await selectIn(c, 'products', 'ROWID', want, { business_id: c.businessId })).map((p) => p.ROWID) : [])
+    for (const id of want) if (!prods.has(id)) throw new ApiError('An item in the list was not found')
+    for (const r of rows ?? []) if (r.specialPrice != null) money(r.specialPrice, 'Offer price')
     const old = await c.db.select('daily_specials', { where: { business_id: c.businessId, special_date: date } })
     if (old.length) await c.db.deleteMany('daily_specials', old.map((x) => x.ROWID))
     if (rows?.length) await c.db.insertMany('daily_specials', rows.map((r, i) => ({ business_id: c.businessId, branch_id: null, product_id: r.productId, special_date: date, offer_price_minor: r.specialPrice == null ? null : toMinor(r.specialPrice), tag: String(r.tag ?? '').slice(0, 40) || null, sort_order: i })))

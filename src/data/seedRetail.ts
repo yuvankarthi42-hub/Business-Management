@@ -507,6 +507,56 @@ const AUTO_PARTS: ShopSpec = {
   ],
 }
 
+const MOBILE: ShopSpec = {
+  id: 'biz_smart_mobiles', name: 'Smart Mobiles & Service', subType: 'Electronics', emoji: '📱',
+  address: '9, Usman Road, T. Nagar, Chennai 600017', phone: '+91 98765 77770', email: 'smartmobiles@gmail.com', gstin: '33SMRTM6543D1Z8',
+  invoicePrefix: 'SM-', defaultTax: 'tax_18', footer: 'Warranty as per company · Service warranty 30 days · Thank you!', seed: 8383, ean: '8908000',
+  taxInclusive: true,
+  categories: [['phone', 'New Mobiles', '📱', '8517'], ['acc', 'Accessories', '🎧', '8518'], ['charge', 'Chargers & Cables', '🔌', '8504'],
+    ['parts', 'Mobile Parts', '🧩', '8517'], ['service', 'Repair & Service', '🛠️', '9987']],
+  items: [
+    { name: 'Redmi 13C 5G (4/128 GB)', cat: 'phone', price: 10499, cost: 9350, unit: 'pc', tax: 18, emoji: '📱', barcode: true, pop: 2, low: 3, mrp: 11999 },
+    { name: 'Samsung Galaxy M15 (6/128 GB)', cat: 'phone', price: 12999, cost: 11650, unit: 'pc', tax: 18, emoji: '📱', barcode: true, pop: 2, low: 3, mrp: 14999 },
+    { name: 'Vivo T3x 5G (6/128 GB)', cat: 'phone', price: 13499, cost: 12100, unit: 'pc', tax: 18, emoji: '📱', barcode: true, pop: 1, low: 2, mrp: 15499 },
+    { name: 'Realme Narzo N61 (4/64 GB)', cat: 'phone', price: 7999, cost: 7150, unit: 'pc', tax: 18, emoji: '📱', barcode: true, pop: 1, low: 2, mrp: 8999 },
+    { name: 'Nokia 105 (Keypad)', cat: 'phone', price: 1199, cost: 980, unit: 'pc', tax: 18, emoji: '☎️', barcode: true, pop: 2, low: 4, mrp: 1299 },
+    { name: 'Tempered Glass', cat: 'acc', price: 150, cost: 35, unit: 'pc', tax: 18, emoji: '🛡️', barcode: true, pop: 10, low: 30, mrp: 299 },
+    { name: 'Back Cover (Silicone)', cat: 'acc', price: 199, cost: 60, unit: 'pc', tax: 18, emoji: '📲', barcode: true, pop: 8, low: 25, mrp: 349 },
+    { name: 'Wired Earphones', cat: 'acc', price: 299, cost: 140, unit: 'pc', tax: 18, emoji: '🎧', barcode: true, pop: 4, low: 10, mrp: 499 },
+    { name: 'Bluetooth Neckband', cat: 'acc', price: 999, cost: 620, unit: 'pc', tax: 18, emoji: '🎧', barcode: true, pop: 2, low: 5, mrp: 1499 },
+    { name: 'Power Bank 10000 mAh', cat: 'acc', price: 1099, cost: 780, unit: 'pc', tax: 18, emoji: '🔋', barcode: true, pop: 2, low: 4, mrp: 1499 },
+    { name: 'Fast Charger 25W (Type-C)', cat: 'charge', price: 699, cost: 420, unit: 'pc', tax: 18, emoji: '🔌', barcode: true, pop: 4, low: 8, mrp: 999 },
+    { name: 'Type-C Cable 1 m', cat: 'charge', price: 199, cost: 70, unit: 'pc', tax: 18, emoji: '〰️', barcode: true, pop: 6, low: 15, mrp: 299 },
+    { name: 'Display Combo (Redmi 13C)', cat: 'parts', price: 1800, cost: 1150, unit: 'pc', tax: 18, emoji: '🧩', pop: 2, low: 2 },
+    { name: 'Display Combo (Samsung M15)', cat: 'parts', price: 2600, cost: 1750, unit: 'pc', tax: 18, emoji: '🧩', pop: 1, low: 2 },
+    { name: 'Battery (Redmi / Poco)', cat: 'parts', price: 950, cost: 560, unit: 'pc', tax: 18, emoji: '🔋', pop: 2, low: 3 },
+    { name: 'Charging Port Board', cat: 'parts', price: 450, cost: 210, unit: 'pc', tax: 18, emoji: '🔌', pop: 2, low: 4 },
+    { name: 'Speaker / Ringer', cat: 'parts', price: 300, cost: 120, unit: 'pc', tax: 18, emoji: '🔊', pop: 1, low: 4 },
+    { name: 'Screen Replacement (labour)', cat: 'service', price: 500, cost: 0, unit: 'service', tax: 18, emoji: '🛠️', service: true, pop: 4 },
+    { name: 'Battery Replacement (labour)', cat: 'service', price: 300, cost: 0, unit: 'service', tax: 18, emoji: '🔋', service: true, pop: 3 },
+    { name: 'Charging Port Repair', cat: 'service', price: 400, cost: 0, unit: 'service', tax: 18, emoji: '🔧', service: true, pop: 3 },
+    { name: 'Software Update / Flashing', cat: 'service', price: 350, cost: 0, unit: 'service', tax: 18, emoji: '💾', service: true, pop: 2 },
+    { name: 'Water Damage Service', cat: 'service', price: 800, cost: 0, unit: 'service', tax: 18, emoji: '💧', service: true, pop: 1 },
+    { name: 'Data Transfer (old to new phone)', cat: 'service', price: 200, cost: 0, unit: 'service', tax: 18, emoji: '🔁', service: true, pop: 2 },
+  ],
+  users: [
+    { id: 'usr_mob_owner', name: 'Imran K', phone: '9876577771', role: 'Owner' },
+    { id: 'usr_mob_cash', name: 'Priya', phone: '9876577772', role: 'Cashier' },
+  ],
+  customers: [{ name: 'Selvam (dealer)', credit: true, notes: 'Buys accessories in bulk — 7 days credit' }, { name: 'Karthik' }, { name: 'Meena' }, { name: 'Rahul' }, { name: 'Fathima' }],
+  perDay: [8, 15], linesPerBill: [1, 3], deliveryShare: 0, creditShare: 0.08,
+  expenses: [
+    { notes: 'Distributor — mobiles', category: 'purchase', min: 40000, max: 90000, every: 7 },
+    { notes: 'Spare parts — Ritchie Street', category: 'purchase', min: 3000, max: 9000, every: 3 },
+    { notes: 'Shop electricity', category: 'electricity', min: 1800, max: 2400, every: 30 },
+  ],
+}
+
+/** Mobile shop demo: new mobiles, accessories, mobile parts and repair service (labour) on one bill. */
+export function addMobileDemo(d: DB) {
+  buildShop(d, MOBILE)
+}
+
 /** Vegetable shop and vehicle spare-parts shop demos. */
 export function addVegAutoDemos(d: DB) {
   buildShop(d, VEGETABLES)

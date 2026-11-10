@@ -17,13 +17,13 @@ test('cancelling a bill paid with a credit note gives the credit back', async ()
     const o1 = await s.call<O>('orders.checkout', draft([line(tea)]), [{ method: 'cash', amount: 30 }])
     const cn = await s.call<{ number: string; creditRemaining: number }>('returns.create', { orderId: o1.id, lines: [{ orderItemId: o1.items[0].id, qty: 1, restock: true }], reason: 'other', settle: 'credit_note' })
     assert.equal(cn.creditRemaining, 30)
-    const o2 = await s.call<O>('orders.checkout', draft([line(tea)]), [{ method: 'credit_note', amount: 30, reference: cn.number }])
+    const o2 = await s.call<O>('orders.checkout', draft([line(tea)]), [{ method: 'credit_note', amount: 30, reference: cn.number, confirmed: true }])
     const left = async () => (await s.call<{ creditRemaining: number }>('returns.creditNote', cn.number)).creditRemaining
     assert.equal(await left(), 0)
     await s.call('orders.cancel', o2.id, 'Wrong bill')
     assert.equal(await left(), 30, 'credit back on the note')
     // …and it can be used again.
-    await s.call('orders.checkout', draft([line(tea)]), [{ method: 'credit_note', amount: 30, reference: cn.number }])
+    await s.call('orders.checkout', draft([line(tea)]), [{ method: 'credit_note', amount: 30, reference: cn.number, confirmed: true }])
     assert.equal(await left(), 0)
   } finally { s.close() }
 })

@@ -51,7 +51,8 @@ async function releaseFeatures(env: Env) {
 
 async function baseEnv(): Promise<Env & { prov: LocalProvisioner | null; stop: () => void }> {
   const kv = new MemoryKv()
-  const files = new LocalFiles('/tmp/bp-test-uploads', '/uploads')
+  // TEST_PRIVATE_FILES=1: a private store for support screenshots (as with STRATUS_PRIVATE_BUCKET).
+  const files = new LocalFiles('/tmp/bp-test-uploads', '/uploads', process.env.TEST_PRIVATE_FILES ? '/tmp/bp-test-private' : null)
   if (TEST_DB === 'memory') return { dbs: new SingleDatabases(new MemoryDb()), kv, files, epochs: new KvEpochs(kv), prov: null, stop: () => {} }
   if (TEST_DB === 'hrana') {
     const fake = await startFakeTurso()
@@ -101,11 +102,12 @@ export async function startServer() {
   let branch: string | null = null
   let shop: string | null = null
   let device: string | null = null
+  let loginDevice: string | null = null
   let requestId: string | null = null
   async function call<T = unknown>(name: string, ...args: unknown[]): Promise<T> {
     const res = await fetch(`http://127.0.0.1:${port}/rpc/${name}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}), ...(branch ? { 'x-branch': branch } : {}), ...(device ? { 'x-device': device } : {}), ...(requestId ? { 'x-request-id': requestId } : {}) },
+      headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}), ...(branch ? { 'x-branch': branch } : {}), ...(device ? { 'x-device': device } : {}), ...(loginDevice ? { 'x-login-device': loginDevice } : {}), ...(requestId ? { 'x-request-id': requestId } : {}) },
       body: JSON.stringify({ args }),
     })
     const body = await res.json() as { data?: T; error?: { message: string; code: string } }
@@ -122,6 +124,8 @@ export async function startServer() {
     setToken: (t: string | null) => { token = t },
     /** Send this request id (a retry of the same request uses the same one). */
     setRequestId: (id: string | null) => { requestId = id }, setBranch: (b: string | null) => { branch = b }, setDevice: (d: string | null) => { device = d },
+    /** The device token sent with sign-ins (x-login-device). */
+    setLoginDevice: (d: string | null) => { loginDevice = d },
     /** Which shop `db` reads for shop tables. */
     useShop: (id: string | null) => { shop = id },
   }

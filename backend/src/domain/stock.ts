@@ -14,6 +14,45 @@ export const stockProduct = (p: Row): StockProduct => ({ id: p.ROWID, trackStock
 type Reason = StockMovementType | 'expired' | 'transfer_in' | 'transfer_out'
 const refTypes = { order: E.StockRef.order, purchase: E.StockRef.purchase, return: E.StockRef.return, transfer: E.StockRef.transfer } as const
 
+/**
+ * What a bill can still give back to stock, per product (thousandths): what its sale took out, less what its cancel
+ * or returns already gave back. A bill that took nothing (Inventory was off, or the item wasn't tracked when it was
+ * sold) gives nothing back — cancelling or returning it never adds stock that was never taken.
+ */
+export async function restorableStock(c: Ctx, orderId: string): Promise<Map<string, number>> {
+  const biz = c.businessId
+  let rows: Record<string, unknown>[]
+  if (c.db.sqlReads) {
+    // One read: the bill's own movements (sale, cancel) and those of its credit notes, added up per product.
+    ;[rows] = await c.db.sqlReads([{
+      sql: `SELECT "product_id", SUM("qty_milli") AS q FROM "stock_movements" WHERE "business_id" = ? AND (("ref_type" = ? AND "ref_id" = ?)
+        OR ("ref_type" = ? AND "ref_id" IN (SELECT "id" FROM "sale_returns" WHERE "business_id" = ? AND "order_id" = ?))) GROUP BY "product_id"`,
+      args: [Number(biz), E.StockRef.order, Number(orderId), E.StockRef.return, Number(biz), Number(orderId)],
+    }])
+  } else {
+    const [own, rets] = await Promise.all([
+      c.db.select('stock_movements', { where: { business_id: biz, ref_type: E.StockRef.order, ref_id: orderId } }),
+      c.db.select('sale_returns', { where: { business_id: biz, order_id: orderId } }),
+    ])
+    const back = rets.length ? await c.db.select('stock_movements', { where: { business_id: biz, ref_type: E.StockRef.return, ref_id: { in: rets.map((r) => r.ROWID) } } }) : []
+    const sum = new Map<string, number>()
+    for (const m of [...own, ...back]) sum.set(str(m.product_id), (sum.get(str(m.product_id)) ?? 0) + Number(m.qty_milli ?? 0))
+    rows = [...sum.entries()].map(([product_id, q]) => ({ product_id, q }))
+  }
+  // Net is negative while stock is still out: that much can come back.
+  const left = new Map<string, number>()
+  for (const r of rows) { const net = Number(r.q ?? 0); if (net < 0) left.set(String(r.product_id), -net) }
+  return left
+}
+/** Take up to `qty` of a product from what a bill can give back (several lines of one item share it) → the quantity to give back. */
+export function takeRestorable(left: Map<string, number>, productId: string, qty: number): number {
+  const have = left.get(productId) ?? 0
+  const give = Math.min(toMilli(qty), have)
+  if (give <= 0) return 0
+  left.set(productId, have - give)
+  return fromMilli(give)
+}
+
 /** Current stock of one product in one branch (0 when never stocked). */
 export async function stockOf(c: Ctx, productId: string, branchId: string) {
   const r = await c.db.first('branch_stock', { uniq_key: `${branchId}:${productId}` })

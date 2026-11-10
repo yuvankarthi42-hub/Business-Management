@@ -8,7 +8,7 @@ import '../src/modules/admin/renewals'
 
 type Run = { busy: boolean; sent: number; shops: number; idle: boolean }
 type State = { lease: { id: string; until: number } | null; round: { startedOn: string; after: string | null; finishedOn: string | null }; batch: { shops: string[]; done: string[]; tries: Record<string, number> } | null; failed: { id: string }[] }
-const KEY = 'test-cron-key-123'
+const KEY = 'test-cron-key-123-0123456789abcdef'
 const line = (p: { id: string }, qty = 1) => ({ id: `tmp_${Math.random()}`, productId: p.id, name: 'x', variantId: null, variantName: null, addOns: [], qty, unit: 'pc', unitPrice: 1, taxRate: 0, notes: '', kotQty: 0 })
 const draft = (items: unknown[], extra = {}) => ({ type: 'counter', tableId: null, customerId: null, items, discount: 0, notes: '', source: 'pos', ...extra })
 const ENV = ['CRON_KEY', 'DAILY_SHOPS_PER_RUN', 'DAILY_REQUEST_BUDGET', 'DAILY_CPU_BUDGET_MS', 'DAILY_REMINDER_HOUR']

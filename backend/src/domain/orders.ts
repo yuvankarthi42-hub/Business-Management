@@ -2,7 +2,8 @@
 // kitchen_tickets, kitchen_ticket_items, dining_tables). Same rules as the app's mock API.
 import { customerStateOf, isInterState, shopStateOf, splitLineTax } from '@/core/gst'
 import { loyaltyOf, pointsToEarn, pointsValue, redeemError } from '@/core/loyalty'
-import { computeTotals, r2, taxBreakup } from '@/core/pricing'
+import { MAX_BILL_ITEMS } from '@/core/limits'
+import { computeTotals, lineTotal, r2, taxBreakup } from '@/core/pricing'
 import { makeItem, priceOverrideError, withCounterPrice } from '@/core/orderItem'
 import { applySpecials } from '@/core/specials'
 import type { Customer, DiningTable, KitchenTicket, Order, OrderItem, OrderType, Payment, PaymentMethod } from '@/core/types'
@@ -16,7 +17,7 @@ import { DEFAULT_SEQ } from './business'
 import { loadProducts, wholesaleList } from './catalog'
 import { movePoints } from './points'
 import { moveStockMany, stockProduct } from './stock'
-import { audit, bizDay, code, moduleOn, codeOrNull, E, fromMilli, fromMinor, isId, nameOf, nextNumber, str, strOrNull, toBp, toMilli, toMinor } from './util'
+import { audit, bizDay, code, moduleOn, codeOrNull, E, fromMilli, fromMinor, isId, nameOf, nextNumber, str, strOrNull, toBp, toMilli, toMinor, money, quantity } from './util'
 
 export interface OrderDraft {
   id?: string
@@ -33,7 +34,11 @@ export interface OrderDraft {
   /** Loyalty points to use on this bill (checkout only). Their value is given as a discount before GST. */
   pointsToRedeem?: number
 }
-export interface PaymentInput { method: PaymentMethod; amount: number; reference?: string }
+export interface PaymentInput {
+  method: PaymentMethod; amount: number; reference?: string
+  /** Credit note with no customer: the staff checked the slip (needed to use it). */
+  confirmed?: boolean
+}
 
 export const uuid = () => randomBytes(16).toString('hex')
 /** The device's request id makes a re-sent bill idempotent; without one a fresh id is used. */
@@ -91,9 +96,17 @@ export async function loadOrders(c: Ctx, where: Where, opts: { orderBy?: [string
   return withItems(c, rows)
 }
 export async function withItems(c: Ctx, rows: Row[]): Promise<Order[]> {
-  if (!rows.length) return []
+  return (await withItemRows(c, rows)).orders
+}
+/** Orders with their lines, and the line / add-on rows they were made from (for code that then edits them). */
+async function withItemRows(c: Ctx, rows: Row[]): Promise<{ orders: Order[]; items: Row[]; addons: Row[] }> {
+  if (!rows.length) return { orders: [], items: [], addons: [] }
   const items = await selectIn(c, 'order_items', 'order_id', rows.map((r) => r.ROWID))
   const addons = items.length ? await selectIn(c, 'order_item_addons', 'order_item_id', items.map((i) => i.ROWID)) : []
+  return { orders: ordersFrom(rows, items, addons), items, addons }
+}
+/** Order rows + their line and add-on rows → the app's orders (lines in their saved order, each with its own add-ons). */
+export function ordersFrom(rows: Row[], items: Row[], addons: Row[]): Order[] {
   const byOrder = new Map<string, Row[]>()
   for (const i of items.sort((a, b) => Number(a.sort_order) - Number(b.sort_order))) { const k = str(i.order_id); const l = byOrder.get(k); if (l) l.push(i); else byOrder.set(k, [i]) }
   // Each item gets only its own add-ons (itemFrom filters the list it is given; a short list keeps that cheap).
@@ -102,11 +115,17 @@ export async function withItems(c: Ctx, rows: Row[]): Promise<Order[]> {
   return rows.map((r) => orderFrom(r, (byOrder.get(r.ROWID) ?? []).map((i) => itemFrom(i, addonsByItem.get(i.ROWID) ?? []))))
 }
 export async function loadOrder(c: Ctx, id: string, opts: { inScope?: boolean; businessId?: string } = {}) {
+  const { row, order } = await loadOrderRows(c, id, opts)
+  return { row, order }
+}
+/** loadOrder, with the line and add-on rows it read (the same reads). */
+export async function loadOrderRows(c: Ctx, id: string, opts: { inScope?: boolean; businessId?: string } = {}) {
   if (!isId(id)) throw new ApiError('Order not found', 404)
   const rows = await c.db.select('orders', { where: { ROWID: id, business_id: opts.businessId ?? c.businessId } })
   const r = rows[0]
   if (!r || (opts.inScope !== false && c.session && !c.inScope(str(r.branch_id)))) throw new ApiError('Order not found', 404)
-  return { row: r, order: (await withItems(c, [r]))[0] }
+  const got = await withItemRows(c, [r])
+  return { row: r, order: got.orders[0], itemRows: got.items, addonRows: got.addons }
 }
 
 export function paymentFrom(r: Row): Payment {
@@ -124,6 +143,7 @@ export async function kotsFrom(c: Ctx, rows: Row[]): Promise<KitchenTicket[]> {
     orderType: nameOf(E.OrderType, k.order_type) as OrderType, tableLabel: strOrNull(k.table_label),
     items: items.filter((i) => i.ticket_id === k.ROWID).map((i) => ({ name: str(i.name), qty: fromMilli(i.qty_milli), notes: str(i.note), isVeg: i.is_veg !== false })),
     status: nameOf(E.KotStatus, k.status) as KitchenTicket['status'], statusAt: k.MODIFIEDTIME,
+    ...(str(k.station) === CANCEL_STATION ? { cancel: true } : {}),
     createdAt: k.CREATEDTIME, createdBy: str(k.created_by), updatedAt: k.MODIFIEDTIME, updatedBy: str(k.created_by),
   }))
 }
@@ -147,9 +167,13 @@ export function customerFrom(r: Row, wholesaleListId: string | null): Customer {
 export async function priceItems(c: Ctx, items: OrderItem[], previous: Map<string, Row> = new Map(), businessId = c.businessId, branchIds?: string[], trusted = false) {
   const ids = [...new Set(items.map((i) => i.productId))]
   if (ids.some((id) => !isId(id))) throw new ApiError('An item on this bill was not found')
-  const products = await loadProducts(c, { ids, withExpiry: false, withStock: false, branches: branchIds })
+  // The items and today's specials are read at the same time (neither needs the other).
   // Specials off: no special prices on bills (and no read of today's specials).
-  const specials = !moduleOn(c, 'specials') ? [] : (await c.db.select('daily_specials', { where: { business_id: businessId, special_date: bizDay(c) } })).map((r) => ({ id: r.ROWID, businessId, date: str(r.special_date), productId: str(r.product_id), specialPrice: r.offer_price_minor == null ? null : fromMinor(r.offer_price_minor), tag: str(r.tag), sort: Number(r.sort_order ?? 0) }))
+  const [products, specialRows] = await Promise.all([
+    loadProducts(c, { ids, withExpiry: false, withStock: false, branches: branchIds }),
+    !moduleOn(c, 'specials') ? Promise.resolve([] as Row[]) : c.db.select('daily_specials', { where: { business_id: businessId, special_date: bizDay(c) } }),
+  ])
+  const specials = specialRows.map((r) => ({ id: r.ROWID, businessId, date: str(r.special_date), productId: str(r.product_id), specialPrice: r.offer_price_minor == null ? null : fromMinor(r.offer_price_minor), tag: str(r.tag), sort: Number(r.sort_order ?? 0) }))
   const priced = applySpecials(products, specials).products
   const billing = c.business.billing
   // HSN: the item's own code, else its category's (snapshot on the bill line).
@@ -157,10 +181,14 @@ export async function priceItems(c: Ctx, items: OrderItem[], previous: Map<strin
   const catHsn = new Map((catIds.length ? await selectIn(c, 'categories', 'ROWID', catIds, { business_id: businessId }) : []).map((r) => [r.ROWID, str(r.hsn_code)]))
   return items.map((i) => {
     const p = priced.find((x) => x.id === i.productId)
-    const prev = isId(i.id) ? previous.get(i.id) : undefined
+    if (i.addOns !== undefined && i.addOns !== null && !Array.isArray(i.addOns)) throw new ApiError('Check the add-ons on this bill')
+    // The saved line this one continues — only while it is still the same item and size. A line whose item or size
+    // was swapped is a new line (no old price exemption, nothing counted as already in the kitchen).
+    const was = isId(i.id) ? previous.get(i.id) : undefined
+    const prev = was && str(was.product_id) === String(i.productId) && (str(was.variant_id) || null) === (i.variantId ? String(i.variantId) : null) ? was : undefined
     if (!p) throw new ApiError('An item on this bill is no longer available')
-    const qty = Number(i.qty)
-    if (!(qty > 0) || qty > 100_000) throw new ApiError(`Check the quantity of ${p.name}`)
+    // More than 0; whole numbers unless the item is sold in parts (kg, g, ltr, ml, mtr, ft, hr).
+    const qty = quantity(i.qty, p.unit, p.name)
     const variant = i.variantId ? p.variants.find((v) => v.id === i.variantId) ?? null : null
     if (i.variantId && !variant) throw new ApiError(`${p.name}: that size is no longer available`)
     const addOns = (i.addOns ?? []).map((a) => p.addOns.find((x) => x.id === a.id)).filter(Boolean) as typeof p.addOns
@@ -177,7 +205,7 @@ export async function priceItems(c: Ctx, items: OrderItem[], previous: Map<strin
     }
     // Keep the line id and what the kitchen already has.
     const hsn = p.hsn || (p.categoryId ? catHsn.get(p.categoryId) : '') || ''
-    return { ...item, ...(hsn ? { hsn } : {}), id: prev ? prev.ROWID : i.id, kotQty: prev ? fromMilli(prev.kot_qty_milli) : 0, cost: p.costPrice, sendToKitchen: p.sendToKitchen, isVeg: p.isVeg }
+    return { ...item, ...(hsn ? { hsn } : {}), id: prev ? prev.ROWID : was ? `swap_${i.id}` : i.id, kotQty: prev ? fromMilli(prev.kot_qty_milli) : 0, cost: p.costPrice, sendToKitchen: p.sendToKitchen, isVeg: p.isVeg }
   })
 }
 type PricedItem = Awaited<ReturnType<typeof priceItems>>[number]
@@ -189,14 +217,18 @@ const itemColumns = (c: Ctx, orderId: string, it: PricedItem, sort: number, list
   note: it.notes.slice(0, 150) || null, kot_qty_milli: toMilli(it.kotQty), sort_order: sort,
 })
 
-async function writeItems(c: Ctx, orderId: string, items: PricedItem[], existing: Row[], listId: string | null) {
+/**
+ * `existingAddons`: the saved lines' add-on rows when already read with them (else each line's are read).
+ * Returns the new lines' rows and their add-on rows, as saved.
+ */
+async function writeItems(c: Ctx, orderId: string, items: PricedItem[], existing: Row[], listId: string | null, existingAddons?: Row[]): Promise<{ itemRows: Row[]; addonRows: Row[] }> {
   const keep = new Set<string>()
   for (const [k, it] of items.entries()) {
     const ex = existing.find((r) => r.ROWID === it.id)
     if (ex) {
       keep.add(ex.ROWID)
       await c.db.update('order_items', ex.ROWID, itemColumns(c, orderId, it, k, listId))
-      const oldAddons = await c.db.select('order_item_addons', { where: { order_item_id: ex.ROWID } })
+      const oldAddons = existingAddons ? existingAddons.filter((a) => str(a.order_item_id) === ex.ROWID) : await c.db.select('order_item_addons', { where: { order_item_id: ex.ROWID } })
       const same = oldAddons.length === it.addOns.length && it.addOns.every((a) => oldAddons.some((o) => o.addon_id === a.id))
       if (!same) {
         if (oldAddons.length) await c.db.deleteMany('order_item_addons', oldAddons.map((a) => a.ROWID))
@@ -206,20 +238,33 @@ async function writeItems(c: Ctx, orderId: string, items: PricedItem[], existing
   }
   // New lines in one insert, then all their add-ons in one more.
   const fresh = items.map((it, k) => ({ it, k })).filter(({ it }) => !existing.some((r) => r.ROWID === it.id))
+  let itemRows: Row[] = [], addonRows: Row[] = []
   if (fresh.length) {
     const rows = await c.db.insertMany('order_items', fresh.map(({ it, k }) => itemColumns(c, orderId, { ...it, kotQty: 0 }, k, listId)))
     fresh.forEach(({ it }, n) => { it.id = rows[n].ROWID; keep.add(rows[n].ROWID) })
+    itemRows = rows
     const addons = fresh.flatMap(({ it }) => it.addOns.map((a) => ({ business_id: c.businessId, order_item_id: it.id, addon_id: a.id, name: a.name.slice(0, 60), price_minor: toMinor(a.price) })))
-    if (addons.length) await c.db.insertMany('order_item_addons', addons)
+    if (addons.length) addonRows = await c.db.insertMany('order_item_addons', addons)
   }
   const gone = existing.filter((r) => !keep.has(r.ROWID)).map((r) => r.ROWID)
   if (gone.length) await c.db.deleteMany('order_items', gone) // add-ons go with them (On Delete = Cascade)
+  return { itemRows, addonRows }
 }
 
 const totalsColumns = (t: { subtotal: number; discount: number; tax: number; roundOff: number; total: number }, paid: number) => ({
   subtotal_minor: toMinor(t.subtotal), discount_minor: toMinor(t.discount), tax_minor: toMinor(t.tax), round_off_minor: toMinor(t.roundOff),
   total_minor: toMinor(t.total), balance_minor: toMinor(r2(t.total - paid)),
 })
+
+/**
+ * A discount can't be more than the bill (a typo like ₹1000 for ₹100 would silently make it ₹0). People billing are
+ * told; the shop's own steps (merging tables, QR accept) keep the old rule — the totals cap it at the bill.
+ */
+function discountWithin(c: Ctx, discount: number, items: OrderItem[], opts: { trustedDiscount?: boolean }) {
+  if (!c.session || opts.trustedDiscount || !(discount > 0)) return
+  const subtotal = r2(items.reduce((a, i) => a + lineTotal(i), 0))
+  if (discount > subtotal + 0.001) throw new ApiError(`Discount can’t be more than the bill (${c.business.currencySymbol}${subtotal.toFixed(2)})`)
+}
 
 /** Points the customer wants to use on this bill: checked against the shop's rules and their balance. */
 function redeemPlan(c: Ctx, draft: OrderDraft, customer: Row | null, items: OrderItem[]) {
@@ -233,11 +278,18 @@ function redeemPlan(c: Ctx, draft: OrderDraft, customer: Row | null, items: Orde
   return { points, value: pointsValue(s, points) }
 }
 
+/**
+ * What writeOrder tells its caller: `existing` = the same request was already saved (that order is returned);
+ * `written` = a new order as just saved (one database per shop: the rows the inserts returned), for settle.
+ */
+export interface WriteInfo { existing?: boolean; written?: { row: Row; order: Order } }
+
 /** Create or update a running order (the app's writeOrder). Returns the order row id. */
-export async function writeOrder(c: Ctx, draft: OrderDraft, opts: { qr?: { guest: { name: string; phone: string; address: string }; branchId: string; auto: boolean }; info?: { existing?: boolean }; trustedDiscount?: boolean } = {}): Promise<string> {
+/** `customerRow`: the bill's customer as the caller just read or saved it (then it isn't read again). */
+export async function writeOrder(c: Ctx, draft: OrderDraft, opts: { qr?: { guest: { name: string; phone: string; address: string }; branchId: string; auto: boolean }; info?: WriteInfo; trustedDiscount?: boolean; customerRow?: Row | null } = {}): Promise<string> {
   if (!Array.isArray(draft.items)) throw new ApiError('Add at least one item')
-  const discount = r2(Number(draft.discount ?? 0))
-  if (!(discount >= 0)) throw new ApiError('Enter a valid discount')
+  if (draft.items.length > MAX_BILL_ITEMS) throw new ApiError(`A bill can have at most ${MAX_BILL_ITEMS} items`)
+  const discount = money(draft.discount ?? 0, 'Discount')
   // A discount needs "Give discounts" — the screen hides the box, but the server decides. Saving a running order
   // again with the discount it already has is fine (merging tables passes the existing discounts on).
   if (discount > 0 && c.session && !opts.trustedDiscount && !c.can('billing.discount')) {
@@ -253,27 +305,65 @@ export async function writeOrder(c: Ctx, draft: OrderDraft, opts: { qr?: { guest
   }
   let customer: Row | null = null
   if (draft.customerId) {
-    customer = await c.db.first('customers', { ROWID: isId(draft.customerId) ? draft.customerId : '0', business_id: c.businessId })
+    const given = opts.customerRow
+    customer = given && given.ROWID === String(draft.customerId) && str(given.business_id) === c.businessId ? given
+      : await c.db.first('customers', { ROWID: isId(draft.customerId) ? draft.customerId : '0', business_id: c.businessId })
     if (!customer) throw new ApiError('Customer not found')
   }
   const list = draft.items.some((i) => i.priceTier === 'wholesale') ? await wholesaleList(c) : null
+  // Checks below apply to people billing (not the shop's own steps like merging or QR acceptance).
+  const checked = !!c.session && !opts.trustedDiscount
+  const savedOrder = draft.id && isId(draft.id) ? async () => c.db.first('orders', { ROWID: draft.id!, business_id: c.businessId }) : async () => null
+  // Wholesale (contractor) prices: needs "Change item price", or a customer on the wholesale list
+  // (or the running order already had them — saving it again is fine).
+  if (list && checked && !c.can('billing.price')) {
+    const forCustomer = !!customer && str(customer.price_list_id) === list.ROWID
+    const already = str((await savedOrder())?.price_list_id) === list.ROWID
+    if (!forCustomer && !already) throw new ApiError('Wholesale prices need the “Change item price” permission, or a wholesale customer on the bill', 403, 'FORBIDDEN')
+  }
   let salesperson: { salesperson_id: string | null } | Record<string, never> = {}
   if (draft.salespersonId !== undefined) {
     const id = draft.salespersonId ? String(draft.salespersonId) : null
     if (id) {
       const u = await c.db.first('users', { ROWID: isId(id) ? id : '0', business_id: c.businessId })
       if (!u || u.is_active === false) throw new ApiError('Choose a salesperson from your staff')
+      // Yourself, or a counter salesperson (staff without an app login): anyone billing. Another app user (their
+      // commission): needs "Change item price" or "Business settings" — unless the order already had them.
+      if (checked && id !== c.userId && u.can_login !== false && !c.can('billing.price') && !c.can('settings.manage')) {
+        if (str((await savedOrder())?.salesperson_id) !== id) throw new ApiError('Choosing another staff member as the salesperson needs the “Change item price” or “Business settings” permission', 403, 'FORBIDDEN')
+      }
     }
     salesperson = { salesperson_id: id }
   }
   if (draft.id) {
-    const { row } = await loadOrder(c, draft.id)
+    // The order's lines and add-ons come with it (one read each, not again per line).
+    const { row, itemRows: existing, addonRows } = await loadOrderRows(c, draft.id)
     if (Number(row.status) !== E.OrderStatus.open) throw new ApiError('Only running orders can be edited')
-    const existing = await c.db.select('order_items', { where: { order_id: row.ROWID } })
     const items = await priceItems(c, draft.items, new Map(existing.map((r) => [r.ROWID, r])), c.businessId, undefined, !!opts.trustedDiscount)
-    const redeem = redeemPlan(c, draft, customer, items)
-    const totals = computeTotals(items, r2(draft.discount + redeem.value), c.business.billing)
-    await writeItems(c, row.ROWID, items, existing, list?.ROWID ?? null)
+    // Taking away what the kitchen already has (a line removed, or its quantity cut below what was sent) is a
+    // cancellation: it needs "Cancel / void orders". Adding items or changing unsent ones needs nothing more.
+    if (c.session && !opts.trustedDiscount && !c.can('orders.cancel')) {
+      const cut = existing.some((r) => {
+        const sent = fromMilli(r.kot_qty_milli)
+        if (!(sent > 0)) return false
+        const now = items.find((it) => it.id === r.ROWID)
+        return !now || now.qty < sent - 1e-9
+      })
+      if (cut) throw new ApiError('Removing items already sent to the kitchen needs the “Cancel / void orders” permission', 403, 'FORBIDDEN')
+    }
+    discountWithin(c, discount, items, opts)
+    const redeem = redeemPlan(c, { ...draft, discount }, customer, items)
+    const totals = computeTotals(items, r2(discount + redeem.value), c.business.billing)
+    // Lines the kitchen already has that were cut or removed: the kitchen gets a cancel ticket for exactly that
+    // (never what was already served), saved before the lines' "sent" counts change — all in this transaction.
+    if (c.session && !opts.trustedDiscount && c.business.modules.kitchen) {
+      const cuts = await kitchenCuts(c, existing, items)
+      if (cuts.length) {
+        await writeCancelTicket(c, row, cuts, addonRows)
+        for (const cut of cuts) { const it = items.find((x) => x.id === cut.line.ROWID); if (it) it.kotQty = fromMilli(cut.keepMilli) }
+      }
+    }
+    await writeItems(c, row.ROWID, items, existing, list?.ROWID ?? null, addonRows)
     await c.db.update('orders', row.ROWID, {
       points_redeemed: redeem.points, points_value_minor: toMinor(redeem.value),
       order_type: code(E.OrderType, draft.type), table_id: draft.tableId || null, customer_id: draft.customerId || null, note: String(draft.notes ?? '').slice(0, 255) || null,
@@ -288,8 +378,9 @@ export async function writeOrder(c: Ctx, draft: OrderDraft, opts: { qr?: { guest
   const again = await c.db.first('orders', { client_uuid: uuid })
   if (again) { if (str(again.business_id) !== c.businessId) throw new ApiError('Duplicate request', 409); if (opts.info) opts.info.existing = true; return again.ROWID }
   const items = await priceItems(c, draft.items, new Map(), c.businessId, branchId ? [branchId] : undefined, !!opts.trustedDiscount)
-  const redeem = redeemPlan(c, draft, customer, items)
-  const totals = computeTotals(items, r2(draft.discount + redeem.value), c.business.billing)
+  discountWithin(c, discount, items, opts)
+  const redeem = redeemPlan(c, { ...draft, discount }, customer, items)
+  const totals = computeTotals(items, r2(discount + redeem.value), c.business.billing)
   const num = await nextNumber(c.db, c.businessId, null, 'order', { prefix: c.business.billing.orderPrefix ?? DEFAULT_SEQ.order.prefix, start: DEFAULT_SEQ.order.start })
   const g = opts.qr?.guest
   let row: Row
@@ -303,13 +394,75 @@ export async function writeOrder(c: Ctx, draft: OrderDraft, opts: { qr?: { guest
       created_by: c.actorId, updated_by: c.actorId, ...salesperson, points_redeemed: redeem.points, points_value_minor: toMinor(redeem.value),
     })
   } catch (e) {
-    if (e instanceof DuplicateError) { const r = await c.db.first('orders', { client_uuid: uuid }); if (r) { if (opts.info) opts.info.existing = true; return r.ROWID } }
+    if (e instanceof DuplicateError) { const r = await c.db.first('orders', { business_id: c.businessId, client_uuid: uuid }); if (r) { if (opts.info) opts.info.existing = true; return r.ROWID } }
     throw e
   }
-  await writeItems(c, row.ROWID, items, [], list?.ROWID ?? null)
+  const saved = await writeItems(c, row.ROWID, items, [], list?.ROWID ?? null)
   if (c.session) await audit(c, 'order', row.ROWID, 'create', num.text, str(row.branch_id))
+  // Every insert returned its full row (one database per shop): the order as a read would give it.
+  if (opts.info && c.dbs.perShop) opts.info.written = { row, order: ordersFrom([row], saved.itemRows, saved.addonRows)[0] }
   return row.ROWID
 }
+
+/** A cut a cancel ticket tells the kitchen about: the saved line, how much to cancel, what the kitchen keeps. */
+interface KitchenCut { line: Row; cancelMilli: number; keepMilli: number; isVeg: boolean }
+
+/**
+ * How much of each cut / removed line to cancel in the kitchen, from its tickets (the record of what the kitchen
+ * got): sent − already cancelled, never below what was already served (a served ticket) or the new quantity.
+ * So a repeated edit, or the same request sent twice, cancels nothing twice.
+ */
+async function kitchenCuts(c: Ctx, existing: Row[], items: PricedItem[]): Promise<KitchenCut[]> {
+  const cut = existing.filter((r) => {
+    const sent = Number(r.kot_qty_milli ?? 0)
+    if (!(sent > 0)) return false
+    const now = items.find((it) => it.id === r.ROWID)
+    return !now || toMilli(now.qty) < sent
+  })
+  if (!cut.length) return []
+  const kItems = await selectIn(c, 'kitchen_ticket_items', 'order_item_id', cut.map((r) => r.ROWID))
+  const tickets = kItems.length ? await selectIn(c, 'kitchen_tickets', 'ROWID', [...new Set(kItems.map((k) => str(k.ticket_id)))], { business_id: c.businessId }) : []
+  const status = new Map(tickets.map((t) => [t.ROWID, Number(t.status)]))
+  const out: KitchenCut[] = []
+  for (const line of cut) {
+    let sent = 0, cancelled = 0, served = 0, isVeg = true
+    for (const k of kItems) {
+      if (str(k.order_item_id) !== line.ROWID) continue
+      const st = status.get(str(k.ticket_id))
+      if (st === undefined || st === E.KotStatus.cancelled) continue // a ticket of a cancelled order (or another shop's)
+      const q = Number(k.qty_milli ?? 0)
+      if (q > 0) { sent += q; if (st === E.KotStatus.completed) served += q; isVeg = k.is_veg !== false } else cancelled += -q
+    }
+    const now = items.find((it) => it.id === line.ROWID)
+    const has = sent - cancelled // what the kitchen is still making / has made for this line
+    const keep = Math.max(now ? toMilli(now.qty) : 0, served)
+    const cancelMilli = has - keep
+    if (cancelMilli > 0) out.push({ line, cancelMilli, keepMilli: keep, isVeg })
+  }
+  return out
+}
+
+/** One cancel ticket for these cuts (station 'cancel', the quantities negative), on the kitchen screen like any ticket. */
+async function writeCancelTicket(c: Ctx, order: Row, cuts: KitchenCut[], addonRows: Row[]) {
+  const table = order.table_id ? await c.db.get('dining_tables', str(order.table_id)) : null
+  const num = await nextNumber(c.db, c.businessId, null, 'kot', { prefix: 'KOT-', start: 1 })
+  const kot = await c.db.insert('kitchen_tickets', {
+    business_id: c.businessId, branch_id: str(order.branch_id), order_id: order.ROWID, client_uuid: clientUuid(c, `:x${num.number}`),
+    number: `KOT-${String(num.number).padStart(4, '0')}`, order_number: str(order.order_number).slice(0, 30), order_type: Number(order.order_type),
+    station: CANCEL_STATION, status: E.KotStatus.new, table_label: table ? str(table.label) : null, created_by: c.actorId,
+  })
+  // The line as the kitchen knows it: name (size) + add-ons, as on its tickets.
+  await c.db.insertMany('kitchen_ticket_items', cuts.map(({ line, cancelMilli, isVeg }) => {
+    const adds = addonRows.filter((a) => str(a.order_item_id) === line.ROWID).map((a) => str(a.name))
+    return {
+      business_id: c.businessId, ticket_id: kot.ROWID, order_item_id: line.ROWID,
+      name: (str(line.product_name) + (line.variant_name ? ` (${str(line.variant_name)})` : '') + (adds.length ? ` + ${adds.join(', ')}` : '')).slice(0, 150),
+      qty_milli: -cancelMilli, is_veg: isVeg, note: str(line.note).slice(0, 150) || null,
+    }
+  }))
+}
+/** Kitchen tickets that cancel items (K-2) are marked by this station. */
+export const CANCEL_STATION = 'cancel'
 
 /** Sends lines the kitchen hasn't seen (qty − already sent) as a new KOT. */
 export async function kitchenDelta(c: Ctx, orderId: string, label?: string): Promise<KitchenTicket | null> {
@@ -334,6 +487,16 @@ export async function kitchenDelta(c: Ctx, orderId: string, label?: string): Pro
 }
 
 /** Use (part of) a credit note as payment. */
+const cnKey = (c: Ctx, number: unknown) => `${c.businessId}:${String(number ?? '').trim().toUpperCase().replace(/[^A-Z0-9-]/g, '')}`
+/** Who may use this credit note on this bill (server rule — the screen only helps). */
+async function checkCreditNoteOwner(c: Ctx, p: PaymentInput, billCustomer: string | null) {
+  const cn = await c.db.first('sale_returns', { number_key: cnKey(c, p.reference) })
+  if (!cn) throw new ApiError(`Credit note ${String(p.reference ?? '').trim()} not found`.trim())
+  const owner = cn.customer_id ? str(cn.customer_id) : null
+  if (owner && owner !== billCustomer) throw new ApiError(`Credit note ${str(cn.number)} belongs to another customer — select that customer on the bill`, 403, 'FORBIDDEN')
+  if (!owner && p.confirmed !== true) throw new ApiError(`Credit note ${str(cn.number)} has no customer — check the slip and confirm`, 409, 'CONFIRM_CREDIT_NOTE')
+}
+
 async function redeemCreditNote(c: Ctx, number: string, amount: number) {
   const no = String(number ?? '').trim().toUpperCase().replace(/[^A-Z0-9-]/g, '')
   for (let attempt = 0; attempt < 6; attempt++) {
@@ -347,10 +510,17 @@ async function redeemCreditNote(c: Ctx, number: string, amount: number) {
   throw new ApiError('Busy — please try again', 409, 'CONFLICT')
 }
 
-/** Payment, bill number, stock out — the app's settle(). */
-export async function settle(c: Ctx, orderId: string, pays: PaymentInput[]) {
-  const { row, order } = await loadOrder(c, orderId, { inScope: false })
+/**
+ * Payment, bill number, stock out — the app's settle(). `loaded` = the order as the caller just read or wrote it in
+ * this same transaction (nothing changed since), so it isn't read again. Returns the finished bill when the database
+ * hands back the saved row (one database per shop: every write returns the full row, as a read would) — else null
+ * (the caller reads it).
+ */
+export async function settle(c: Ctx, orderId: string, pays: PaymentInput[], loaded?: { row: Row; order: Order }): Promise<Order | null> {
+  const { row, order } = loaded && loaded.row.ROWID === orderId ? loaded : await loadOrder(c, orderId, { inScope: false })
   if (Number(row.status) !== E.OrderStatus.open) throw new ApiError('Order is not running')
+  if (!Array.isArray(pays) || pays.length > 10) throw new ApiError('Check the payment')
+  for (const p of pays) money(p?.amount, 'Payment')
   const real = (pays ?? []).filter((p) => p.method !== 'credit' && Number(p.amount) > 0)
   for (const p of real) if (!['cash', 'upi', 'card', 'bank', 'credit_note'].includes(p.method)) throw new ApiError('Unknown payment method')
   const paidNow = r2(real.reduce((a, p) => a + Number(p.amount), 0))
@@ -358,6 +528,8 @@ export async function settle(c: Ctx, orderId: string, pays: PaymentInput[]) {
   const balance = r2(order.total - order.paid - paidNow)
   if (balance > 0 && !order.customerId) throw new ApiError('Select a customer to keep the balance as credit')
   if (!order.items.length) throw new ApiError('Add at least one item')
+  // A credit note pays only its own customer's bill; one with no customer needs the staff to confirm it (the slip).
+  for (const p of real.filter((x) => x.method === 'credit_note')) await checkCreditNoteOwner(c, p, order.customerId)
 
   // Bill number: the branch's own series when it has one, otherwise the business series.
   const br = c.session!.allBranches.find((b) => b.id === str(row.branch_id))
@@ -398,7 +570,8 @@ export async function settle(c: Ctx, orderId: string, pays: PaymentInput[]) {
   const pos = cu ? customerStateOf({ gstin: strOrNull(cu.gstin), stateCode: strOrNull(cu.state_code) }) : null
   const igst = billing.taxEnabled && order.tax > 0 && isInterState(shopStateOf(c.business), pos)
   const split = splitLineTax(order.items, order.discount, billing, order.tax)
-  await c.db.updateMany('order_items', order.items.map((i, k) => ({ ROWID: i.id, discount_minor: toMinor(split[k].discount), taxable_minor: toMinor(split[k].taxable), tax_minor: toMinor(split[k].tax) })))
+  // Saved below together with the bill's own last update (one round trip where the database allows it).
+  const linePatch = order.items.map((i, k) => ({ ROWID: i.id, discount_minor: toMinor(split[k].discount), taxable_minor: toMinor(split[k].taxable), tax_minor: toMinor(split[k].tax) }))
   const lines = taxBreakup(order.items, order.discount, billing, order.tax).map((l) => ({ ...l, igst }))
   // Loyalty: points for this bill (whole points on the amount after every discount).
   const loyalty = loyaltyOf(c.business)
@@ -408,16 +581,27 @@ export async function settle(c: Ctx, orderId: string, pays: PaymentInput[]) {
     earned = r.moved
     if (r.balance !== null) balanceAfter = r.balance
   }
-  await c.db.update('orders', row.ROWID, {
+  const orderPatch = {
     ...(lines.length ? { tax_breakup_json: JSON.stringify(lines) } : {}),
     customer_gstin: cu && cu.gstin ? str(cu.gstin) : null, place_of_supply: pos, is_igst: igst,
     points_earned: earned, points_balance_after: loyalty.enabled || order.pointsRedeemed ? balanceAfter : null,
-  })
+  }
+  // The lines' GST split and the bill's last update: one round trip (one database per shop), else one after the other.
+  let last: Row
+  if (c.db.writeBatch) {
+    const [, saved] = await c.db.writeBatch([{ update: 'order_items', rows: linePatch }, { update: 'orders', rows: [{ ROWID: row.ROWID, ...orderPatch }] }])
+    last = saved[0]
+  } else {
+    await c.db.updateMany('order_items', linePatch)
+    last = await c.db.update('orders', row.ROWID, orderPatch)
+  }
   // Free merged tables.
   if (row.table_id) {
     const merged = await c.db.select('dining_tables', { where: { business_id: c.businessId, merged_into_id: str(row.table_id) } })
     if (merged.length) await c.db.updateMany('dining_tables', merged.map((t) => ({ ROWID: t.ROWID, merged_into_id: null })))
   }
   await audit(c, 'order', row.ROWID, 'update', `bill ${num.text} • ${order.total}`, str(row.branch_id))
+  // The lines are as read (the columns settle wrote to them aren't part of the app's line); the order is its last write.
+  return c.dbs.perShop && last && last.ROWID === row.ROWID ? orderFrom(last, order.items) : null
 }
 

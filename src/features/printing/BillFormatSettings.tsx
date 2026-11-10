@@ -1,11 +1,12 @@
-// Settings → Printer and bill. One branch at a time (picker in the header), two tabs:
+// Settings → Printer, scale and bill. One branch at a time (picker in the header), up to three tabs:
 //   Printer      — how this branch prints (cashiers too);
+//   Weighing scale — the branch's scale, for shops that sell by weight (cashiers too);
 //   Bill design  — what its bills show, in the bill's own order: shop details, bill details, item columns, totals and
 //                  footer (owner / manager, or a role with "Change bill format", own branches only).
 // One live sample bill (drawn by the same code that prints) and one Save bar for both tabs. Connect / Forget /
 // Print test bill act at once. A branch without a bill design keeps its standard bill until the owner switches.
 import clsx from 'clsx'
-import { ChevronDown, Eye, Lock, Pencil, Printer as PrinterIcon, Receipt as ReceiptIcon, RotateCcw, Sparkles } from 'lucide-react'
+import { ChevronDown, Eye, Lock, Pencil, Printer as PrinterIcon, Receipt as ReceiptIcon, RotateCcw, Scale as ScaleIcon, Sparkles } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useApp } from '@/app/AppContext'
@@ -16,6 +17,10 @@ import {
 } from '@/core/billFormat'
 import { GST_STATES } from '@/core/gst'
 import { computeTotals } from '@/core/pricing'
+import { isVegetableShop } from '@/core/config'
+import { isTextileShop } from '@/core/stickers'
+import { cleanScale, type BranchScale } from '@/core/scale'
+import { ScaleSetup, sellsByWeight } from '../scale/ScaleSettings'
 import type { Branch, Business, Order, OrderItem } from '@/core/types'
 import { api } from '@/data'
 import { Receipt, usePrint, type ReceiptProps } from '../Payment'
@@ -45,6 +50,8 @@ function sampleOrder(b: Business, br: Branch): Order {
     ({ id, productId: id, name, variantId: null, variantName: null, addOns: [], qty, unit, unitPrice: price, taxRate: rate, notes: '', kotQty: qty, ...extra })
   const items = food(b)
     ? [item('s1', 'Masala Dosa', 2, 'pc', 70, { listPrice: 80, priceOverride: 70 }), item('s2', 'Filter Coffee', 3, 'pc', 25), item('s3', 'Parotta', 4, 'pc', 20)]
+    : isVegetableShop(b)
+    ? [item('s1', 'Tomato', 0.5, 'kg', 50), item('s2', 'Onion (Big)', 1.25, 'kg', 38, { listPrice: 40, priceOverride: 38 }), item('s3', 'Banana', 6, 'pc', 6)]
     : [item('s1', 'Ponni Rice', 2, 'kg', 55, { mrp: 70, listPrice: 60, priceOverride: 55 }), item('s2', 'Sugar 1kg', 1, 'pc', 45, { mrp: 50 }), item('s3', 'Toor Dal', 0.5, 'kg', 140, { mrp: 150 })]
   const t = computeTotals(items, 0, b.billing)
   const now = new Date().toISOString()
@@ -52,12 +59,12 @@ function sampleOrder(b: Business, br: Branch): Order {
   return {
     id: 'sample', number: `${b.billing.orderPrefix}${b.billing.nextOrderNumber}`, type: food(b) ? 'dine_in' : 'counter', tableId: null, customerId: null,
     status: 'completed', items, notes: '', ...t, paid: t.total, balance: 0, paymentStatus: 'paid',
-    invoiceNumber: inv, billedAt: now, cancelledAt: null, cancelReason: null, source: 'pos', ...(food(b) ? {} : { salespersonId: 'sp' }),
+    invoiceNumber: inv, billedAt: now, cancelledAt: null, cancelReason: null, source: 'pos', ...(isTextileShop(b) ? { salespersonId: 'sp' } : {}),
     businessId: b.id, branchId: br.id, createdAt: now, createdBy: 'me', updatedAt: now, updatedBy: 'me',
   }
 }
 
-type Tab = 'printer' | 'bill'
+type Tab = 'printer' | 'scale' | 'bill'
 
 /** The page: branch picker, tabs, the tab's settings, the live bill, and the Save bar. */
 export function PrinterAndBill() {
@@ -104,6 +111,13 @@ function BranchSetup({ branch, others, canPrinter, canBill, header, onDirty, swi
   const pDraft: PrinterDraft = { ...base, ...pEdits }
   const pChanges = printerChanges(base, pDraft)
 
+  // ---- weighing scale draft (shops that sell by weight) ----
+  const withScale = canPrinter && sellsByWeight(b)
+  const scaleBase = cleanScale(branch.scale ?? {})
+  const [sEdits, setSEdits] = useState<Partial<BranchScale>>({})
+  const sDraft: BranchScale = { ...scaleBase, ...sEdits }
+  const sChanges = (Object.keys(sEdits) as (keyof BranchScale)[]).filter((k) => sDraft[k] !== scaleBase[k])
+
   // ---- bill design draft ----
   const shopDefault = useMemo(() => defaultBillFormat(b, b.billing.receiptFooter), [b])
   const savedFormat = branch.billFormat ? JSON.stringify(branch.billFormat) : ''
@@ -116,7 +130,7 @@ function BranchSetup({ branch, others, canPrinter, canBill, header, onDirty, swi
   useEffect(() => setFooter(b.billing.receiptFooter), [b.billing.receiptFooter])
   const footerDirty = !using && footer !== b.billing.receiptFooter
 
-  const dirty = Object.keys(pChanges).length > 0 || fDirty || footerDirty
+  const dirty = Object.keys(pChanges).length > 0 || sChanges.length > 0 || fDirty || footerDirty
   useEffect(() => { onDirty(dirty) }, [dirty]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => onDirty(false), []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -129,13 +143,14 @@ function BranchSetup({ branch, others, canPrinter, canBill, header, onDirty, swi
   const save = async () => {
     const ok = await run(async () => {
       if (Object.keys(pChanges).length) await savePrinter(branch.id, pChanges)
+      if (sChanges.length) await api.branches.saveScale(branch.id, Object.fromEntries(sChanges.map((k) => [k, sDraft[k]])))
       if (fDirty) await api.branches.saveBillFormat(branch.id, f)
       if (footerDirty) await api.business.update({ billing: { ...b.billing, receiptFooter: footer } })
-      setPEdits({})
+      setPEdits({}); setSEdits({})
     }, 'Saved')
     return ok
   }
-  const discard = () => { setPEdits({}); setF(branch.billFormat ?? shopDefault); setFooter(b.billing.receiptFooter) }
+  const discard = () => { setPEdits({}); setSEdits({}); setF(branch.billFormat ?? shopDefault); setFooter(b.billing.receiptFooter) }
   const act = (fn: () => Promise<unknown>, ok?: string) => {
     setBusy(true)
     fn().then(() => { if (ok) toast(ok) }).catch((e) => {
@@ -168,23 +183,32 @@ function BranchSetup({ branch, others, canPrinter, canBill, header, onDirty, swi
     <Card className="overflow-visible">
       <div className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-100 px-5 py-4">
         <div className="min-w-0">
-          <h2 className="text-base font-semibold">Printer and bill{header ? '' : ` · ${branch.name}`}</h2>
-          <p className="mt-0.5 text-sm text-slate-500">{header ? 'Each branch has its own printer and bill. Changes apply only to the branch you choose.' : 'How this branch prints and what its bills show.'}</p>
+          <h2 className="text-base font-semibold">{withScale ? 'Printer, scale and bill' : 'Printer and bill'}{header ? '' : ` · ${branch.name}`}</h2>
+          <p className="mt-0.5 text-sm text-slate-500">{header ? `Each branch has its own printer${withScale ? ', scale' : ''} and bill. Changes apply only to the branch you choose.` : `How this branch prints${withScale ? ', weighs' : ''} and what its bills show.`}</p>
         </div>
         {header}
       </div>
-      {canPrinter && canBill && (
-        <div className="flex gap-1 border-b border-slate-100 px-3" role="tablist">
-          <TabBtn on={tab === 'printer'} onClick={() => setTab('printer')} icon={<PrinterIcon className="h-4 w-4" />}>
-            1. Printer <span className={clsx('ml-1 text-xs font-medium', printerReady ? 'text-emerald-600' : 'text-amber-600')}>● {printerReady ? 'Ready' : 'Not set up'}</span>
-          </TabBtn>
-          <TabBtn on={tab === 'bill'} onClick={() => setTab('bill')} icon={<ReceiptIcon className="h-4 w-4" />}>2. Bill design</TabBtn>
+      {((canPrinter && canBill) || withScale) && (
+        <div className="flex gap-1 overflow-x-auto border-b border-slate-100 px-3 no-scrollbar" role="tablist">
+          {canPrinter && (
+            <TabBtn on={tab === 'printer'} onClick={() => setTab('printer')} icon={<PrinterIcon className="h-4 w-4" />}>
+              1. Printer <span className={clsx('ml-1 text-xs font-medium', printerReady ? 'text-emerald-600' : 'text-amber-600')}>● {printerReady ? 'Ready' : 'Not set up'}</span>
+            </TabBtn>
+          )}
+          {withScale && (
+            <TabBtn on={tab === 'scale'} onClick={() => setTab('scale')} icon={<ScaleIcon className="h-4 w-4" />}>
+              2. Weighing scale <span className={clsx('ml-1 text-xs font-medium', scaleBase.enabled ? 'text-emerald-600' : 'text-slate-400')}>● {scaleBase.enabled ? 'On' : 'Off'}</span>
+            </TabBtn>
+          )}
+          {canBill && <TabBtn on={tab === 'bill'} onClick={() => setTab('bill')} icon={<ReceiptIcon className="h-4 w-4" />}>{withScale ? 3 : 2}. Bill design</TabBtn>}
         </div>
       )}
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-6 p-5 xl:grid-cols-[minmax(0,1fr)_auto]">
         <div className="min-w-0">
-          {tab === 'printer'
+          {tab === 'scale'
+            ? <ScaleSetup branch={branch} draft={sDraft} set={(p) => setSEdits({ ...sEdits, ...p })} act={act} busy={busy} />
+            : tab === 'printer'
             ? <PrinterSetup branchId={branch.id} saved={saved} draft={pDraft} set={(p) => setPEdits({ ...pEdits, ...p })} onTest={test} act={act} busy={busy} />
             : using
               ? <BillDesign f={f} setF={setF} b={b} branch={branch} others={others} open={open} setOpen={setOpen} shopDefault={shopDefault} />
@@ -219,7 +243,7 @@ function BranchSetup({ branch, others, canPrinter, canBill, header, onDirty, swi
 }
 
 const TabBtn = ({ on, onClick, icon, children }: { on: boolean; onClick: () => void; icon: ReactNode; children: ReactNode }) => (
-  <button type="button" role="tab" aria-selected={on} onClick={onClick} className={clsx('-mb-px flex items-center gap-2 border-b-2 px-3 py-3 text-sm font-medium transition',
+  <button type="button" role="tab" aria-selected={on} onClick={onClick} className={clsx('-mb-px flex shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-3 py-3 text-sm font-medium transition',
     on ? 'border-brand-600 text-brand-700' : 'border-transparent text-slate-500 hover:text-slate-700')}>{icon}{children}</button>
 )
 

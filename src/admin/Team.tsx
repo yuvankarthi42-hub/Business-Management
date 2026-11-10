@@ -105,7 +105,7 @@ function AdminModal({ initial, self, onClose }: { initial: Partial<Member>; self
         </Field>
         {!isNew && !resetPw && <Button type="button" variant="secondary" size="sm" icon={KeyRound} write={false} onClick={() => { setResetPw(true); setF({ ...f, password: randomPassword() }) }}>Reset password</Button>}
         {resetPw && (
-          <Field required={isNew} label={isNew ? 'Password' : 'New password'} hint="At least 6 characters">
+          <Field required={isNew} label={isNew ? 'Password' : 'New password'} hint="At least 8 characters">
             <div className="flex gap-1.5">
               <Input required minLength={6} value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} className="font-mono" autoComplete="new-password" />
               <Button type="button" variant="secondary" icon={Wand2} onClick={() => setF({ ...f, password: randomPassword() })} aria-label="New password" title="Generate" />

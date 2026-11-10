@@ -1,4 +1,5 @@
 import clsx from 'clsx'
+import { variantCount } from '@/core/catalogIndex'
 import { Banknote, Check, ClipboardList, Truck, CreditCard, MoreHorizontal, Pause, Play, Scale, ScanBarcode, ShoppingBasket, Smartphone, Trash2, UserRound, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -83,6 +84,9 @@ export default function SuperBilling() {
   const customerRef = useRef<HTMLDivElement>(null)
   const types = billing.orderTypes.filter((t) => t === 'counter' || t === 'delivery')
   const wsOn = wholesaleOn(billing)
+  // Same rules as the server: wholesale prices need "Change item price" (or a wholesale customer, set automatically);
+  // counter salespeople (no app login) or yourself — another app user needs "Change item price" / "Business settings".
+  const pickAnySeller = can('billing.price') || can('settings.manage')
   useEffect(() => { if (wsOn) setTier(customers.find((c) => c.id === customerId)?.priceTier ?? 'retail') }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { cart.setPoints(0) }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
   const firstTier = useRef(true)
@@ -112,7 +116,7 @@ export default function SuperBilling() {
   }, [cart, tier, products, billing])
 
   const addProduct = useCallback((p: Product, qty?: number) => {
-    if (p.variants.length) return setOptions(p)
+    if (variantCount(p)) return setOptions(p)
     if (qty === undefined && isWeighed(p.unit)) return setWeighFor({ product: p })
     if (mod('inventory') && p.trackStock && p.stock <= 0) toast(`${p.name}: stock shows 0 — check shelf count`, 'info')
     else if (p.trackExpiry && p.nextExpiry && p.nextExpiry < new Date().toISOString().slice(0, 10)) toast(`${p.name}: oldest batch expired on ${p.nextExpiry} — check the packet date`, 'error')
@@ -131,6 +135,15 @@ export default function SuperBilling() {
     setQ('')
     if (hit) return addProduct(hit)
     if (suggestions[hl]) return addProduct(suggestions[hl])
+    // A large shop (light index on this device): an item added on another counter a moment ago may not be here yet.
+    if (looksLikeBarcode(code) && active[0]?.light) {
+      void api.products.byBarcode(code).then((p) => {
+        if (p) return addProduct(p)
+        if (can('products.manage')) return setQuickAdd(code)
+        say(`Barcode ${code} not found — ask the manager to add it`, 'warn')
+      }).catch(() => say(`Barcode ${code} not found — ask the manager to add it`, 'warn'))
+      return
+    }
     if (looksLikeBarcode(code)) {
       if (can('products.manage')) return setQuickAdd(code)
       return say(`Barcode ${code} not found — ask the manager to add it`, 'warn')
@@ -407,11 +420,11 @@ export default function SuperBilling() {
             <span className="shrink-0 text-xs font-medium text-slate-500">Salesperson</span>
             <Select aria-label="Salesperson" value={salespersonId ?? ''} onChange={(e) => setSalespersonId(e.target.value || null)} className="h-8 min-w-0 flex-1 border-0 bg-transparent py-0 text-sm font-medium shadow-none focus:ring-0">
               <option value="">{me!.user.name} (me)</option>
-              {sellers.filter((u) => u.id !== me!.user.id).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              {sellers.filter((u) => u.id !== me!.user.id && (pickAnySeller || u.canLogin === false || u.id === salespersonId)).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
             </Select>
           </label>
         )}
-        {wsOn && (
+        {wsOn && (can('billing.price') || tier === 'wholesale') && (
           <button type="button" onClick={() => setTier(tier === 'wholesale' ? 'retail' : 'wholesale')} aria-pressed={tier === 'wholesale'}
             className={clsx('flex w-full items-center justify-between rounded-lg border px-3 py-2 text-sm font-medium transition', tier === 'wholesale' ? 'border-violet-300 bg-violet-50 text-violet-800' : 'border-slate-200 text-slate-600 hover:border-slate-300')}>
             <span>{wholesaleLabel(billing)}</span>

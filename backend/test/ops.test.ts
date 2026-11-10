@@ -51,7 +51,7 @@ test('inventory, expenses, reports and audit', async () => {
     assert.equal(rent.category, 'rent')
     await s.call('expenses.save', { amount: 2000, category: 'salary', method: 'cash' })
     await s.call('expenses.save', { amount: 150, category: 'transport' })
-    await assert.rejects(s.call('expenses.save', { amount: 0, category: 'rent' }), /valid amount/)
+    await assert.rejects(s.call('expenses.save', { amount: 0, category: 'rent' }), /more than 0/)
     await s.call('expenses.void', rent.id)
     const exps = await s.call<Exp[]>('expenses.list', ...range())
     assert.equal(exps.length, 4)

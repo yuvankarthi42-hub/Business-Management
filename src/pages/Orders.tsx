@@ -174,7 +174,7 @@ export function OrderDetail({ id, onClose }: { id: string; onClose: () => void }
         {kots.length > 0 && (
           <section>
             <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Kitchen tickets</h4>
-            <div className="flex flex-wrap gap-2">{kots.map((k) => <Badge key={k.id} tone="blue">{k.number} · {k.status}</Badge>)}</div>
+            <div className="flex flex-wrap gap-2">{kots.map((k) => <Badge key={k.id} tone={k.cancel ? 'red' : 'blue'}>{k.number} · {k.cancel ? 'cancel · ' : ''}{k.status}</Badge>)}</div>
           </section>
         )}
       </div>

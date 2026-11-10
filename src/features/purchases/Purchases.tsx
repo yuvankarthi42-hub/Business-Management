@@ -83,7 +83,11 @@ export function NewPurchaseModal({ onClose, supplierId: preset }: { onClose: () 
   const run = useAction()
   const b = me!.business
   const { data: suppliers = [] } = useData(() => api.suppliers.list())
-  const { data: products = [] } = useData(() => api.products.list())
+  // Products are searched on the server (Inventory's summary says it is available) instead of loading them all.
+  const { data: inv, error: invError } = useData(() => api.inventory.summary())
+  const large = inv?.large === true
+  const listed = inv?.large === false || !!invError
+  const { data: products = [] } = useData(() => (listed ? api.products.list() : Promise.resolve([] as Product[])), [listed])
   const [supplierId, setSupplierId] = useState(preset ?? '')
   const [newSupplier, setNewSupplier] = useState(false)
   const [billNo, setBillNo] = useState('')
@@ -101,13 +105,25 @@ export function NewPurchaseModal({ onClose, supplierId: preset }: { onClose: () 
   const [made, setMade] = useState<Product[]>([])
   const [newItem, setNewItem] = useState<string | null>(null)
   const canAddItem = can('products.manage')
-  const byId = (id: string) => products.find((p) => p.id === id) ?? made.find((p) => p.id === id)
-  const matches = useMemo(() => {
+  // The items picked on this bill (from the server's search).
+  const [picked, setPicked] = useState<Product[]>([])
+  const byId = (id: string) => products.find((p) => p.id === id) ?? made.find((p) => p.id === id) ?? picked.find((p) => p.id === id)
+  const localMatches = useMemo(() => {
     const s = q.trim().toLowerCase()
-    if (!s) return []
+    if (!s || large) return []
     return products.filter((p) => p.active && p.kind === 'goods' && (p.name.toLowerCase().includes(s) || p.barcode === s || p.sku.toLowerCase() === s)).slice(0, 8)
-  }, [q, products])
+  }, [q, products, large])
+  const [found, setFound] = useState<{ q: string; rows: Product[] }>({ q: '', rows: [] })
+  useEffect(() => {
+    const s = q.trim()
+    if (!large || !s) return
+    let on = true
+    const t = setTimeout(() => { api.inventory.findProducts(s).then((rows) => { if (on) setFound({ q: s, rows }) }).catch(() => { /* no matches shown */ }) }, 250)
+    return () => { on = false; clearTimeout(t) }
+  }, [q, large])
+  const matches = large ? (found.q === q.trim() ? found.rows : []) : localMatches
   const add = (p: Product) => {
+    if (large) setPicked((m) => (m.some((x) => x.id === p.id) ? m : [...m, p]))
     setRows((r) => r.some((x) => x.productId === p.id && !p.trackExpiry) ? r.map((x) => (x.productId === p.id ? { ...x, qty: String((Number(x.qty) || 0) + 1) } : x))
       : [...r, { key: `${p.id}-${Date.now()}`, productId: p.id, qty: '1', cost: p.costPrice ? String(p.costPrice) : '', taxRate: rateOf(p), hsn: p.hsn ?? '', batchNo: '', expiry: '' }])
     setQ('')
@@ -173,6 +189,10 @@ export function NewPurchaseModal({ onClose, supplierId: preset }: { onClose: () 
                 if (e.key !== 'Enter') return
                 e.preventDefault()
                 if (matches[0]) add(matches[0])
+                else if (large && q.trim()) { // a scan comes faster than the search: ask now
+                  const typed = q.trim()
+                  void api.inventory.findProducts(typed).then((rows) => { if (rows[0]) add(rows[0]); else if (canAddItem) { setNewItem(typed); setQ('') } }).catch(() => { /* stays typed */ })
+                }
                 else if (q.trim() && canAddItem) { setNewItem(q.trim()); setQ('') } // a code that isn't in the products yet
               }} />
             <ScanLine className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-300" />

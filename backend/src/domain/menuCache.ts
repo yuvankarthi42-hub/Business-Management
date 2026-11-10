@@ -1,20 +1,27 @@
 // QR menu and TV specials board, kept in the shared cache (Catalyst Cache) so a scan usually reads no database.
-// A copy is used while: the shop's menu version is unchanged (any product / category / price / special / table /
-// settings change, or a bill that changed stock, bumps it — app.ts), it is the same business day (specials are
-// per day), and it is under 5 minutes old (a safety net in case a cache write was lost). Ordering is never
-// trusted to the copy: placeOrder re-checks prices, stock and the account on every order.
+// A copy is used while: the shop's version is unchanged, it is the same business day (specials are per day), and it
+// is under 5 minutes old (a safety net in case a cache write was lost). The menu's version changes with any product /
+// category / price / special / table / settings change, or a bill that sold an item out (app.ts); the TV board has its
+// own, changed only by what it shows (specials, products, the shop's settings) — bills and stock never touch it.
+// Ordering is never trusted to the copy: placeOrder re-checks prices, stock and the account on every order.
 import type { Ctx } from '../core/context'
 import { dateFormat } from '@/core/intl'
 import { RawJson } from '../core/rawJson'
 
 const MAX_AGE = 5 * 60_000
 const verKey = (bid: string) => `menuv:${bid}`
+const boardKey = (bid: string) => `boardv:${bid}`
+export type PublicCopy = 'menu' | 'board'
 
 /** Every shop's copies at once (the product admin released or withdrew QR Orders / Daily Specials). */
 const ALL_KEY = 'menuv:*'
 
 export async function bumpMenu(c: Ctx, bid: string) {
   await c.shared.set(verKey(bid), Date.now().toString(36) + Math.random().toString(36).slice(2, 6), 24)
+}
+/** The TV board's own version (specials, products, the shop's settings changed). */
+export async function bumpBoard(c: Ctx, bid: string) {
+  await c.shared.set(boardKey(bid), Date.now().toString(36) + Math.random().toString(36).slice(2, 6), 24)
 }
 export async function bumpAllMenus(c: Ctx) {
   await c.shared.set(ALL_KEY, Date.now().toString(36) + Math.random().toString(36).slice(2, 6), 24)
@@ -29,9 +36,9 @@ const dayIn = (tz: string, d = new Date()) => {
  * The cached copy, or `build()` once (and keep it). `key` must only contain checked ids. Kept as one line of
  * checks (version, time, day) and then the answer's JSON text, which is sent as it is (no read-back, no re-encode).
  */
-export async function cachedPublic<T>(c: Ctx, bid: string, key: string, build: () => Promise<{ value: T; tz: string }>): Promise<RawJson> {
+export async function cachedPublic<T>(c: Ctx, bid: string, key: string, build: () => Promise<{ value: T; tz: string }>, copy: PublicCopy = 'menu'): Promise<RawJson> {
   const k = `pubj:${bid}:${key}`
-  const [own, all, raw] = await Promise.all([c.shared.get(verKey(bid)), c.shared.get(ALL_KEY), c.shared.get(k)])
+  const [own, all, raw] = await Promise.all([c.shared.get(copy === 'board' ? boardKey(bid) : verKey(bid)), c.shared.get(ALL_KEY), c.shared.get(k)])
   const ver = all ? `${own ?? ''}|${all}` : own
   const nl = raw ? raw.indexOf('\n') : -1
   if (raw && nl > 0) {

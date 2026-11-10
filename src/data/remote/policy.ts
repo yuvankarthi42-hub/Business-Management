@@ -16,6 +16,8 @@ const READS: Record<string, { tags: string[]; ttl: number }> = {
   'categories.list': { tags: ['catalog'], ttl: LONG },
   'products.list': { tags: ['catalog'], ttl: LONG }, // stock in it is patched after every bill (effects)
   'products.page': { tags: ['catalog'], ttl: LONG },
+  'products.byIds': { tags: ['catalog'], ttl: LONG }, // full products opened from a large shop's light index
+  'products.byBarcode': { tags: ['catalog'], ttl: SHORT }, // a large shop's scan not yet in the device's index
   'specials.list': { tags: ['specials'], ttl: LONG },
   'customers.list': { tags: ['customers'], ttl: NORMAL },
   'customers.one': { tags: ['customers'], ttl: NORMAL },
@@ -32,6 +34,12 @@ const READS: Record<string, { tags: string[]; ttl: number }> = {
   'inventory.movements': { tags: ['stock'], ttl: SHORT },
   'inventory.weekSummary': { tags: ['stock'], ttl: SHORT },
   'inventory.batches': { tags: ['stock'], ttl: SHORT },
+  // Inventory from the server (stock counts, list pages, pickers): stock changes and product edits both change them.
+  'inventory.summary': { tags: ['stock', 'catalog'], ttl: SHORT },
+  'inventory.stock': { tags: ['stock', 'catalog'], ttl: SHORT },
+  'inventory.untracked': { tags: ['stock', 'catalog'], ttl: SHORT },
+  'inventory.findProducts': { tags: ['catalog'], ttl: SHORT },
+  'dashboard.alerts': { tags: ['stock', 'catalog'], ttl: SHORT }, // the Dashboard's Low stock / Expiring soon cards
   'reports.summary': { tags: ['reports'], ttl: SHORT },
   'reports.topProducts': { tags: ['reports'], ttl: LONG },
   'reports.byBranch': { tags: ['reports'], ttl: SHORT },
@@ -56,6 +64,7 @@ const READS: Record<string, { tags: string[]; ttl: number }> = {
   'whatsapp.status': { tags: ['whatsapp'], ttl: 5 * S },
   'whatsapp.messages': { tags: ['whatsapp'], ttl: LIVE },
   'public.menu': { tags: ['public'], ttl: SHORT },
+  'public.menuItems': { tags: ['public'], ttl: SHORT }, // a large shop's menu pages and searches
   'public.order': { tags: ['public'], ttl: 5 * S }, // not cached in the browser (see api.ts UNCACHED)
   'public.pushKey': { tags: [], ttl: LONG },
   'public.live': { tags: [], ttl: LONG },
@@ -89,6 +98,7 @@ const WRITES: Record<string, string[]> = {
   'branches.save': ['me', 'branches'],
   'branches.savePrinter': ['me', 'branches'],
   'branches.saveBillFormat': ['me', 'branches'],
+  'branches.saveScale': ['me', 'branches'],
   'roles.save': ['roles', 'me', 'users'],
   'roles.remove': ['roles', 'me'],
   'users.save': ['users', 'me', 'staff'],

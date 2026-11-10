@@ -27,6 +27,14 @@ export function ScanAddModal({ onClose, onEdit }: { onClose: () => void; onEdit:
     if (!c) return
     const p = products.find((x) => x.barcode === c)
     if (p) { setRows((r) => [{ code: c, status: 'exists', product: p }, ...r.filter((x) => x.code !== c)]); return }
+    // A large shop (light index on this device): an item added elsewhere a moment ago may not be here yet.
+    if (products[0]?.light) {
+      void api.products.byBarcode(c).then((found) => {
+        if (found) setRows((r) => [{ code: c, status: 'exists', product: found }, ...r.filter((x) => x.code !== c)])
+        else setPending(c)
+      }).catch(() => setPending(c))
+      return
+    }
     setPending(c)
   }
   const addStock = async (row: Row) => {

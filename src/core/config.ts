@@ -133,13 +133,21 @@ export const templateFor = (c: BusinessCategory) => TEMPLATES.find((t) => t.key 
 /** The type card a business belongs to (textile shops have their own card). */
 export const templateKeyOf = (b: Pick<Business, 'category' | 'subType'>): BusinessTemplate['key'] => (isTextile(b) ? 'textile' : b.category)
 
+/** The QR codes' web address: empty (= the app's own address) or http(s)://… only — never javascript: or data:. */
+export const QR_BASE_URL = /^https?:\/\/[^\s"'<>\\]+$/i
+export const QR_BASE_URL_MAX = 200
+export const qrBaseUrlOk = (u: unknown) => typeof u === 'string' && (u === '' || (u.length <= QR_BASE_URL_MAX && QR_BASE_URL.test(u)))
+
 export function qrSettings(b: Pick<Business, 'qr' | 'billing'>): QrSettings {
+  const saved = (b.qr ?? {}) as Partial<QrSettings>
+  const own = typeof window !== 'undefined' ? `${window.location.origin}${((import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? '/').replace(/\/$/, '')}${(import.meta as { env?: { VITE_ROUTER?: string } }).env?.VITE_ROUTER === 'hash' ? '/#' : ''}` : ''
   return {
     orderTypes: b.billing.orderTypes.filter((t) => t !== 'counter'),
     autoAccept: false,
-    // The app's own address (with its path prefix when hosted under one, e.g. Catalyst web client hosting at /app/).
-    baseUrl: typeof window !== 'undefined' ? `${window.location.origin}${((import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? '/').replace(/\/$/, '')}${(import.meta as { env?: { VITE_ROUTER?: string } }).env?.VITE_ROUTER === 'hash' ? '/#' : ''}` : '',
-    ...b.qr,
+    ...saved,
+    // The app's own address (with its path prefix when hosted under one, e.g. Catalyst web client hosting at /app/),
+    // unless an address was saved. A saved value that isn't http(s)://… (javascript:, …) is never used.
+    baseUrl: saved.baseUrl !== undefined && qrBaseUrlOk(saved.baseUrl) ? saved.baseUrl : own,
   }
 }
 

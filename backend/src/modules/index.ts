@@ -17,3 +17,5 @@ import './whatsapp'
 import './admin/renewals'
 import './admin/schema'
 import './sync'
+// Last: the argument checks of handlers defined above.
+import './args'

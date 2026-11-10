@@ -16,7 +16,7 @@
     "vapid": "node scripts/vapid.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": "24.x"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

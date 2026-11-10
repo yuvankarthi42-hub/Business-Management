@@ -21,7 +21,9 @@ let push: PushSender | null | undefined
 export function catalystEnv(app: unknown): Env {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const any = app as any
-  const files = new StratusFiles(any.stratus().bucket(process.env.STRATUS_BUCKET || 'billpoodum-media'), process.env.STRATUS_PUBLIC_URL || '')
+  // STRATUS_PRIVATE_BUCKET (a bucket NOT open to the public): support screenshots, shown through signed links only.
+  const files = new StratusFiles(any.stratus().bucket(process.env.STRATUS_BUCKET || 'billpoodum-media'), process.env.STRATUS_PUBLIC_URL || '',
+    process.env.STRATUS_PRIVATE_BUCKET ? any.stratus().bucket(process.env.STRATUS_PRIVATE_BUCKET) : null)
   if (push === undefined) push = pushFromEnv()
   if (usesTurso()) {
     // Shared cache (menu / report copies, version stamps, tracking, rate limits) in a Turso table: the same on every

@@ -12,6 +12,7 @@ const DEMO_PLANS: Record<string, { username: string; startDaysAgo: number; month
   biz_kanchi_silks: { username: 'kanchisilks', startDaysAgo: 15, months: 12 },
   biz_annai_veg: { username: 'annaiveg', startDaysAgo: 10, months: 6 },
   biz_balaji_auto: { username: 'balajiauto', startDaysAgo: 30, months: 12 },
+  biz_smart_mobiles: { username: 'smartmobiles', startDaysAgo: 12, months: 12 },
 }
 export const DEFAULT_PRICE_PER_BRANCH = 499
 

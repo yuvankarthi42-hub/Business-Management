@@ -80,14 +80,16 @@ function colSql(c, present) {
 
 // ---------- indexes: the planned query paths + every foreign key ----------
 const PLANNED = {
-  orders: [['business_id', 'branch_id', 'status', 'created_at'], ['business_id', 'billed_at'], ['business_id', 'customer_id', 'status'], ['business_id', 'table_id', 'status'], ['business_id', 'order_number']],
+  orders: [['business_id', 'branch_id', 'status', 'created_at'], ['business_id', 'billed_at'], ['business_id', 'customer_id', 'status'], ['business_id', 'table_id', 'status'], ['business_id', 'order_number'], ['business_id', 'track_code']],
   push_subscriptions: [['business_id', 'expires_at']],
   bill_formats: [['business_id']],
   order_items: [['order_id', 'sort_order'], ['product_id']],
   payments: [['business_id', 'branch_id', 'created_at'], ['order_id'], ['business_id', 'customer_id']],
-  stock_movements: [['business_id', 'product_id', 'created_at'], ['business_id', 'branch_id', 'created_at']],
+  stock_movements: [['business_id', 'product_id', 'created_at'], ['business_id', 'branch_id', 'created_at'], ['business_id', 'ref_type', 'ref_id']],
+  request_log: [['business_id', 'created_at']],
   stock_batches: [['product_id', 'branch_id', 'expiry_date']],
-  products: [['business_id', 'is_active']],
+  products: [['business_id', 'is_active'], ['business_id', 'updated_at']],
+  branch_stock: [['business_id', 'updated_at']],
   customers: [['business_id', 'is_active']],
   kitchen_tickets: [['business_id', 'branch_id', 'status'], ['order_id']],
   expenses: [['business_id', 'branch_id', 'expense_date']],

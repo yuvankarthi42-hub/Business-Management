@@ -194,7 +194,7 @@ test('reports.gst: database split = line-by-line report on many bills with varie
     const pay = async (lines: unknown[], extra = {}) => { const o = await s.call<{ order: O }>('orders.save', draft(lines, extra)); return s.call<O>('orders.settle', o.order.id, [{ method: 'cash', amount: o.order.total }]) }
     for (let i = 0; i < 90; i++) {
       if (i === 60) s.setBranch(annex.id)
-      const ls = Array.from({ length: 1 + (i % 4) }, (_, k) => { const p = items[(i * 5 + k * 7) % items.length]; return line(p, (i + k) % 4 === 0 ? [0.125, 0.333, 1.75, 2.5][k % 4] : 1 + ((i + k) % 3)) })
+      const ls = Array.from({ length: 1 + (i % 4) }, (_, k) => { const at = (i * 5 + k * 7) % items.length; const p = items[at]; return line(p, (i + k) % 4 === 0 && at % 4 === 0 ? [0.125, 0.333, 1.75, 2.5][k % 4] : 1 + ((i + k) % 3)) })
       await pay(ls, { ...(i % 9 === 0 ? { customerId: walkKa.id } : i % 13 === 0 ? { customerId: b2b.id } : {}), discount: i % 7 === 0 ? 3.33 : 0 })
     }
     s.setBranch(null)

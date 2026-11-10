@@ -6,7 +6,7 @@ import { catalystEnv } from './catalystEnv'
 import { Ctx } from './core/context'
 import { runDailyJobs } from './modules/admin/renewals'
 
-process.env.NODE_ENV ??= 'production'
+process.env.NODE_ENV ||= 'production' // unset or empty → production (never the development secrets)
 
 interface CronContext { closeWithSuccess(): void; closeWithFailure(): void }
 

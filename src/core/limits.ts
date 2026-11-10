@@ -1,0 +1,28 @@
+// Limits every bill, payment, price and quantity must keep (checked by the server; the demo app uses the same rules).
+
+/** Lines on one bill. */
+export const MAX_BILL_ITEMS = 500
+/** Any money amount: a real number from 0 to ₹1 crore. */
+export const MAX_AMOUNT = 1_00_00_000
+/** Units sold in parts (weight, volume, length, time). Everything else (pc, box, pack, dozen, set, pair, plate…) is whole. */
+export const DECIMAL_UNITS = ['kg', 'g', 'ltr', 'ml', 'mtr', 'ft', 'hr']
+export const allowsDecimalQty = (unit: string | null | undefined) => DECIMAL_UNITS.includes(String(unit ?? '').trim().toLowerCase())
+
+/** Why this isn't a valid amount (null = fine). `positive`: 0 is not allowed (a payment, an expense). */
+export function amountError(v: unknown, opts: { positive?: boolean } = {}): string | null {
+  if (v === '' || v === null || v === undefined || typeof v === 'boolean' || Array.isArray(v) || (typeof v === 'object')) return 'Enter an amount'
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 'Enter a valid amount'
+  if (n < 0) return 'The amount can’t be negative'
+  if (opts.positive && !(n > 0)) return 'Enter an amount more than 0'
+  if (n > MAX_AMOUNT) return 'The amount is too large (₹1 crore at most)'
+  return null
+}
+
+/** Why this isn't a valid quantity for the unit (null = fine): more than 0, whole unless the unit is sold in parts. */
+export function qtyError(qty: unknown, unit: string | null | undefined): string | null {
+  const n = Number(qty)
+  if (typeof qty === 'boolean' || !Number.isFinite(n) || !(n > 0) || n > 100_000) return 'Check the quantity'
+  if (!allowsDecimalQty(unit) && !Number.isInteger(n)) return `Whole numbers only for ${String(unit || 'pc')}`
+  return null
+}

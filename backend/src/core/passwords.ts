@@ -22,6 +22,19 @@ export function passwordIterations() {
 }
 const pepper = () => (process.env.PASSWORD_PEPPER ?? '').trim()
 
+/**
+ * Production without PASSWORD_PEPPER (or a short one): a warning in the server log, once. Never stops the server —
+ * passwords keep working; setting it later upgrades each password at its next sign-in.
+ */
+export function warnIfNoPepper(env: NodeJS.ProcessEnv = process.env, log: (m: string) => void = console.warn): boolean {
+  if (env.NODE_ENV !== 'production') return false
+  const p = String(env.PASSWORD_PEPPER ?? '').trim()
+  if (p.length >= 32) return false
+  log(p ? '[security] PASSWORD_PEPPER is shorter than 32 characters — use a longer random value.'
+    : '[security] PASSWORD_PEPPER is not set — set a random 32+ character value on the api function (see DEPLOY-NEW-ACCOUNT.md). Never change it once set.')
+  return true
+}
+
 const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64url')
 const unb64 = (s: string) => new Uint8Array(Buffer.from(s, 'base64url'))
 
@@ -80,7 +93,23 @@ export function needsRehash(stored: string | null | undefined) {
   return p.iterations < passwordIterations() || (!p.peppered && !!pepper())
 }
 
-export function assertPassword(p: string | undefined | null) {
-  if (!p || p.length < 6) throw new ApiError('Password must be at least 6 characters')
+/** Passwords too common to allow (checked on new passwords only; existing ones keep working). */
+const COMMON = new Set(['12345678', '123456789', '1234567890', '87654321', '11111111', '00000000', '12341234', '11223344', 'password',
+  'password1', 'password123', 'passw0rd', 'qwerty123', 'qwertyui', 'abcd1234', 'abc12345', 'iloveyou', 'admin123', 'welcome1',
+  'welcome123', 'letmein1'])
+
+/** Rules for a NEW password (sign-in with an existing one is never refused by these). `avoid`: the mobile / username. */
+export function assertPassword(p: string | undefined | null, avoid: (string | null | undefined)[] = []) {
+  if (!p || p.length < 8) throw new ApiError('Password must be at least 8 characters')
   if (p.length > 72) throw new ApiError('Password is too long (72 characters at most)')
+  const low = p.toLowerCase()
+  if (COMMON.has(low) || /^(.)\1+$/.test(p)) throw new ApiError('This password is too easy to guess. Choose another one.')
+  const digits = (s: string) => s.replace(/\D/g, '')
+  for (const a of avoid) {
+    const x = String(a ?? '').trim().toLowerCase()
+    if (!x) continue
+    if (low === x || (digits(x).length >= 8 && digits(p) === digits(x)) || (digits(x).length >= 10 && digits(p) === digits(x).slice(-10))) {
+      throw new ApiError('Don’t use your mobile number or username as the password.')
+    }
+  }
 }

@@ -61,9 +61,9 @@ test('returns: refund + restock, due first, credit note used as payment, over-re
     const cn = await s.call<R>('returns.creditNote', r3.number.toLowerCase())
     assert.equal(cn.id, r3.id)
     await assert.rejects(s.call('returns.creditNote', "CN-1' OR 1=1"), /not found/)
-    await s.call<O>('orders.checkout', draft([line(milk, 1)]), [{ method: 'credit_note', amount: 15, reference: r3.number }, { method: 'cash', amount: 12 }])
+    await s.call<O>('orders.checkout', draft([line(milk, 1)], { customerId: cust.id }), [{ method: 'credit_note', amount: 15, reference: r3.number }, { method: 'cash', amount: 12 }])
     assert.equal((await s.call<R>('returns.creditNote', r3.number)).creditRemaining, 5)
-    await assert.rejects(s.call('orders.checkout', draft([line(milk, 1)]), [{ method: 'credit_note', amount: 10, reference: r3.number }, { method: 'cash', amount: 17 }]), /only ₹5.00 left/)
+    await assert.rejects(s.call('orders.checkout', draft([line(milk, 1)], { customerId: cust.id }), [{ method: 'credit_note', amount: 10, reference: r3.number }, { method: 'cash', amount: 17 }]), /only ₹5.00 left/)
 
     const list = await s.call<R[]>('returns.list')
     assert.equal(list.length, 4)
@@ -113,7 +113,7 @@ test('staff: pay, attendance, advances, month numbers, salary', async () => {
     await s.call('returns.create', { orderId: bill.id, lines: [{ orderItemId: bill.items[0].id, qty: 1, restock: false }], reason: 'other', settle: 'refund' })
 
     // Advance: an expense under Salary.
-    await assert.rejects(s.call('staff.giveAdvance', ravi.id, { amount: 0, method: 'cash' }), /advance amount/)
+    await assert.rejects(s.call('staff.giveAdvance', ravi.id, { amount: 0, method: 'cash' }), /Advance: enter an amount more than 0/)
     await s.call('staff.giveAdvance', ravi.id, { amount: 500, method: 'cash', note: 'festival' })
     const cats = await s.db.select('expense_categories', { where: { system_key: 2 } })
     assert.equal(cats.length, 1)

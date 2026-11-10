@@ -61,6 +61,8 @@ export function repriceItems(items: OrderItem[], products: Product[], billing: B
   return items.map((i) => {
     const p = products.find((x) => x.id === i.productId)
     if (!p || i.priceOverride !== undefined) return i
+    // A large shop's light product carries no sizes: a size line keeps the price chosen when it was added.
+    if (p.light && i.variantId) return i
     const v = i.variantId ? p.variants.find((x) => x.id === i.variantId) ?? null : null
     const base = basePrice(p, v, t, billing)
     const mrp = mrpOf(p, v, base)

@@ -160,7 +160,9 @@ export function CollectDueModal({ customer, outstanding, onClose }: { customer: 
 }
 
 function CustomerForm({ initial, onClose }: { initial: Partial<Customer>; onClose: () => void }) {
-  const { t, me } = useApp()
+  const { t, me, can } = useApp()
+  // Putting a customer on the wholesale list needs "Change item price" (the server checks it too).
+  const canTier = can('billing.price') || can('settings.manage')
   const run = useAction()
   const [c, setC] = useState<Partial<Customer>>({ name: '', phone: '', email: '', address: '', notes: '', ...initial })
   return (
@@ -189,7 +191,10 @@ function CustomerForm({ initial, onClose }: { initial: Partial<Customer>; onClos
         )}
           </div>
         </MoreDetails>
-        {me && wholesaleOn(me.business.billing) && (
+        {me && wholesaleOn(me.business.billing) && !canTier && c.priceTier === 'wholesale' && (
+          <p className="sm:col-span-2 rounded-xl border border-slate-200 p-3 text-sm text-slate-600">On the {wholesaleLabel(me.business.billing).toLowerCase()} list — ask the owner or manager to change it.</p>
+        )}
+        {me && wholesaleOn(me.business.billing) && canTier && (
           <div className="sm:col-span-2 rounded-xl border border-slate-200 p-3">
             <p className="mb-2 text-xs font-medium text-slate-600">Price list for this {t('customer').toLowerCase()}</p>
             <Segmented size="sm" value={c.priceTier ?? 'retail'} onChange={(v) => setC({ ...c, priceTier: v })} options={[{ value: 'retail', label: 'Retail price' }, { value: 'wholesale', label: wholesaleLabel(me.business.billing) }]} />

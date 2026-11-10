@@ -181,7 +181,7 @@ type Renewals = { settings: { daysBefore: number }; expiring: { id: string; dueT
 
 test('renewal reminders: platform WhatsApp, manual and daily sends, pause', async () => {
   const s = await withShop()
-  process.env.CRON_KEY = 'cron-key-1234567890'
+  process.env.CRON_KEY = 'cron-key-1234567890-0123456789abcdef'
   try {
     s.setToken(s.adminToken)
     const day = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10)

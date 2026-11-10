@@ -871,6 +871,14 @@
         "search": false,
         "pii": false,
         "default": "1"
+      },
+      {
+        "name": "scale_json",
+        "type": "text",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
       }
     ]
   },
@@ -3841,6 +3849,15 @@
         "search": false,
         "pii": false,
         "default": "1"
+      },
+      {
+        "name": "track_code",
+        "type": "varchar",
+        "maxLength": 32,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
       }
     ]
   },
@@ -6170,6 +6187,46 @@
         "search": false,
         "pii": false,
         "default": "0"
+      }
+    ]
+  },
+  "request_log": {
+    "columns": [
+      {
+        "name": "business_id",
+        "type": "fk",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "businesses",
+        "onDelete": "cascade"
+      },
+      {
+        "name": "uniq_key",
+        "type": "varchar",
+        "maxLength": 80,
+        "mandatory": true,
+        "unique": true,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "name",
+        "type": "varchar",
+        "maxLength": 60,
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "answer_json",
+        "type": "text",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
       }
     ]
   },

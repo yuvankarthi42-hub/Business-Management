@@ -4,8 +4,10 @@ import catalyst from 'zcatalyst-sdk-node'
 import type { Request } from 'express'
 import { createApp } from './app'
 import { catalystEnv } from './catalystEnv'
+import { warnIfNoPepper } from './core/passwords'
 
-process.env.NODE_ENV ??= 'production'
+process.env.NODE_ENV ||= 'production' // unset or empty → production (never the development secrets)
+warnIfNoPepper()
 
 const app = createApp((req: Request) => catalystEnv(catalyst.initialize(req as never)))
 

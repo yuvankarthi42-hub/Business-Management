@@ -1,5 +1,5 @@
 // Product admin: feature releases, the admin team, support view, usage report, platform settings and the admin audit log.
-import { ADMIN_ROLES } from '@/core/adminRoles'
+import { ADMIN_ROLES, adminCan } from '@/core/adminRoles'
 import { FEATURE_MODULE, FEATURES, type FeatureFlag, type FeatureKey } from '@/core/features'
 import type { AdminRole } from '@/core/types'
 import type { AdminSession, Ctx } from '../../core/context'
@@ -125,17 +125,26 @@ const platformSettings = async (c: Ctx) => {
 const rupee = (x: number) => `₹${x.toLocaleString('en-IN')}`
 const priceText = (p: PlanPrice) => `${rupee(p.month)}/month, ${rupee(p.year)}/year, extra branch ${rupee(p.extraBranch)}/month`
 
+/** An admin's current token_version (bound into support views they open). */
+async function adminTokenVersion(c: Ctx, id: string) {
+  return Number((await c.platform.get('platform_admins', id))?.token_version ?? 1)
+}
+
 define('admin', {
   // ---- Feature releases ----
   features: adminRead('customers.view', async (c) => {
     const flags = await featureFlags(c.platform)
     return (Object.keys(FEATURES) as FeatureKey[]).map((key) => ({ key, ...FEATURES[key], flag: flags[key] ?? OFF }))
   }),
-  setFeature: adminWrite('features.manage', async (c, key: FeatureKey, flag: FeatureFlag) => { await applyFeature(c, key, flag) }),
+  setFeature: adminWrite('features.manage', async (c, key: FeatureKey, flag: FeatureFlag) => {
+    await applyFeature(c, key, flag)
+    await adminLog(c, c.requireAdmin(), 'feature', null, `Feature ${key}: ${flag?.mode}${flag?.mode === 'selected' ? ` (${flag.businessIds?.length ?? 0} customers)` : ''}`)
+  }),
   /** Turn a feature on / off for one customer (switches the flag to "selected" when needed). */
   setCustomerFeature: adminWrite('features.manage', async (c, businessId: string, key: FeatureKey, on: boolean) => {
     if (!isFeature(key)) throw new ApiError('Unknown feature')
     const b = await findBiz(c, businessId)
+    await adminLog(c, c.requireAdmin(), 'feature', { id: b.ROWID, name: str(b.name) }, `Feature ${key} ${on ? 'on' : 'off'} for this customer`)
     const f = (await featureFlags(c.platform))[key] ?? OFF
     if (f.mode === 'all' && !on) {
       // Everyone except this customer.
@@ -169,7 +178,7 @@ define('admin', {
       const changes = [cur.name !== name && 'name', cur.username !== username && `username → ${username}`, cur.role !== input.role && `role ${ADMIN_ROLES[cur.role].name} → ${ADMIN_ROLES[input.role].name}`].filter(Boolean) as string[]
       const patch: Record<string, string | number | null> = { name, username, role: code(E.AdminRole, input.role) }
       if (input.password) {
-        assertPassword(input.password)
+        assertPassword(input.password, [username])
         // A new token version signs the admin out everywhere.
         Object.assign(patch, { password_hash: await hashPassword(input.password), token_version: Number(ex.token_version ?? 1) + 1, failed_logins: 0, locked_until: null })
         changes.push('password reset')
@@ -180,7 +189,7 @@ define('admin', {
       }
       return adminView({ id: ex.ROWID, name, username, role: input.role })
     }
-    assertPassword(input.password)
+    assertPassword(input.password, [username])
     const a = await c.platform.insert('platform_admins', { name, username, password_hash: await hashPassword(input.password!), role: code(E.AdminRole, input.role), is_active: true })
     await adminLog(c, me, 'admin_create', null, `${name} (${username}) added as ${ADMIN_ROLES[input.role].name}`)
     return adminView(adminFrom(a))
@@ -213,7 +222,7 @@ define('admin', {
     if (!owner) throw new ApiError('This customer has no owner login yet')
     const shop = await c.shopDb(r.ROWID)
     const main = (await shop.first('branches', { business_id: r.ROWID, is_default: true })) ?? (await shop.first('branches', { business_id: r.ROWID }, [['ROWID', 'ASC']]))
-    const claims: UserClaims = { t: 'u', uid: owner.ROWID, bid: r.ROWID, tv: Number(owner.token_version ?? 1), sup: { adminId: a.id, adminName: a.name, reason: why, startedAt: c.now.toISOString() } }
+    const claims: UserClaims = { t: 'u', uid: owner.ROWID, bid: r.ROWID, tv: Number(owner.token_version ?? 1), sup: { adminId: a.id, adminName: a.name, reason: why, startedAt: c.now.toISOString(), atv: await adminTokenVersion(c, a.id) } }
     await adminLog(c, a, 'support_start', { id: r.ROWID, name: str(r.name) }, `Support view opened: ${why}`)
     return { onboarded: !!r.onboarded_at, token: signToken({ ...claims }, SUPPORT_TOKEN_TTL), branchId: main?.ROWID ?? str(owner.default_branch_id) }
   }),
@@ -267,6 +276,9 @@ define('admin', {
     return customerPrice(await loadPricing(c.platform), r)
   }),
   audit: adminRead('customers.view', async (c, limit = 200) => {
+    // The admin team's own log: for admins who manage the team or read reports.
+    const role = c.requireAdmin().role
+    if (!adminCan(role, 'team.manage') && !adminCan(role, 'reports.view')) throw new ApiError('Your admin role can’t see the admin log', 403, 'FORBIDDEN')
     const n = Math.min(1000, Math.max(1, Math.floor(Number(limit) || 200)))
     const rows = await c.platform.select('admin_audit_logs', { orderBy: [['CREATEDTIME', 'DESC'], ['ROWID', 'DESC']], limit: n })
     return rows.map(adminLogFrom)

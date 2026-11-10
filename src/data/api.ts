@@ -1,18 +1,18 @@
 // Mock API (the demo app). Every function is async and scoped to the logged-in business/branch, exactly like the
 // real backend (backend/): src/data/remote/ calls it with the same `api` shape, and src/data/index.ts picks one.
 // UI code never touches the DB directly.
-import { computeTotals, r2 } from '@/core/pricing'
-import { modulesFor, qrSettings, setupDefaultsFor, templateFor } from '@/core/config'
+import { computeTotals, lineTotal, r2 } from '@/core/pricing'
+import { modulesFor, QR_BASE_URL_MAX, qrBaseUrlOk, qrSettings, setupDefaultsFor, templateFor } from '@/core/config'
 import { applySpecials, dateKey } from '@/core/specials'
 import { COUNTRIES, normalizePhone } from '@/core/phone'
 import { makeItem, priceOverrideError } from '@/core/orderItem'
 import { cleanDetails, cleanStickers, stickerSettings } from '@/core/stickers'
 import { planDesign, planDiscount, type DesignInput, type DiscountInput } from '@/core/textile'
-import { buildGstReport, cleanGstin, cleanHsn, cleanPartyGst, customerStateOf, GST_STATES, gstinError, hsnError, hsnOf, isInterState, monthRange, returnLines, shopStateOf, splitLineTax, type GstBill, type GstCreditNote, type GstPurchase } from '@/core/gst'
+import { buildGstReport, cleanGstin, cleanHsn, cleanPartyGst, customerStateOf, GST_STATES, gstinError, hsnError, hsnOf, isInterState, lineShare, monthRange, returnLines, shopStateOf, splitLineTax, type GstBill, type GstCreditNote, type GstPurchase } from '@/core/gst'
 import { cleanLoyalty, loyaltyOf, pointsExpiry, pointsForReturn, pointsToEarn, pointsValue, redeemError } from '@/core/loyalty'
 import { planPurchase, SUPPLIER_PAY_METHODS, supplierLedger, type PurchaseInput, type SupplierPayMethod } from '@/core/purchases'
 import type {
-  Branch, Business, Category, Customer, DiningTable, Expense, KitchenTicket, KotStatus, Order, OrderItem, OrderType, Payment,
+  BillingSettings, Branch, Business, Category, Customer, DiningTable, Expense, KitchenTicket, KotStatus, Order, OrderItem, OrderType, Payment,
   Campaign, ID, PaymentMethod, Permission, Product, Role, Special, StockMovement, StockMovementType, User,
   AdminAuditLog, AdminRole, PlatformAdmin, SubscriptionPeriod, WaMessage, WaTemplate, WhatsAppConfig, ReturnReason, SaleReturn, SaleReturnLine, AttendanceStatus, SalaryPayment, StaffPay, ReminderSettings, BranchPrinter, Ticket, TicketCategory, TicketPriority, TicketStatus,
   LoyaltySettings, ModuleKey, PointsEntry, PointsKind, Purchase, Supplier,
@@ -31,11 +31,20 @@ import type { WaMessageQuery } from '@/core/waReceipts'
 
 /** What a customer's phone may see of a product: no cost or wholesale prices. */
 const forCustomers = (p: Product): Product => ({ ...p, costPrice: 0, wholesalePrice: null })
+/** A page of a list (already in the product order) after the row `after` names — as the server's Inventory pages. */
+function pageAfter(rows: Product[], after: string | null | undefined, size: number) {
+  const id = String(after ?? '').split(':')[1]
+  const from = id ? rows.findIndex((p) => p.id === id) + 1 : 0
+  const page = rows.slice(from, from + size)
+  const last = page[page.length - 1]
+  return { rows: page, next: from + size < rows.length && last ? `0:${last.id}` : null }
+}
 
 /** Demo rate limit for "Track my order" (one browser). */
 const trackTries = { minute: 0, n: 0 }
 import { ADMIN_ROLES, adminCan, type AdminPermission } from '@/core/adminRoles'
 import { canEditBillFormat, cleanBillFormat, defaultBillFormat } from '@/core/billFormat'
+import { cleanScale, type BranchScale } from '@/core/scale'
 import { FEATURE_ACTIONS, FEATURES, featureOffAction, featureOn, featuresFor, moduleReleased, withFeatures, type FeatureFlag, type FeatureKey } from '@/core/features'
 import { renderTemplate, templateErrors, WA_KIND, type WaLang, type WaTemplateKind } from '@/core/whatsapp'
 import type { ImportItem } from '@/core/productImport'
@@ -51,7 +60,7 @@ export interface Session {
   support?: { adminId: string; adminName: string; reason: string; startedAt: string }
 }
 export const ALL_BRANCHES = 'all'
-const DEMO_BUSINESSES = ['biz_foodcorner', 'biz_sweetspot', 'biz_freshmart', 'biz_murugan_hw', 'biz_kanchi_silks', 'biz_annai_veg', 'biz_balaji_auto']
+const DEMO_BUSINESSES = ['biz_foodcorner', 'biz_sweetspot', 'biz_freshmart', 'biz_murugan_hw', 'biz_kanchi_silks', 'biz_annai_veg', 'biz_balaji_auto', 'biz_smart_mobiles']
 const SESSION_KEY = 'billpoodum.session'
 
 export const session = {
@@ -115,6 +124,11 @@ function permissionsOf(d: DB, user: User): Set<Permission> | 'all' {
   return new Set(role.permissions as Permission[])
 }
 
+/** Each bill line as billed, in paise: value (with its GST and its share of the bill discount) and GST — as the server stores. */
+function billedLines(o: Order, billing: BillingSettings) {
+  return splitLineTax(o.items, o.discount, billing, o.tax).map((l) => ({ value: Math.round((l.taxable + l.tax) * 100), tax: Math.round(l.tax * 100) }))
+}
+
 function requirePerm(d: DB, p: Permission) {
   const s = ctx()
   const user = d.users.find((u) => u.id === s.userId)
@@ -124,6 +138,14 @@ function requirePerm(d: DB, p: Permission) {
   return s
 }
 
+/** Any one of these permissions (as the server's anyPerm). */
+function requireAnyPerm(d: DB, list: Permission[]) {
+  const user = d.users.find((u) => u.id === ctx().userId)
+  const perms = user ? permissionsOf(d, user) : new Set<Permission>()
+  if (perms !== 'all' && !list.some((p) => perms.has(p))) throw new ApiError('You do not have permission to do this')
+}
+const CUSTOMER_READ: Permission[] = ['billing.create', 'orders.view', 'customers.manage', 'payments.view', 'payments.collect', 'reports.view']
+
 const hasPerm = (d: DB, p: Permission) => { const u = d.users.find((x) => x.id === ctx().userId); const perms = u ? permissionsOf(d, u) : new Set<Permission>(); return perms === 'all' || perms.has(p) }
 
 /**
@@ -131,6 +153,9 @@ const hasPerm = (d: DB, p: Permission) => { const u = d.users.find((x) => x.id =
  * (unless the running order already had exactly that discount / price), and a price is never above MRP.
  */
 function checkCounterRights(d: DB, draft: OrderDraft) {
+  // A discount can't be more than the bill (same as the server).
+  const subtotal = r2((Array.isArray(draft.items) ? draft.items : []).reduce((a, i) => a + lineTotal(i), 0))
+  if ((draft.discount ?? 0) > subtotal + 0.001) throw new ApiError(`Discount can’t be more than the bill (${biz(d).currencySymbol}${subtotal.toFixed(2)})`)
   const prev = draft.id ? mine(d.orders).find((o) => o.id === draft.id) : null
   const prevManual = prev ? r2(prev.discount - (prev.pointsValue ?? 0)) : 0
   if ((draft.discount ?? 0) > 0 && Math.abs(prevManual - draft.discount) > 0.001 && !hasPerm(d, 'billing.discount')) throw new ApiError('You don’t have permission to give a discount')
@@ -227,7 +252,11 @@ export interface OrderDraft {
   pointsToRedeem?: number
 }
 
-export interface PaymentInput { method: PaymentMethod; amount: number; reference?: string }
+export interface PaymentInput {
+  method: PaymentMethod; amount: number; reference?: string
+  /** Credit note with no customer: the staff checked the slip (needed to use it). */
+  confirmed?: boolean
+}
 
 function writeOrder(d: DB, draft: OrderDraft): Order {
   const s = ctx()
@@ -239,7 +268,9 @@ function writeOrder(d: DB, draft: OrderDraft): Order {
     const o = d.orders.find((x) => x.id === draft.id && x.businessId === s.businessId)
     if (!o) throw new ApiError('Order not found')
     if (o.status !== 'open') throw new ApiError('Only running orders can be edited')
-    Object.assign(o, { type: draft.type, tableId: draft.tableId, customerId: draft.customerId, items: draft.items, notes: draft.notes, ...totals, ...seller })
+    // Lines the kitchen already has that were cut or removed: a cancel ticket first, then the new "sent" counts (same as the server).
+    const items = b.modules.kitchen ? kitchenCuts(d, o, draft.items, s.userId) : draft.items
+    Object.assign(o, { type: draft.type, tableId: draft.tableId, customerId: draft.customerId, items, notes: draft.notes, ...totals, ...seller })
     if (draft.fulfilment) o.fulfilment = draft.fulfilment
     o.balance = r2(o.total - o.paid)
     touch(o, s.userId)
@@ -257,6 +288,47 @@ function writeOrder(d: DB, draft: OrderDraft): Order {
   return o
 }
 
+/** A kitchen ticket line, with the order line it is for (kept in the demo's data only, like the server's order_item_id). */
+type KotLine = KitchenTicket['items'][number] & { lineId?: string }
+
+/**
+ * Lines the kitchen already has that were cut or removed (same rules as the server): cancel what it is still making
+ * — sent − already cancelled, never below what was served or the new quantity — as one cancel ticket, then the lines'
+ * "sent" counts. A repeated edit cancels nothing twice. Returns the new lines.
+ */
+function kitchenCuts(d: DB, o: Order, next: OrderItem[], userId: string): OrderItem[] {
+  const b = d.businesses.find((x) => x.id === o.businessId)!
+  const cuts: { line: OrderItem; cancel: number; keep: number; isVeg: boolean }[] = []
+  for (const line of o.items) {
+    if (!(line.kotQty > 0)) continue
+    const now = next.find((i) => i.id === line.id)
+    if (now && now.qty >= line.kotQty) continue
+    let sent = 0, cancelled = 0, served = 0, isVeg = true
+    for (const k of d.kots) {
+      if (k.orderId !== o.id || k.status === 'cancelled') continue
+      for (const i of k.items as KotLine[]) {
+        if (i.lineId !== line.id) continue
+        if (i.qty > 0) { sent += i.qty; if (k.status === 'completed') served += i.qty; isVeg = i.isVeg } else cancelled += -i.qty
+      }
+    }
+    const keep = Math.max(now ? now.qty : 0, served)
+    const cancel = r2(sent - cancelled - keep)
+    if (cancel > 0) cuts.push({ line, cancel, keep, isVeg })
+  }
+  if (!cuts.length) return next
+  const table = d.tables.find((t) => t.id === o.tableId)
+  d.kots.push({
+    id: uid('kot_'), number: `KOT-${String(b.billing.nextKotNumber++).padStart(4, '0')}`,
+    businessId: o.businessId, branchId: o.branchId, orderId: o.id, orderNumber: o.number, orderType: o.type, tableLabel: table?.label ?? null,
+    items: cuts.map(({ line, cancel, isVeg }): KotLine => ({
+      name: line.name + (line.variantName ? ` (${line.variantName})` : '') + (line.addOns.length ? ` + ${line.addOns.map((a) => a.name).join(', ')}` : ''),
+      qty: -cancel, notes: line.notes, isVeg, lineId: line.id,
+    })),
+    status: 'new', statusAt: nowIso(), cancel: true, ...stamp(userId),
+  })
+  return next.map((i) => { const cut = cuts.find((x) => x.line.id === i.id); return cut ? { ...i, kotQty: cut.keep } : i })
+}
+
 function kitchenDelta(d: DB, o: Order, userId: string = ctx().userId): KitchenTicket | null {
   const b = d.businesses.find((x) => x.id === o.businessId)!
   const lines = o.items
@@ -268,9 +340,9 @@ function kitchenDelta(d: DB, o: Order, userId: string = ctx().userId): KitchenTi
     id: uid('kot_'), number: `KOT-${String(b.billing.nextKotNumber++).padStart(4, '0')}`,
     businessId: o.businessId, branchId: o.branchId, orderId: o.id, orderNumber: o.number, orderType: o.type,
     tableLabel: table?.label ?? null,
-    items: lines.map(({ i, p }) => ({
+    items: lines.map(({ i, p }): KotLine => ({
       name: i.name + (i.variantName ? ` (${i.variantName})` : '') + (i.addOns.length ? ` + ${i.addOns.map((a) => a.name).join(', ')}` : ''),
-      qty: r2(i.qty - i.kotQty), notes: i.notes, isVeg: p?.isVeg ?? true,
+      qty: r2(i.qty - i.kotQty), notes: i.notes, isVeg: p?.isVeg ?? true, lineId: i.id,
     })),
     status: 'new', statusAt: nowIso(), ...stamp(userId),
   }
@@ -304,6 +376,22 @@ function moveBatches(d: DB, p: Product, branchId: string, qty: number, batch: Ba
     if (left <= 0) break
     const take = Math.min(bt.qty, left)
     bt.qty = r2(bt.qty - take); left = r2(left - take); touch(bt, userId)
+  }
+}
+
+/**
+ * What a bill can still give back to stock, per product — what its sale took out, less what its cancel or returns
+ * gave back (same as the server): a bill that took nothing never adds stock back.
+ */
+function restorableIn(d: DB, orderId: string) {
+  const refs = new Set([orderId, ...d.returns.filter((r) => r.orderId === orderId).map((r) => r.id)])
+  const net = new Map<string, number>()
+  for (const m of d.stockMovements) if (m.refId && refs.has(m.refId)) net.set(m.productId, r2((net.get(m.productId) ?? 0) + m.qty))
+  const left = new Map<string, number>()
+  for (const [id, q] of net) if (q < 0) left.set(id, -q)
+  return {
+    /** Up to `qty` of this product (several lines of one item share what is left). */
+    take(productId: string, qty: number) { const have = left.get(productId) ?? 0, give = r2(Math.min(qty, have)); if (give <= 0) return 0; left.set(productId, r2(have - give)); return give },
   }
 }
 
@@ -400,6 +488,12 @@ function settle(d: DB, o: Order, pays: PaymentInput[]) {
   if (paidNow > r2(o.total - o.paid) + 0.001) throw new ApiError('Payment exceeds bill amount')
   const balance = r2(o.total - o.paid - paidNow)
   if (balance > 0 && !o.customerId) throw new ApiError('Select a customer to keep the balance as credit')
+  // Same rule as the server: a credit note pays only its own customer's bill; one with no customer needs confirming.
+  for (const p of real.filter((x) => x.method === 'credit_note')) {
+    const cn = mine(d.returns).find((r) => r.number.toUpperCase() === String(p.reference ?? '').trim().toUpperCase())
+    if (cn?.customerId && cn.customerId !== o.customerId) throw new ApiError(`Credit note ${cn.number} belongs to another customer — select that customer on the bill`)
+    if (cn && !cn.customerId && p.confirmed !== true) throw new ApiError(`Credit note ${cn.number} has no customer — check the slip and confirm`)
+  }
   if (o.pointsRedeemed && o.customerId) movePoints(d, o.customerId, 'redeem', -o.pointsRedeemed, { orderId: o.id, note: 'Used on bill' })
   for (const p of real) {
     if (p.method === 'credit_note') redeemCreditNote(d, p.reference ?? '', r2(p.amount))
@@ -550,9 +644,11 @@ export interface CustomerStats {
   lastPurchase: string | null
 }
 
-function customerStats(d: DB, customerId: string): CustomerStats {
-  const orders = mine(d.orders).filter((o) => o.customerId === customerId && o.status === 'completed')
-  const returned = mine(d.returns).filter((r) => r.customerId === customerId).reduce((a, r) => a + r.total, 0)
+/** `branches`: only bills of these branches (and returns of those bills) — a branch view's receivables; null = all. */
+function customerStats(d: DB, customerId: string, branches: Set<string> | null = null): CustomerStats {
+  const orders = mine(d.orders).filter((o) => o.customerId === customerId && o.status === 'completed' && (!branches || branches.has(o.branchId)))
+  const billIds = new Set(orders.map((o) => o.id))
+  const returned = mine(d.returns).filter((r) => r.customerId === customerId && (!branches || billIds.has(r.orderId))).reduce((a, r) => a + r.total, 0)
   return {
     totalPurchases: r2(orders.reduce((a, o) => a + o.total, 0) - returned),
     orderCount: orders.length,
@@ -846,7 +942,7 @@ function checkUsername(d: DB, raw: string, selfId?: string) {
   return u
 }
 function checkPassword(p: string) {
-  if (!p || p.length < 6) throw new ApiError('Password must be at least 6 characters')
+  if (!p || p.length < 8) throw new ApiError('Password must be at least 8 characters')
 }
 function checkBranches(n: number) {
   const v = Math.floor(n)
@@ -895,6 +991,17 @@ export type CustomerRow = ReturnType<typeof customerRow>
 
 export const api = {
   auth: {
+    /** Change your own password (demo: plain check of the current one). */
+    async changePassword(current: string, next: string) {
+      return tx((d) => {
+        const s = session.get()
+        const u = s && d.users.find((x) => x.id === s.userId)
+        if (!u || u.password !== current) throw new ApiError('Current password is wrong')
+        checkPassword(next)
+        u.password = next
+        return { token: '' }
+      })
+    },
     /** Customers sign in with the username the product admin gave them; staff can also use their mobile number. */
     async login(identifier: string, password: string) {
       const d = getDB()
@@ -990,6 +1097,8 @@ export const api = {
         if (patch.stickers) { try { patch = { ...patch, stickers: cleanStickers(patch.stickers, stickerSettings(b)) } } catch (e) { throw new ApiError((e as Error).message) } }
         if (patch.gstin !== undefined && cleanGstin(patch.gstin) !== cleanGstin(b.gstin)) { const err = gstinError(patch.gstin); if (err) throw new ApiError(err); patch = { ...patch, gstin: cleanGstin(patch.gstin) } }
         if (patch.stateCode && !GST_STATES[patch.stateCode]) throw new ApiError('Choose a state')
+        // The QR codes' web address: empty or http(s)://… only (as the server checks).
+        if (patch.qr && patch.qr.baseUrl !== undefined && !qrBaseUrlOk(patch.qr.baseUrl)) throw new ApiError(`Enter a web address starting with http:// or https:// (${QR_BASE_URL_MAX} characters at most)`)
         if (patch.loyalty) { try { patch = { ...patch, loyalty: cleanLoyalty(patch.loyalty, loyaltyOf(b)) } } catch (e) { throw new ApiError((e as Error).message) } }
         if ('logoUrl' in patch) { const { logoUrl: _l, ...rest } = patch; void _l; patch = rest } // changed only through setLogo
         // Settings → Modules sends what the customer sees: keep the shop's own choice for modules not released to it.
@@ -1117,6 +1226,21 @@ export const api = {
         return clone(br.printer)
       })
     },
+    /** Save one branch's weighing scale setup (same people as the printer). */
+    async saveScale(branchId: string, patch: Partial<BranchScale>) {
+      return tx((d) => {
+        const s = session.get()
+        const u = s && d.users.find((x) => x.id === s.userId)
+        const perms = u ? permissionsOf(d, u) : null
+        if (!u || !perms || (perms !== 'all' && !perms.has('settings.manage') && !perms.has('billing.create'))) throw new ApiError('You don’t have permission to change the weighing scale')
+        const br = mine(d.branches).find((b) => b.id === branchId)
+        if (!br || !allowedBranches(d, u).includes(br.id)) throw new ApiError('Branch not found')
+        const next = cleanScale(patch, cleanScale(br.scale ?? {}))
+        br.scale = { ...next, updatedAt: nowIso(), updatedBy: u.id }
+        audit(d, 'branch', br.id, 'update', `${br.name}: weighing scale ${next.enabled ? 'on' : 'off'}`)
+        return clone(br.scale)
+      })
+    },
     /** Save one branch's bill format. Owner / manager, or "Change bill format" for the branches the user works in. */
     async saveBillFormat(branchId: string, input: unknown) {
       return tx((d) => {
@@ -1179,7 +1303,7 @@ export const api = {
   },
 
   roles: {
-    async list() { return clone(mine(getDB().roles)) },
+    async list() { requireAnyPerm(getDB(), ['users.manage', 'settings.manage']); return clone(mine(getDB().roles)) },
     async save(role: Omit<Role, 'businessId' | 'id'> & { id?: string }) {
       return tx((d) => {
         const s = requirePerm(d, 'users.manage')
@@ -1208,7 +1332,13 @@ export const api = {
   },
 
   users: {
-    async list() { return clone(mine(getDB().users)) },
+    async list() {
+      const d = getDB()
+      requireAnyPerm(d, ['billing.create', 'orders.view', 'expenses.manage', 'users.manage', 'settings.manage', 'reports.view'])
+      // Contact details and login names only for those who manage staff (as the server).
+      const full = hasPerm(d, 'users.manage') || hasPerm(d, 'settings.manage')
+      return clone(mine(d.users).map((u) => (full ? u : { ...u, phone: '', email: '', username: undefined })))
+    },
     async save(u: Partial<User> & { name: string; phone: string; roleId: string }) {
       return tx((d) => {
         const s = requirePerm(d, 'users.manage')
@@ -1221,7 +1351,7 @@ export const api = {
         const phone = cleanPhone(u.phone, biz(d).defaultCountry, { required: canLogin ? 'Enter the mobile number (used to sign in)' : 'Enter the mobile number' })
         if (d.users.some((x) => x.phone === phone && x.id !== u.id)) throw new ApiError('Mobile number already used by another user')
         if (canLogin && !d.roles.some((r) => r.id === u.roleId && r.businessId === s.businessId)) throw new ApiError('Choose a role')
-        if (canLogin && (!existing || existing.canLogin === false) && !u.password) throw new ApiError('Enter a password (at least 6 characters)')
+        if (canLogin && (!existing || existing.canLogin === false) && !u.password) throw new ApiError('Enter a password (at least 8 characters)')
         if (existing) {
           Object.assign(existing, { name: u.name, phone, email: u.email ?? '', roleId: canLogin ? u.roleId : (u.roleId ?? ''), active: u.active ?? existing.active, canLogin })
           if (!canLogin) existing.password = ''
@@ -1285,6 +1415,16 @@ export const api = {
       const all = await this.list()
       const at = Math.max(0, Math.floor(Number(after) || 0))
       return { rows: all.slice(at, at + 300), next: at + 300 < all.length ? at + 300 : null }
+    },
+    /** One active product by barcode or SKU (the real server's fallback for a large shop's scan). */
+    async byBarcode(code: string) {
+      const s = String(code ?? '').trim()
+      return (await this.list()).find((p) => p.active && s && (p.barcode === s || p.sku === s)) ?? null
+    },
+    /** Full products by id (the real server's products.byIds; the demo's products are always full). */
+    async full(ids: string[]) {
+      const want = new Set((ids ?? []).map(String))
+      return (await this.list()).filter((p) => want.has(p.id))
     },
     async save(input: Partial<Product> & { name: string; openingBatch?: BatchInput }) {
       // Only compressed images (≤ 50 KB) are ever stored — whatever the client sends.
@@ -1457,15 +1597,18 @@ export const api = {
 
   customers: {
     async list() {
+      requireAnyPerm(getDB(), CUSTOMER_READ)
       const d = getDB()
       return clone(mine(d.customers).map((c) => ({ ...c, stats: customerStats(d, c.id) })))
     },    async one(id: string) {
+      requireAnyPerm(getDB(), CUSTOMER_READ)
       const d = getDB()
       const c = mine(d.customers).find((x) => x.id === id)
       return c ? clone({ ...c, stats: customerStats(d, c.id) }) : null
     },
 
     async history(customerId: string) {
+      requireAnyPerm(getDB(), ['customers.manage', 'orders.view'])
       const d = getDB()
       return clone({
         orders: mine(d.orders).filter((o) => o.customerId === customerId && o.status !== 'open').sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
@@ -1490,6 +1633,7 @@ export const api = {
     },
     /** Loyalty points history (newest first). */
     async points(customerId: string): Promise<PointsEntry[]> {
+      requireAnyPerm(getDB(), ['billing.create', 'customers.manage', 'orders.view'])
       const d = getDB()
       // Newest first; entries made in the same moment keep their real order (latest last added).
       return clone(mine(d.points).filter((r) => r.customerId === customerId).reverse().map(({ businessId: _b, remaining: _r, returnId: _x, ...e }) => e))
@@ -1532,6 +1676,7 @@ export const api = {
 
   orders: {
     async list(filter: { from?: Date; to?: Date; status?: Order['status'] | 'all'; limit?: number } = {}) {
+      requireAnyPerm(getDB(), ['dashboard.view', 'orders.view', 'reports.view'])
       const d = getDB()
       const list = here(d, d.orders).filter((o) => {
         if (filter.status && filter.status !== 'all' && o.status !== filter.status) return false
@@ -1544,6 +1689,7 @@ export const api = {
     },
     /** The Orders screen page by page — same rules as the server: 50 after `before`, totals for the whole filter. */
     async page(filter: { from: Date | string; to: Date | string; status?: Order['status'] | 'all'; type?: OrderType | 'all'; q?: string }, before?: Cursor | null, limit = 50) {
+      requireAnyPerm(getDB(), ['orders.view', 'billing.create'])
       const d = getDB()
       const n = Math.min(100, Math.max(1, Math.floor(Number(limit)) || 50))
       const from = new Date(filter.from), to = new Date(filter.to)
@@ -1563,9 +1709,11 @@ export const api = {
       })
     },
     async running() {
+      requireAnyPerm(getDB(), ['billing.create', 'orders.view', 'tables.manage', 'dashboard.view'])
       return clone(here(getDB(), getDB().orders).filter((o) => o.status === 'open').sort((a, b) => a.createdAt.localeCompare(b.createdAt)))
     },
     async get(id: string) {
+      requireAnyPerm(getDB(), ['orders.view', 'billing.create'])
       const d = getDB()
       const o = here(d, d.orders).find((x) => x.id === id)
       if (!o) throw new ApiError('Order not found')
@@ -1667,7 +1815,8 @@ export const api = {
             if (cn) cn.creditRemaining = r2(Math.min(cn.creditIssued, cn.creditRemaining + p.amount))
           }
         })
-        if (wasBilled) o.items.forEach((i) => moveStock(d, i.productId, 'return', i.qty, `Cancelled — ${o.invoiceNumber}`, o.id, o.branchId))
+        // Only what the bill's sale actually took out goes back (same as the server).
+        if (wasBilled) { const back = restorableIn(d, o.id); o.items.forEach((i) => moveStock(d, i.productId, 'return', back.take(i.productId, i.qty), `Cancelled — ${o.invoiceNumber}`, o.id, o.branchId)) }
         if (wasBilled && o.customerId) {
           if (o.pointsEarned) movePoints(d, o.customerId, 'cancel', -o.pointsEarned, { orderId: o.id, ref: o.invoiceNumber ?? '', note: `Bill ${o.invoiceNumber} cancelled`, cap: true })
           if (o.pointsRedeemed) movePoints(d, o.customerId, 'cancel', o.pointsRedeemed, { orderId: o.id, ref: o.invoiceNumber ?? '', note: `Bill ${o.invoiceNumber} cancelled — points back` })
@@ -1943,6 +2092,24 @@ export const api = {
     },
   },
 
+  dashboard: {
+    /** The Dashboard's Low stock and Expiring soon cards: the counts and the first 3 of each — same as the server. */
+    async alerts(): Promise<{ large: false } | {
+      large: true
+      low: { count: number; top: { id: string; name: string; emoji: string; imageUrl: string | null; thumbUrl: string | null; unit: string; stock: number }[] }
+      expiring: { count: number; top: { id: string; qty: number; daysLeft: number; product: { id: string; name: string; emoji: string; imageUrl: string | null; thumbUrl: string | null; unit: string } | null }[] }
+    }> {
+      requireAnyPerm(getDB(), ['inventory.manage', 'dashboard.view'])
+      const low = (await api.products.list()).filter((p) => p.active && p.trackStock && p.stock <= p.lowStockAt)
+      const soon = (await api.inventory.batches()).filter((b) => b.daysLeft !== null && b.daysLeft <= 7)
+      const item = (p: { id: string; name: string; emoji: string; imageUrl?: string | null; thumbUrl?: string | null; unit: string }) => ({ id: p.id, name: p.name, emoji: p.emoji, imageUrl: p.imageUrl ?? null, thumbUrl: p.thumbUrl ?? null, unit: p.unit })
+      return {
+        large: true,
+        low: { count: low.length, top: low.slice(0, 3).map((p) => ({ ...item(p), stock: p.stock })) },
+        expiring: { count: soon.length, top: soon.slice(0, 3).map((b) => ({ id: b.id, qty: b.qty, daysLeft: b.daysLeft!, product: b.product ? item({ ...b.product, thumbUrl: null }) : null })) },
+      }
+    },
+  },
   inventory: {
     /** Reports → Inventory: each item's stock moved in the last 7 days, by type — same as the server. */
     async weekSummary() {
@@ -1957,15 +2124,51 @@ export const api = {
       return clone([...out.values()])
     },
     /** Newest 3,000; `before` (the last one the screen has) → the next older ones — same as the server. */
-    async movements(productId?: string | null, before?: Cursor | null, limit?: number) {
+    async movements(productId?: string | null, before?: Cursor | null, limit?: number, withProduct?: boolean): Promise<StockMovement[]> {
+      requireAnyPerm(getDB(), ['inventory.manage'])
       const all = here(getDB(), getDB().stockMovements).filter((m) => !productId || m.productId === productId).sort(newestFirst((m) => m.createdAt))
-      return clone(afterCursor(all, (m) => m.createdAt, before).slice(0, Math.min(3000, Math.max(1, Math.floor(Number(limit)) || 3000))))
+      const page = afterCursor(all, (m) => m.createdAt, before).slice(0, Math.min(3000, Math.max(1, Math.floor(Number(limit)) || 3000)))
+      if (withProduct !== true) return clone(page)
+      const ps = mine(getDB().products)
+      return clone(page.map((m) => { const p = ps.find((x) => x.id === m.productId); return { ...m, product: p ? { id: p.id, name: p.name, emoji: p.emoji, unit: p.unit, imageUrl: p.imageUrl ?? null, thumbUrl: p.thumbUrl ?? null } : null } }))
+    },
+    /** Inventory's counts — same as the server (the screen then pages its list with `stock`). */
+    async summary(): Promise<{ large: false } | { large: true; tracked: number; low: number; out: number; value: number }> {
+      requireAnyPerm(getDB(), ['inventory.manage'])
+      const tracked = (await api.products.list()).filter((p) => p.trackStock && p.active)
+      return {
+        large: true, tracked: tracked.length, low: tracked.filter((p) => p.stock > 0 && p.stock <= p.lowStockAt).length, out: tracked.filter((p) => p.stock <= 0).length,
+        value: r2(tracked.reduce((a, p) => a + p.stock * p.costPrice, 0)),
+      }
+    },
+    /** The stock list, one page at a time — same as the server (`after` = "<sort>:<id>"). */
+    async stock(input?: { filter?: 'all' | 'low' | 'out'; q?: string; after?: string | null }): Promise<{ rows: Product[]; next: string | null }> {
+      requireAnyPerm(getDB(), ['inventory.manage'])
+      const s = String(input?.q ?? '').trim().toLowerCase()
+      const rows = (await api.products.list()).filter((p) => p.trackStock && p.active && p.name.toLowerCase().includes(s)
+        && (input?.filter === 'low' ? p.stock > 0 && p.stock <= p.lowStockAt : input?.filter === 'out' ? p.stock <= 0 : true))
+      return pageAfter(rows, input?.after, 50)
+    },
+    /** "Track stock for…": goods not tracked yet — same as the server. */
+    async untracked(input?: { q?: string; after?: string | null }): Promise<{ rows: Product[]; next: string | null }> {
+      requireAnyPerm(getDB(), ['inventory.manage'])
+      const s = String(input?.q ?? '').trim().toLowerCase()
+      return pageAfter((await api.products.list()).filter((p) => !p.trackStock && p.kind === 'goods' && p.active && p.name.toLowerCase().includes(s)), input?.after, 50)
+    },
+    /** The purchase bill search: up to 8 active goods by name, barcode or SKU — same as the server. */
+    async findProducts(text?: string): Promise<Product[]> {
+      requireAnyPerm(getDB(), ['inventory.manage'])
+      const s = String(text ?? '').trim().toLowerCase()
+      if (!s) return []
+      return (await api.products.list()).filter((p) => p.active && p.kind === 'goods' && (p.name.toLowerCase().includes(s) || p.barcode === s || p.sku.toLowerCase() === s)).slice(0, 8)
     },
     async adjust(productId: string, type: StockMovementType, qty: number, note: string, cost?: number, batch?: BatchInput) {
       return tx((d) => {
         requirePerm(d, 'inventory.manage')
         const p = mine(d.products).find((x) => x.id === productId)
         if (!p) throw new ApiError('Product not found')
+        // Only an adjustment goes either way (same as the server).
+        if (qty < 0 && type !== 'adjustment') throw new ApiError('Enter a quantity more than 0. To reduce stock, use Wastage, Damage or Adjustment.')
         if (!p.trackStock) p.trackStock = true
         const signed = type === 'purchase' || type === 'opening' || type === 'return' ? Math.abs(qty) : type === 'adjustment' ? qty : -Math.abs(qty)
         if (stockIn(p, [writeBranch(d)]) + signed < 0) throw new ApiError('Stock cannot go below zero')
@@ -1981,6 +2184,7 @@ export const api = {
     },
     /** Batches in the current view with days to expiry (negative = already expired). */
     async batches() {
+      requireAnyPerm(getDB(), ['inventory.manage', 'dashboard.view'])
       const d = getDB()
       const today = dateKey()
       const day = (k: string) => new Date(`${k}T00:00:00`).getTime()
@@ -2209,14 +2413,17 @@ export const api = {
   returns: {
     /** What can still be returned from a bill (quantity already returned is taken off). */
     async forOrder(orderId: string) {
+      requireAnyPerm(getDB(), ['orders.view', 'orders.cancel'])
       const d = getDB()
       const o = mine(d.orders).find((x) => x.id === orderId)
       if (!o) throw new ApiError('Bill not found')
       const done = mine(d.returns).filter((r) => r.orderId === orderId)
       const returned = (itemId: string) => done.reduce((a, r) => a + r.lines.filter((l) => l.orderItemId === itemId).reduce((x, l) => x + l.qty, 0), 0)
-      return clone({ returns: done, items: o.items.map((i) => ({ ...i, returned: returned(i.id), returnable: r2(i.qty - returned(i.id)) })), ratio: o.subtotal > 0 ? o.total / o.subtotal : 0 })
+      const billed = billedLines(o, biz(d).billing)
+      return clone({ returns: done, items: o.items.map((i, k) => ({ ...i, returned: returned(i.id), returnable: r2(i.qty - returned(i.id)), refundEach: i.qty > 0 ? billed[k].value / 100 / i.qty : 0 })), ratio: o.subtotal > 0 ? o.total / o.subtotal : 0 })
     },
     async list(limit = 200) {
+      requireAnyPerm(getDB(), ['orders.view', 'orders.cancel'])
       return clone(here(getDB(), getDB().returns).slice(-limit).reverse())
     },
     async creditNote(number: string) {
@@ -2231,23 +2438,27 @@ export const api = {
         const o = mine(d.orders).find((x) => x.id === input.orderId)
         if (!o || o.status !== 'completed' || !o.invoiceNumber) throw new ApiError('Only completed bills can be returned')
         const done = mine(d.returns).filter((r) => r.orderId === o.id)
-        const ratio = o.subtotal > 0 ? o.total / o.subtotal : 0
+        const billed = billedLines(o, b.billing)
         const lines: SaleReturnLine[] = []
+        let taxMinor = 0
         for (const l of input.lines) {
           if (!(l.qty > 0)) continue
           const it = o.items.find((x) => x.id === l.orderItemId)
           if (!it) throw new ApiError('That item isn’t on this bill')
           const already = done.reduce((a, r) => a + r.lines.filter((x) => x.orderItemId === it.id).reduce((y, x) => y + x.qty, 0), 0)
+            + lines.filter((x) => x.orderItemId === it.id).reduce((y, x) => y + x.qty, 0)
           if (l.qty > r2(it.qty - already) + 0.0001) throw new ApiError(`Only ${r2(it.qty - already)} of ${it.name} can be returned`)
-          lines.push({ orderItemId: it.id, productId: it.productId, name: it.variantName ? `${it.name} (${it.variantName})` : it.name, qty: l.qty, unit: it.unit, unitPrice: it.unitPrice, amount: r2(it.unitPrice * l.qty * ratio), restock: !!l.restock })
+          // This line's own value and GST (its rate, its share of the bill discount) — as the server works it out.
+          const bl = billed[o.items.indexOf(it)], lineMilli = Math.round(it.qty * 1000), beforeMilli = Math.round(already * 1000), nowMilli = Math.round(l.qty * 1000)
+          taxMinor += lineShare(bl.tax, lineMilli, beforeMilli, nowMilli)
+          lines.push({ orderItemId: it.id, productId: it.productId, name: it.variantName ? `${it.name} (${it.variantName})` : it.name, qty: l.qty, unit: it.unit, unitPrice: it.unitPrice, amount: lineShare(bl.value, lineMilli, beforeMilli, nowMilli) / 100, restock: !!l.restock })
         }
         if (!lines.length) throw new ApiError('Choose at least one item to return')
         // Whole rupees when the shop rounds its bills (but never more than what's left of the bill).
         const exact = lines.reduce((a, l) => a + l.amount, 0)
         const returnedBefore = done.reduce((a, r) => a + r.total, 0)
         const total = r2(Math.min(b.billing.roundOff ? Math.round(exact) : exact, o.total - returnedBefore))
-        const gross = lines.reduce((a, l) => a + l.unitPrice * l.qty, 0)
-        const tax = o.subtotal > 0 ? r2(o.tax * gross / o.subtotal) : 0
+        const tax = r2(taxMinor / 100)
         // A pending due on this bill is reduced first — nobody gets money back for something not paid for.
         const dueAdjusted = r2(Math.min(total, o.balance))
         const rest = r2(total - dueAdjusted)
@@ -2269,8 +2480,9 @@ export const api = {
           orderId: o.id, invoiceNumber: o.invoiceNumber, customerId: o.customerId, lines, total, tax, reason: input.reason, note: (input.note ?? '').trim().slice(0, 300),
           dueAdjusted, refunded, refundMethod: refunded ? (input.refundMethod ?? 'cash') : null, creditIssued, creditRemaining: creditIssued, ...stamp(s.userId),
         }
+        const back = restorableIn(d, o.id) // before this return is listed: what earlier returns gave back is counted
         d.returns.push(r)
-        for (const l of lines) if (l.restock) moveStock(d, l.productId, 'return', l.qty, `Returned — ${r.number} (${o.invoiceNumber})`, r.id, r.branchId)
+        for (const l of lines) if (l.restock) moveStock(d, l.productId, 'return', back.take(l.productId, l.qty), `Returned — ${r.number} (${o.invoiceNumber})`, r.id, r.branchId)
         if (o.customerId && o.pointsEarned) {
           const target = pointsForReturn(o.pointsEarned, o.total, r2(returnedBefore + total))
           const already = -d.points.filter((x) => x.orderId === o.id && x.kind === 'return').reduce((a, x) => a + x.points, 0)
@@ -2305,13 +2517,14 @@ export const api = {
     },
     async update(id: string, message: string, productIds: string[]) {
       return tx((d) => {
+        requirePerm(d, 'customers.manage')
         const c = mine(d.campaigns).find((x) => x.id === id)
         if (c) { c.message = message; c.productIds = productIds }
       })
     },
     async markSent(id: string, customerId: string) {
       return tx((d) => {
-        const s = ctx()
+        const s = requirePerm(d, 'customers.manage')
         const c = mine(d.campaigns).find((x) => x.id === id)
         if (!c) throw new ApiError('Campaign not found')
         if (!c.sends.some((x) => x.customerId === customerId)) c.sends.push({ customerId, at: nowIso(), by: s.userId })
@@ -2374,7 +2587,17 @@ export const api = {
         tables: !on || !b.modules.tables ? [] : d.tables.filter((t) => t.businessId === businessId && t.branchId === br.id).map((t) => ({ id: t.id, label: t.label })),
         branch: { id: br.id, name: br.name, address: br.address, phone: br.phone ?? '' },
         branchCount: d.branches.filter((x) => x.businessId === businessId).length,
+        /** The demo is a small shop: the whole menu comes at once (a large real shop's is paged — menuItems). */
+        large: false as boolean, next: null as string | null,
       })
+    },
+    /** A paged menu (over 150 active items), a page at a time (`cat`, name search `q`, `after`) — same as the server. */
+    async menuItems(businessId: string, branchId: string, input?: { cat?: string | null; q?: string | null; after?: string | null }): Promise<{ products: Product[]; next: string | null }> {
+      const m = await api.public.menu(businessId, branchId, null)
+      const s = String(input?.q ?? '').trim().toLowerCase()
+      const rows = m.products.filter((p) => (!input?.cat || p.categoryId === input.cat) && (!s || p.name.toLowerCase().includes(s)))
+      const page = pageAfter(rows, input?.after, 30)
+      return { products: page.rows, next: page.next }
     },
     async placeOrder(businessId: string, input: PublicOrderInput) {
       return dbTx((d) => {
@@ -2428,7 +2651,7 @@ export const api = {
         d.orders.push(o)
         if (qr.autoAccept) acceptQr(d, o, 'guest')
         d.auditLogs.push({ id: uid('aud_'), businessId, entity: 'order', entityId: o.id, action: 'qr_place', userId: 'guest', at: t, detail: `${o.number} ${input.type}` })
-        return { orderId: o.id, number: o.number }
+        return { orderId: o.id, number: o.number, trackCode: null as string | null } // demo: tracked by id
       })
     },
     /** Status for the customer's tracking screen — only that one order is exposed. */
@@ -2540,7 +2763,10 @@ export const api = {
     },
     async receivables() {
       const d = getDB()
-      return clone(mine(d.customers).map((c) => ({ customer: c, ...customerStats(d, c.id) })).filter((x) => x.outstanding > 0).sort((a, b) => b.outstanding - a.outstanding))
+      // Same as the server: the current view's bills; "All branches" with access to every branch = the whole business.
+      const view = scope(d)
+      const whole = ctx().branchId === ALL_BRANCHES && d.branches.filter((b) => b.businessId === ctx().businessId).every((b) => view.has(b.id))
+      return clone(mine(d.customers).map((c) => ({ customer: c, ...customerStats(d, c.id, whole ? null : view) })).filter((x) => x.outstanding > 0).sort((a, b) => b.outstanding - a.outstanding))
     },
   },
 

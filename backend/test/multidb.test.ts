@@ -38,7 +38,8 @@ test('two shops: own data, sign-in names unique across shops, delete removes eve
     assert.equal((await listProducts<unknown>(s)).length, 0) // shop A's product is not here
     // Staff of shop B can't take shop A's owner mobile number.
     const roles = await s.call<{ id: string }[]>('roles.list')
-    await assert.rejects(s.call('users.save', { name: 'Kumar', phone: '9876543210', roleId: roles[0].id, password: 'staff123' }), /already used/)
+    // A shop sees only a general message (L7: which other shop uses it is never told); the product admin's is detailed.
+    await assert.rejects(s.call('users.save', { name: 'Kumar', phone: '9876543210', roleId: roles[0].id, password: 'staff123' }), /can’t be used for a login/)
     const staff = await s.call<{ id: string }>('users.save', { name: 'Kumar', phone: '9876500002', roleId: roles[0].id, password: 'staff123' })
     // Changing a mobile number frees the old one (after the save) and the new one signs in.
     await s.call('users.save', { id: staff.id, name: 'Kumar', phone: '9876500003', roleId: roles[0].id })
@@ -138,7 +139,7 @@ test('secrets are encrypted at rest; migrations add up to the schema file', { sk
   const db = new TursoDb(drv)
   await db.insert('secrets', { owner_type: 2, business_id: '1', kind: 1, uniq_key: '2:1:1', value: 'EAAB-secret-token', last4: 'oken' })
   const [raw] = await db.sql('SELECT "value" FROM "secrets"')
-  assert.match(String(raw.value), /^v1:/)
+  assert.match(String(raw.value), /^v2:1:/) // key id 1, tied to its row (core/crypto.ts)
   assert.ok(!String(raw.value).includes('secret-token'))
   assert.equal((await db.first('secrets', { uniq_key: '2:1:1' }))!.value, 'EAAB-secret-token')
   // Running the migrations again does nothing; every table of the schema file exists.

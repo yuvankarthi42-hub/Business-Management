@@ -6,6 +6,11 @@ export interface Kv {
   get(key: string): Promise<string | null>
   set(key: string, value: string, ttlHours?: number): Promise<void>
   del(key: string): Promise<void>
+  /**
+   * Adds 1 and returns the new count (a missing or expired key starts at 1, kept for `ttlHours`). Atomic where the
+   * store allows it (memory, Turso), so parallel requests are all counted. 0 = the store failed (callers decide).
+   */
+  incr(key: string, ttlHours?: number): Promise<number>
 }
 
 /** In memory (local, tests, and the per-instance session cache with Turso). Oldest entries go first past `max`. */
@@ -19,6 +24,15 @@ export class MemoryKv implements Kv {
     while (this.m.size > this.max) this.m.delete(this.m.keys().next().value as string)
   }
   async del(k: string) { this.m.delete(k) }
+  async incr(k: string, ttlHours = 1) {
+    // Synchronous between the read and the write: no other request runs in between on this instance.
+    const x = this.m.get(k)
+    const live = x && x.exp >= Date.now()
+    const n = (live ? Number(x!.v) || 0 : 0) + 1
+    this.m.delete(k)
+    this.m.set(k, { v: String(n), exp: live ? x!.exp : Date.now() + ttlHours * 3_600_000 })
+    return n
+  }
 }
 
 interface SegmentLike {
@@ -32,4 +46,8 @@ export class CatalystKv implements Kv {
   async get(k: string) { try { const v = await this.seg.getValue(k); return v ?? null } catch { return null } }
   async set(k: string, v: string, ttlHours = 1) { try { await this.seg.put(k, v, ttlHours) } catch { /* cache is optional */ } }
   async del(k: string) { try { await this.seg.delete(k) } catch { /* cache is optional */ } }
+  /** Catalyst Cache has no atomic add: read + write (close enough for limits; the Turso setup is exact). */
+  async incr(k: string, ttlHours = 1) {
+    try { const n = (Number(await this.seg.getValue(k)) || 0) + 1; await this.seg.put(k, String(n), ttlHours); return n } catch { return 0 }
+  }
 }

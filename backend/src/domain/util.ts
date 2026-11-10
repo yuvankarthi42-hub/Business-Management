@@ -3,6 +3,7 @@ import { r2 } from '@/core/pricing'
 import type { ModuleKey } from '@/core/types'
 import { idBefore, type Cursor } from '@/core/paging'
 import * as E from '../../../server/catalyst/enums'
+import { amountError, qtyError } from '@/core/limits'
 import type { Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
 import type { TableName } from '../db/schema.gen'
@@ -160,6 +161,14 @@ export async function own(c: Ctx, table: TableName, id: string | null | undefine
   if (!r) throw new ApiError(what, 404, 'NOT_FOUND')
   return r
 }
+/** The signed-in user may work in this branch (a row with no branch belongs to the whole shop). */
+export const mayUseBranch = (c: Ctx, branchId: unknown) => branchId == null || branchId === '' || c.s.allowed.includes(String(branchId))
+/** A row looked up by id must also be in one of the user's branches (else "not found", like another shop's row). */
+export function assertBranch(c: Ctx, branchId: unknown, what = 'Not found') {
+  if (!mayUseBranch(c, branchId)) throw new ApiError(what, 404, 'NOT_FOUND')
+}
+/** The user can open every branch of the shop (owner, all-branch staff). */
+export const hasAllBranches = (c: Ctx) => c.s.allBranches.every((b) => c.s.allowed.includes(b.id))
 export const isId = (v: unknown): v is string => typeof v === 'string' && /^\d{1,20}$/.test(v)
 
 // ---------- the shop's own calendar day (the server runs in UTC) ----------
@@ -179,4 +188,17 @@ export function bizDayStart(c: Ctx, d = c.now) {
   const off = parts.find((x) => x.type === 'timeZoneName')?.value.match(/GMT([+-])(\d{2}):?(\d{2})?/)
   const mins = off ? (off[1] === '-' ? -1 : 1) * (Number(off[2]) * 60 + Number(off[3] ?? 0)) : 0
   return new Date(Date.parse(`${day}T00:00:00Z`) - mins * 60_000).toISOString()
+}
+
+/** A money amount from a request: a real number from 0 to ₹1 crore (`positive`: more than 0), rounded to paise. */
+export function money(v: unknown, label: string, opts: { positive?: boolean } = {}): number {
+  const err = amountError(v, opts)
+  if (err) throw new ApiError(`${label}: ${err.charAt(0).toLowerCase()}${err.slice(1)}`)
+  return Math.round(Number(v) * 100) / 100
+}
+/** A quantity for this unit: more than 0, whole unless the unit is sold in parts (kg, g, ltr, ml, mtr, ft, hr). */
+export function quantity(v: unknown, unit: string | null | undefined, label: string): number {
+  const err = qtyError(v, unit)
+  if (err) throw new ApiError(`${label}: ${err.charAt(0).toLowerCase()}${err.slice(1)}`)
+  return Math.round(Number(v) * 1000) / 1000
 }
