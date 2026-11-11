@@ -3,9 +3,11 @@
 //  1. Rate limits (atomic counters in the shared cache, keyed on the visitor's real address — core/clientIp.ts):
 //     all sign-ins from one address, and tries at one login from one address. Calls sent at the same moment are
 //     all counted, so a burst can't slip past.
-//  2. Wrong passwords per account: counted only AFTER a wrong password (never a right one), with one atomic
-//     database step (Turso: UPDATE … + 1 RETURNING; elsewhere a version check). Every 5th wrong try locks the
-//     account for a while that grows 1 → 5 → 15 minutes and stops there (never a long or permanent lock).
+//  2. Wrong passwords: counted only AFTER a wrong password (never a right one). Every 5th wrong try from one network
+//     address locks THAT address out of the account for a while that grows 1 → 5 → 15 minutes (never long or
+//     permanent) — so someone guessing elsewhere can't keep the owner out, even on a new device. Only a wide attack
+//     (WIDE_LOCK_AFTER wrong tries in WIDE_WINDOW_MIN minutes from any addresses together) locks the whole account
+//     (15 minutes). The account's total is still kept in the database (failed_logins), for the admin screens.
 //  3. The owner's own devices: a successful sign-in gets a device token from the server (32 random bytes). The app
 //     keeps it and sends it only with sign-ins (x-login-device). While the account is locked, a sign-in carrying a
 //     valid token for that same account still goes ahead — so a stranger guessing can't lock the owner out.
@@ -22,6 +24,10 @@ import { rateLimit } from './tracking'
 import { str } from './util'
 
 export const LOCK_AFTER = 5
+/** A guessing attack from many addresses at once: this many wrong tries in the window lock the whole account. */
+const WIDE_LOCK_AFTER = 25
+const WIDE_WINDOW_MIN = 15
+const WIDE_LOCK_MIN = 15
 /** Lock length for the 1st, 2nd, 3rd+ lock in a row (minutes). Capped, so a lock never lasts long. */
 const LOCK_STEPS = [1, 5, 15]
 const PER_ADDRESS = 30 // sign-ins a minute from one address (all logins)
@@ -66,9 +72,19 @@ export async function loginRateLimits(c: Ctx, kind: Kind, login: string) {
   await rateLimit(c, `login:${kind}:${hashKey(login)}`, PER_LOGIN, msg)
 }
 
-/** Minutes the account is still locked for this sign-in (0 = may try). A valid device token of this account skips the lock. */
+/** This sign-in's network address (the real visitor's — core/clientIp.ts), hashed: the key of its own lock. */
+const netOf = (c: Ctx) => hashKey(c.ip || 'unknown')
+const netCount = (kind: Kind, id: string, net: string) => `lnetn:${kind}:${id}:${net}`
+const netLock = (kind: Kind, id: string, net: string) => `lnet:${kind}:${id}:${net}`
+
+/**
+ * Minutes this sign-in is still locked out (0 = may try): its own network's lock for this account, or the whole
+ * account's lock (a wide attack). A valid device token of this account skips either.
+ */
 export async function lockedMinutes(c: Ctx, kind: Kind, row: Row, id = row.ROWID): Promise<number> {
-  const until = row.locked_until ? Date.parse(str(row.locked_until)) : 0
+  const account = row.locked_until ? Date.parse(str(row.locked_until)) : 0
+  const net = Number(await c.shared.get(netLock(kind, id, netOf(c)))) || 0
+  const until = Math.max(account, net)
   const left = until - Date.now()
   if (!(left > 0)) return 0
   if (await validDevice(c, kind, id, Number(row.token_version ?? 1))) return 0
@@ -82,10 +98,13 @@ export async function wrongWithDevice(c: Ctx, kind: Kind, id: string) {
 }
 
 /**
- * A wrong password: add 1 to the account's count in one atomic step and, on every 5th, lock it for a while.
- * Returns the new count. Parallel wrong tries are each counted (no lost updates).
+ * A wrong password: add 1 to the account's total (one atomic step, kept for the admin screens) and to this network's
+ * count for the account. Every 5th from this network locks this network out for a while; WIDE_LOCK_AFTER from any
+ * networks within WIDE_WINDOW_MIN lock the whole account. `account` = the id used by lockedMinutes. Returns the
+ * account's new total. Parallel wrong tries are each counted (no lost updates).
  */
-export async function recordWrongPassword(c: Ctx, db: Db, table: 'users' | 'platform_admins', row: Row): Promise<number> {
+export async function recordWrongPassword(c: Ctx, db: Db, table: 'users' | 'platform_admins', row: Row, account = row.ROWID): Promise<number> {
+  const kind: Kind = table === 'platform_admins' ? 'admin' : 'shop'
   let n: number
   if (db.sql) {
     // Table name is one of two constants (never input); the id is a parameter.
@@ -107,9 +126,17 @@ export async function recordWrongPassword(c: Ctx, db: Db, table: 'users' | 'plat
     n = Number(row.failed_logins ?? 0) + Math.max(1, extra)
     await db.update(table, row.ROWID, { failed_logins: n })
   }
-  if (n > 0 && n % LOCK_AFTER === 0) {
-    const minutes = LOCK_STEPS[Math.min(n / LOCK_AFTER, LOCK_STEPS.length) - 1]
-    await db.update(table, row.ROWID, { locked_until: new Date(Date.now() + minutes * 60_000).toISOString() })
+  // This network's lock: 1 → 5 → 15 minutes on every 5th wrong try from it (the count lasts a day).
+  const net = netOf(c)
+  const mine = await c.shared.incr(netCount(kind, account, net), 24)
+  if (mine > 0 && mine % LOCK_AFTER === 0) {
+    const minutes = LOCK_STEPS[Math.min(mine / LOCK_AFTER, LOCK_STEPS.length) - 1]
+    await c.shared.set(netLock(kind, account, net), String(Date.now() + minutes * 60_000), minutes / 60 + 1 / 60)
+  }
+  // A wide attack (many networks): the whole account, as before — devices that signed in before still get in.
+  const wide = await c.shared.incr(`lwide:${kind}:${account}:${Math.floor(Date.now() / (WIDE_WINDOW_MIN * 60_000))}`, WIDE_WINDOW_MIN / 60 + 1 / 60)
+  if (wide >= WIDE_LOCK_AFTER && (wide - WIDE_LOCK_AFTER) % LOCK_AFTER === 0) {
+    await db.update(table, row.ROWID, { locked_until: new Date(Date.now() + WIDE_LOCK_MIN * 60_000).toISOString() })
   }
   return n
 }
@@ -120,6 +147,9 @@ export async function recordWrongPassword(c: Ctx, db: Db, table: 'users' | 'plat
  */
 export async function issueDeviceToken(c: Ctx, kind: Kind, id: string, tokenVersion: number, rowId = id): Promise<string> {
   if (kind === 'admin') await c.shared.del(`fail:platform_admins:${rowId}`)
+  // Signed in: this network's wrong-try count and lock for the account start again (as the account's total does).
+  const net = netOf(c)
+  await Promise.all([c.shared.del(netCount(kind, id, net)), c.shared.del(netLock(kind, id, net))])
   const sent = c.loginDevice && DEVICE_TOKEN.test(c.loginDevice) ? tokenHash(c.loginDevice) : null
   // Drop the token this sign-in came with, and any made for an older password (token_version).
   let list = (await readDevices(c, kind, id)).filter((d) => d.h !== sent && Number(d.tv) === tokenVersion)

@@ -52,7 +52,8 @@ export const newTrackCode = () => randomBytes(16).toString('base64url')
 export async function trackRef(c: Ctx, businessId: string, ref: string): Promise<string> {
   const isCode = TRACK_CODE.test(ref)
   if (!isCode && !/^\d{1,20}$/.test(ref)) throw new ApiError('Order not found', 404)
-  const key = `trkref:${businessId}:${ref}`
+  // Codes and row ids are kept apart (a row id is only for old orders — see below; ids cached before were "trkref").
+  const key = `${isCode ? 'trkref' : 'trkid'}:${businessId}:${ref}`
   const hit = await c.shared.get(key)
   if (hit === '-') throw new ApiError('Order not found', 404)
   if (hit) return hit
@@ -60,11 +61,14 @@ export async function trackRef(c: Ctx, businessId: string, ref: string): Promise
   let id: string | null = null
   if (isCode) id = (await c.db.first('orders', { business_id: businessId, track_code: ref }))?.ROWID ?? null
   else {
+    // A row id finds only an old QR order that has no tracking code (a link from before the codes). Every order with
+    // a code is found by its code alone — so ids, which count up, can't be walked to see other customers' orders.
     const r = await c.db.first('orders', { ROWID: ref, business_id: businessId })
     const fresh = r && Date.parse(str(r.CREATEDTIME)) >= c.now.getTime() - TRACK_WINDOW_MS
-    id = r && fresh && Number(r.source) === E.OrderSource.qr ? r.ROWID : null
+    id = r && fresh && Number(r.source) === E.OrderSource.qr && !str(r.track_code) ? r.ROWID : null
   }
-  await c.shared.set(key, id ?? '-', id ? 24 : 1 / 12)
+  // An id is kept only briefly (its order may get a code meanwhile); a code for a day.
+  await c.shared.set(key, id ?? '-', id && isCode ? 24 : 1 / 12)
   if (!id) throw new ApiError('Order not found', 404)
   return id
 }

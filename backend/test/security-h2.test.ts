@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { withShop } from './fixtures'
 import { hashPassword } from '../src/core/passwords'
+import { createHash } from 'node:crypto'
 
 type S = Awaited<ReturnType<typeof withShop>>
 const code = (e: unknown) => (e as { code?: string }).code
@@ -14,6 +15,14 @@ async function staff(s: S, phone: string, password = 'Counter#2026') {
 }
 const login = (s: S, phone: string, password: string) => { s.setToken(null); return s.call<{ token: string }>('auth.login', phone, password) }
 const userRow = async (s: S, id: string) => s.db.get('users', id)
+/**
+ * This test machine's own lock / wrong-try count for an account (loginGuard.ts keeps them per network address in the
+ * shared cache; every test request comes from 127.0.0.1). Shop accounts are '<businessId>:<userId>', admins their id.
+ */
+const net = createHash('sha256').update('127.0.0.1').digest('hex').slice(0, 24)
+const lockKey = (kind: 'shop' | 'admin', account: string) => `lnet:${kind}:${account}:${net}`
+const countKey = (kind: 'shop' | 'admin', account: string) => `lnetn:${kind}:${account}:${net}`
+const lockMins = async (s: S, kind: 'shop' | 'admin', account: string) => { const v = Number(await s.env.shared!.get(lockKey(kind, account))) || 0; return v ? Math.round((v - Date.now()) / 60_000) : 0 }
 
 test('A right password is never counted as a wrong one; a right sign-in clears the count', async () => {
   const s = await withShop()
@@ -41,7 +50,8 @@ test('Wrong passwords sent at the same moment are all counted (atomic); a burst 
     const tried = codes.filter((c) => c === 'BAD_LOGIN').length
     assert.equal(tried, 10)
     assert.ok(Number(r!.failed_logins) >= 5 && Number(r!.failed_logins) <= 10, `counted ${r!.failed_logins}`)
-    assert.ok(r!.locked_until, 'locked after 5')
+    assert.ok((await lockMins(s, 'shop', `${s.businessId}:${u.id}`)) >= 1, 'this network locked out after 5')
+    assert.equal(r!.locked_until ?? null, null, 'one network never locks the account itself (the owner elsewhere still gets in)')
     assert.ok(!codes.includes('OK'))
   } finally { s.close() }
 })
@@ -50,21 +60,20 @@ test('Every 5th wrong try locks for a short, growing time (1 → 5 → 15 min, n
   const s = await withShop()
   try {
     const u = await staff(s, '9876500013')
+    const acct = `${s.businessId}:${u.id}`
     for (let i = 0; i < 5; i++) await assert.rejects(login(s, '9876500013', 'wrong-pass'), (e) => code(e) === 'BAD_LOGIN')
-    let r = await userRow(s, u.id)
-    const mins = (x: unknown) => Math.round((Date.parse(String(x)) - Date.now()) / 60_000)
-    assert.equal(mins(r!.locked_until), 1)
-    // While locked, even the right password is refused (this device never signed in) — and it isn't counted.
+    assert.equal(await lockMins(s, 'shop', acct), 1)
+    assert.equal((await userRow(s, u.id))!.locked_until ?? null, null, 'the account itself stays open')
+    // While locked, even the right password is refused from this network (this device never signed in) — and it isn't counted.
     await assert.rejects(login(s, '9876500013', 'Counter#2026'), (e) => code(e) === 'BAD_LOGIN')
     assert.equal(Number((await userRow(s, u.id))!.failed_logins), 5)
-    // The next lock level (simulate the first lock having ended, as the counter keeps growing).
-    await s.db.update('users', u.id, { locked_until: null, failed_logins: 9 })
+    // The next lock level (simulate the first lock having ended, as this network's count keeps growing).
+    await s.env.shared!.del(lockKey('shop', acct)); await s.env.shared!.set(countKey('shop', acct), '9', 24)
     await assert.rejects(login(s, '9876500013', 'wrong-pass'), (e) => code(e) === 'BAD_LOGIN')
-    r = await userRow(s, u.id)
-    assert.equal(mins(r!.locked_until), 5)
-    await s.db.update('users', u.id, { locked_until: null, failed_logins: 29 })
+    assert.equal(await lockMins(s, 'shop', acct), 5)
+    await s.env.shared!.del(lockKey('shop', acct)); await s.env.shared!.set(countKey('shop', acct), '29', 24)
     await assert.rejects(login(s, '9876500013', 'wrong-pass'), (e) => code(e) === 'BAD_LOGIN', 'rate limit not hit (different minute keys are not needed: 3 tries)')
-    assert.equal(mins((await userRow(s, u.id))!.locked_until), 15, 'capped at 15 minutes')
+    assert.equal(await lockMins(s, 'shop', acct), 15, 'capped at 15 minutes')
   } finally { s.close() }
 })
 
@@ -170,7 +179,7 @@ test('Admin sign-in: same protection; unknown names answer the same', async () =
     assert.ok(res.every((r) => r.status === 'rejected'))
     const a = await s.env.dbs.platform().then((p) => p.first('platform_admins', { username: 'admin1' }))
     assert.equal(Number(a!.failed_logins), 6, 'all 6 counted')
-    assert.ok(a!.locked_until)
+    assert.ok((await lockMins(s, 'admin', a!.ROWID)) >= 1, 'this network locked out after 5')
   } finally { s.close() }
 })
 
@@ -193,5 +202,26 @@ test('New passwords: 8+ characters, not common, not the mobile number; existing 
     // A password set before the rule (6 characters) keeps working.
     await s.db.update('users', u.id, { password_hash: await hashPassword('old123') })
     await login(s, '9876500015', 'old123')
+  } finally { s.close() }
+})
+
+test('A guessing attack from many networks (25 wrong tries in 15 min) locks the whole account; the owner’s own device still gets in', async () => {
+  const s = await withShop()
+  try {
+    const u = await staff(s, '9876500031')
+    const first = await signIn(s, '9876500031', 'Counter#2026', null) // the owner's device signs in once
+    const acct = `${s.businessId}:${u.id}`
+    // 24 wrong tries already came from other networks in this 15-minute window (simulated: all test calls share one address).
+    await s.env.shared!.set(`lwide:shop:${acct}:${Math.floor(Date.now() / (15 * 60_000))}`, '24', 1)
+    await assert.rejects(login(s, '9876500031', 'wrong-pass'), (e) => code(e) === 'BAD_LOGIN')
+    const r = await userRow(s, u.id)
+    const mins = Math.round((Date.parse(String(r!.locked_until)) - Date.now()) / 60_000)
+    assert.equal(mins, 15, 'the account is locked for 15 minutes')
+    // A new device (no token) waits, even from a network that made no wrong tries.
+    await s.env.shared!.del(countKey('shop', acct))
+    await assert.rejects(signIn(s, '9876500031', 'Counter#2026', null), (e) => code(e) === 'BAD_LOGIN')
+    // The owner's device that signed in before still gets in.
+    const again = await signIn(s, '9876500031', 'Counter#2026', first.deviceToken)
+    assert.match(again.token, /\S/)
   } finally { s.close() }
 })

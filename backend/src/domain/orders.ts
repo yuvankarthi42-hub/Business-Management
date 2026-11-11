@@ -299,15 +299,22 @@ export async function writeOrder(c: Ctx, draft: OrderDraft, opts: { qr?: { guest
   }
   if (!['counter', 'dine_in', 'takeaway', 'delivery'].includes(draft.type)) throw new ApiError('Choose the order type')
   const branchId = opts.qr ? opts.qr.branchId : null
-  if (draft.tableId) {
-    const t = await c.db.first('dining_tables', { ROWID: isId(draft.tableId) ? draft.tableId : '0', business_id: c.businessId })
+  // The table, the customer and (a new order) the same-request check don't depend on each other: they are started
+  // together (one round trip inside a transaction) and then checked in the same order as before.
+  const uuid = clientUuid(c, ':o')
+  const given = opts.customerRow
+  const givenOk = !!given && !!draft.customerId && given.ROWID === String(draft.customerId) && str(given.business_id) === c.businessId
+  const tableP = draft.tableId ? c.db.first('dining_tables', { ROWID: isId(draft.tableId) ? draft.tableId : '0', business_id: c.businessId }) : null
+  const customerP = draft.customerId && !givenOk ? c.db.first('customers', { ROWID: isId(draft.customerId) ? draft.customerId : '0', business_id: c.businessId }) : null
+  const againP = !draft.id ? c.db.first('orders', { client_uuid: uuid }) : null
+  for (const p of [tableP, customerP, againP]) p?.catch(() => {}) // each one's error is seen where it is awaited
+  if (tableP) {
+    const t = await tableP
     if (!t) throw new ApiError('Table not found')
   }
   let customer: Row | null = null
   if (draft.customerId) {
-    const given = opts.customerRow
-    customer = given && given.ROWID === String(draft.customerId) && str(given.business_id) === c.businessId ? given
-      : await c.db.first('customers', { ROWID: isId(draft.customerId) ? draft.customerId : '0', business_id: c.businessId })
+    customer = givenOk ? given! : await customerP
     if (!customer) throw new ApiError('Customer not found')
   }
   const list = draft.items.some((i) => i.priceTier === 'wholesale') ? await wholesaleList(c) : null
@@ -374,8 +381,7 @@ export async function writeOrder(c: Ctx, draft: OrderDraft, opts: { qr?: { guest
     return row.ROWID
   }
   // Same request sent twice (retry after a network drop): return the order already made.
-  const uuid = clientUuid(c, ':o')
-  const again = await c.db.first('orders', { client_uuid: uuid })
+  const again = await againP
   if (again) { if (str(again.business_id) !== c.businessId) throw new ApiError('Duplicate request', 409); if (opts.info) opts.info.existing = true; return again.ROWID }
   const items = await priceItems(c, draft.items, new Map(), c.businessId, branchId ? [branchId] : undefined, !!opts.trustedDiscount)
   discountWithin(c, discount, items, opts)
@@ -533,6 +539,10 @@ export async function settle(c: Ctx, orderId: string, pays: PaymentInput[], load
 
   // Bill number: the branch's own series when it has one, otherwise the business series.
   const br = c.session!.allBranches.find((b) => b.id === str(row.branch_id))
+  // The customer (GST state, loyalty) is read together with the bill number — unless points are used on this bill
+  // (their balance changes below, so it is read after that, as before).
+  const cuP = order.customerId && !order.pointsRedeemed ? c.db.first('customers', { ROWID: order.customerId, business_id: c.businessId }) : null
+  cuP?.catch(() => {}) // its error is seen where it is awaited
   const num = br?.invoicePrefix
     ? await nextNumber(c.db, c.businessId, br.id, 'invoice', { prefix: br.invoicePrefix, start: 10001 })
     : await nextNumber(c.db, c.businessId, null, 'invoice', { prefix: c.business.billing.invoicePrefix || 'INV-', start: DEFAULT_SEQ.invoice.start })
@@ -543,7 +553,20 @@ export async function settle(c: Ctx, orderId: string, pays: PaymentInput[], load
     ...(row.fulfilment != null ? { fulfilment: E.Fulfilment.delivered } : {}), updated_by: c.actorId,
   })
   if (!claimed) throw new ApiError('This bill was just changed on another device. Please check it and try again.', 409, 'CONFLICT')
-  try {
+  // Plain payments (no credit note, no points) don't depend on the stock: they are written alongside it below.
+  const plainPay = !order.pointsRedeemed && real.every((p) => p.method !== 'credit_note')
+  const payPlain = async () => {
+    try {
+      await Promise.all(real.map((p, k) => c.db.insert('payments', {
+        business_id: c.businessId, branch_id: str(row.branch_id), order_id: row.ROWID, customer_id: order.customerId, return_id: null, client_uuid: clientUuid(c, `:p${k}`),
+        kind: E.PaymentKind.sale, method: code(E.PayMethod, p.method), amount_minor: toMinor(r2(Number(p.amount))), reference: String(p.reference ?? '').slice(0, 80) || null, is_voided: false, created_by: c.actorId,
+      })))
+    } catch (e) {
+      await c.db.update('orders', row.ROWID, { status: E.OrderStatus.open, invoice_number: null, invoice_key: null, billed_at: null, paid_minor: toMinor(order.paid), balance_minor: toMinor(order.total - order.paid) })
+      throw e
+    }
+  }
+  if (!plainPay) try {
     // Loyalty points used on the bill (already taken off as a discount) — the balance is checked again here.
     if (order.pointsRedeemed && order.customerId) await movePoints(c, order.customerId, 'redeem', -order.pointsRedeemed, { orderId: row.ROWID, note: `Used on bill ${num.text}` })
     for (const [k, p] of real.entries()) {
@@ -559,14 +582,18 @@ export async function settle(c: Ctx, orderId: string, pays: PaymentInput[], load
     throw e
   }
   // Stock out, first-expiry-first-out for batch items (Inventory on only).
-  const prows = !moduleOn(c, 'inventory') ? [] : await selectIn(c, 'products', 'ROWID', order.items.map((i) => i.productId), { business_id: c.businessId })
-  const sold = order.items.map((i) => ({ i, p: prows.find((x) => x.ROWID === i.productId) })).filter((x): x is { i: OrderItem; p: Row } => !!x.p)
-  const moved = await moveStockMany(c, sold.map(({ i, p }) => ({ p: stockProduct(p), branchId: str(row.branch_id), qty: -i.qty, reason: 'sale' as const, opts: { note: `Sold — ${num.text}`, refType: 'order' as const, refId: row.ROWID } })))
-  const used = sold.flatMap(({ i }, k) => moved[k].batches.map((b) => ({ business_id: c.businessId, order_item_id: i.id, batch_id: b.batchId, qty_milli: b.qtyMilli })))
-  if (used.length) await c.db.insertMany('order_item_batches', used)
+  const stockOut = async () => {
+    const prows = !moduleOn(c, 'inventory') ? [] : await selectIn(c, 'products', 'ROWID', order.items.map((i) => i.productId), { business_id: c.businessId })
+    const sold = order.items.map((i) => ({ i, p: prows.find((x) => x.ROWID === i.productId) })).filter((x): x is { i: OrderItem; p: Row } => !!x.p)
+    const moved = await moveStockMany(c, sold.map(({ i, p }) => ({ p: stockProduct(p), branchId: str(row.branch_id), qty: -i.qty, reason: 'sale' as const, opts: { note: `Sold — ${num.text}`, refType: 'order' as const, refId: row.ROWID } })))
+    const used = sold.flatMap(({ i }, k) => moved[k].batches.map((b) => ({ business_id: c.businessId, order_item_id: i.id, batch_id: b.batchId, qty_milli: b.qtyMilli })))
+    if (used.length) await c.db.insertMany('order_item_batches', used)
+  }
+  if (plainPay) await Promise.all([payPlain(), stockOut()]) // payments start first, so they keep their order
+  else await stockOut()
   // GST: B2B (customer's GSTIN) and place of supply → IGST for another state; per-line value before GST for returns.
   const billing = c.business.billing
-  const cu = order.customerId ? await c.db.first('customers', { ROWID: order.customerId, business_id: c.businessId }) : null
+  const cu = cuP ? await cuP : order.customerId ? await c.db.first('customers', { ROWID: order.customerId, business_id: c.businessId }) : null
   const pos = cu ? customerStateOf({ gstin: strOrNull(cu.gstin), stateCode: strOrNull(cu.state_code) }) : null
   const igst = billing.taxEnabled && order.tax > 0 && isInterState(shopStateOf(c.business), pos)
   const split = splitLineTax(order.items, order.discount, billing, order.tax)

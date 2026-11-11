@@ -2,10 +2,10 @@
 // real backend (backend/): src/data/remote/ calls it with the same `api` shape, and src/data/index.ts picks one.
 // UI code never touches the DB directly.
 import { computeTotals, lineTotal, r2 } from '@/core/pricing'
-import { modulesFor, QR_BASE_URL_MAX, qrBaseUrlOk, qrSettings, setupDefaultsFor, templateFor } from '@/core/config'
+import { modulesFor, publicBilling, QR_BASE_URL_MAX, qrBaseUrlOk, qrSettings, setupDefaultsFor, templateFor } from '@/core/config'
 import { applySpecials, dateKey } from '@/core/specials'
-import { COUNTRIES, normalizePhone } from '@/core/phone'
-import { makeItem, priceOverrideError } from '@/core/orderItem'
+import { COUNTRIES, normalizePhone, phoneMatches } from '@/core/phone'
+import { itemSummary, makeItem, priceOverrideError } from '@/core/orderItem'
 import { cleanDetails, cleanStickers, stickerSettings } from '@/core/stickers'
 import { planDesign, planDiscount, type DesignInput, type DiscountInput } from '@/core/textile'
 import { buildGstReport, cleanGstin, cleanHsn, cleanPartyGst, customerStateOf, GST_STATES, gstinError, hsnError, hsnOf, isInterState, lineShare, monthRange, returnLines, shopStateOf, splitLineTax, type GstBill, type GstCreditNote, type GstPurchase } from '@/core/gst'
@@ -1411,7 +1411,8 @@ export const api = {
       return clone(mine(d.products).map((p): Product => ({ ...p, stock: p.trackStock ? stockIn(p, sc) : p.stock, nextExpiry: nextExpiry(p) })))
     },
     /** The same list in pages of 300 (the real server's products.page; the app's remote client joins them). */
-    async page(after = 0) {
+    // (`checkLarge`: the server's answer for a large shop; the demo shops are never large.)
+    async page(after = 0, _opts?: { checkLarge?: boolean }) {
       const all = await this.list()
       const at = Math.max(0, Math.floor(Number(after) || 0))
       return { rows: all.slice(at, at + 300), next: at + 300 < all.length ? at + 300 : null }
@@ -1600,7 +1601,22 @@ export const api = {
       requireAnyPerm(getDB(), CUSTOMER_READ)
       const d = getDB()
       return clone(mine(d.customers).map((c) => ({ ...c, stats: customerStats(d, c.id) })))
-    },    async one(id: string) {
+    },
+    /** Only these customers (≤ 100), as list() gives them — same as the server. */
+    async byIds(ids: string[]) {
+      requireAnyPerm(getDB(), CUSTOMER_READ)
+      const d = getDB()
+      const want = new Set((Array.isArray(ids) ? ids : []).map(String).slice(0, 100))
+      return clone(mine(d.customers).filter((c) => want.has(c.id)).map((c) => ({ ...c, stats: customerStats(d, c.id) })))
+    },
+    /** The customer picker's search (≤ 50): name contains the text, or the phone its digits — same as the server. */
+    async search(q: string) {
+      requireAnyPerm(getDB(), CUSTOMER_READ)
+      const d = getDB()
+      const s = String(q ?? '').trim().toLowerCase()
+      return clone(mine(d.customers).filter((c) => !s || c.name.toLowerCase().includes(s) || phoneMatches(c.phone, s)).slice(0, 50).map((c) => ({ ...c, stats: customerStats(d, c.id) })))
+    },
+    async one(id: string) {
       requireAnyPerm(getDB(), CUSTOMER_READ)
       const d = getDB()
       const c = mine(d.customers).find((x) => x.id === id)
@@ -1688,7 +1704,7 @@ export const api = {
       return clone(filter.limit ? list.slice(0, Math.max(1, Math.floor(filter.limit))) : list)
     },
     /** The Orders screen page by page — same rules as the server: 50 after `before`, totals for the whole filter. */
-    async page(filter: { from: Date | string; to: Date | string; status?: Order['status'] | 'all'; type?: OrderType | 'all'; q?: string }, before?: Cursor | null, limit = 50) {
+    async page(filter: { from: Date | string; to: Date | string; status?: Order['status'] | 'all'; type?: OrderType | 'all'; q?: string; summary?: boolean }, before?: Cursor | null, limit = 50) {
       requireAnyPerm(getDB(), ['orders.view', 'billing.create'])
       const d = getDB()
       const n = Math.min(100, Math.max(1, Math.floor(Number(limit)) || 50))
@@ -1704,7 +1720,9 @@ export const api = {
       const rest = afterCursor(all, (o) => o.createdAt, before)
       const rows = rest.slice(0, n)
       return clone({
-        rows, next: rest.length > n ? { at: rows[n - 1].createdAt, id: rows[n - 1].id } : null,
+        // The Orders screen asks for a summary: the lines as short text, not every line (same as the server).
+        rows: filter.summary === true ? rows.map((o): Order => ({ ...o, items: [], itemSummary: itemSummary(o.items) })) : rows,
+        next: rest.length > n ? { at: rows[n - 1].createdAt, id: rows[n - 1].id } : null,
         count: all.length, billed: r2(all.filter((o) => o.status === 'completed').reduce((a, o) => a + o.total, 0)),
       })
     },
@@ -2171,7 +2189,8 @@ export const api = {
         if (qty < 0 && type !== 'adjustment') throw new ApiError('Enter a quantity more than 0. To reduce stock, use Wastage, Damage or Adjustment.')
         if (!p.trackStock) p.trackStock = true
         const signed = type === 'purchase' || type === 'opening' || type === 'return' ? Math.abs(qty) : type === 'adjustment' ? qty : -Math.abs(qty)
-        if (stockIn(p, [writeBranch(d)]) + signed < 0) throw new ApiError('Stock cannot go below zero')
+        // Only taking stock away can't go below zero; adding is always allowed (same as the server).
+        if (signed < 0 && stockIn(p, [writeBranch(d)]) + signed < 0) throw new ApiError('Stock cannot go below zero')
         if (p.trackExpiry && signed > 0 && (type === 'purchase' || type === 'opening') && !batch?.expiry) throw new ApiError('Enter the expiry date for this batch')
         if (batch?.expiry && !/^\d{4}-\d{2}-\d{2}$/.test(batch.expiry)) throw new ApiError('Expiry date is not valid')
         moveStock(d, productId, type, signed, note, null, undefined, signed > 0 ? batch : undefined)
@@ -2232,6 +2251,11 @@ export const api = {
       if (session.get()?.support) throw new ApiError(SUPPORT_MESSAGE)
       // Screenshots stay readable: up to 1600 px / 200 KB (product photos are 800 px / 50 KB).
       try { return (await compressImage(file, { maxBytes: 200 * 1024, maxSide: 1600 })).url } catch (e) { throw new ApiError((e as Error).message) }
+    },
+    /** How many tickets have a reply not yet seen (the menu's Help & support badge) — same as the server. */
+    async unread() {
+      const d = getDB(); const s = ctx()
+      return d.tickets.filter((t) => t.businessId === s.businessId && t.unreadForCustomer).length
     },
     async mine() {
       const d = getDB(); const s = ctx()
@@ -2579,7 +2603,7 @@ export const api = {
       const products = !on ? [] : d.products.filter((p) => p.businessId === businessId && p.active && !(b.modules.inventory && p.trackStock && stockIn(p, [br.id]) <= 0))
       const sp = applySpecials(products, on ? specialsFor(d, businessId) : [])
       return clone({
-        business: { id: b.id, name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, address: b.address, phone: b.phone, defaultCountry: b.defaultCountry ?? 'IN', currencySymbol: b.currencySymbol, billing: b.billing, modules: b.modules, terminology: b.terminology, qr: qrSettings(b) },
+        business: { id: b.id, name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, address: b.address, phone: b.phone, defaultCountry: b.defaultCountry ?? 'IN', currencySymbol: b.currencySymbol, billing: publicBilling(b.billing), modules: b.modules, terminology: b.terminology, qr: qrSettings(b) },
         categories: !on ? [] : d.categories.filter((c) => c.businessId === businessId).sort((a, x) => a.sort - x.sort),
         products: sp.products.map(forCustomers),
         specials: sp.specials.map(forCustomers),
@@ -2713,6 +2737,18 @@ export const api = {
       const n = Math.floor(Number(opts?.top))
       return n >= 1 && n <= 500 && s.topProducts.length > n ? { ...s, topProducts: s.topProducts.slice(0, n) } : s
     },
+    /**
+     * The Dashboard in one request (same as the server): the chosen range (top N items), only the totals of the
+     * range it is compared with, and — for Today — yesterday's hourly sales.
+     */
+    async dashboard(from: Date, to: Date, prev: { from: Date; to: Date }, opts?: { top?: number; yesterday?: { from: Date; to: Date } }) {
+      const d = getDB()
+      const [s, before, yday] = await Promise.all([summarize(d, from, to), summarize(d, prev.from, prev.to), opts?.yesterday ? summarize(d, opts.yesterday.from, opts.yesterday.to) : null])
+      const n = Math.floor(Number(opts?.top))
+      const current = n >= 1 && n <= 500 && s.topProducts.length > n ? { ...s, topProducts: s.topProducts.slice(0, n) } : s
+      const { sales, orderCount, paymentsReceived, expenses, salary } = before
+      return { current, previous: { sales, orderCount, paymentsReceived, expenses, salary }, yesterdaySeries: yday ? yday.series : null }
+    },
     /** Best sellers of the last `days` finished days (the billing screen's quick picks). */
     async topProducts(days = 7, limit = 10) {
       const today = new Date(); today.setHours(0, 0, 0, 0)
@@ -2747,7 +2783,9 @@ export const api = {
       return buildGstReport({ month, shopState: shopStateOf(b), bills, creditNotes, purchases })
     },
     /** One summary per branch in the current view, plus live alerts — for the multi-branch dashboard. */
-    async byBranch(from: Date, to: Date) {
+    // `top`: the server sends each branch only the items that sell best across the branches; here every item is
+    // added up in the browser anyway, so the branch overview shows the same.
+    async byBranch(from: Date, to: Date, _opts?: { top?: number }) {
       const d = getDB()
       const sc = scope(d)
       const late = Date.now() - 20 * 60000

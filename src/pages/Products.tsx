@@ -3,6 +3,7 @@ import { fullProduct } from '@/features/fullProduct'
 import clsx from 'clsx'
 import { Boxes, FileUp, FolderPlus, IndianRupee, Layers, PackageSearch, Pencil, Percent, Plus, ScanLine, Shirt, Tag, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { nameError } from '@/core/limits'
 import { useApp, useData } from '@/app/AppContext'
 import { Badge, Button, Card, ChangeLink, Chips, EmptyState, Field, Input, Modal, MoreDetails, PageHeader, SearchInput, Select, Table, Td, Th, Toggle, VegMark, useAction } from '@/components/ui'
 import { productFormFor, templateFor, usesRetailPos } from '@/core/config'
@@ -136,6 +137,9 @@ export function ProductForm({ initial, onClose }: { initial: Partial<Product>; o
     categoryId: categories[0]?.id ?? null, taxRateId: null, sku: '', barcode: '', ...initial,
   })
   const set = <K extends keyof Product>(k: K, v: Product[K]) => setP((x) => ({ ...x, [k]: v }))
+  // The name is checked here first (red under the box) — Save sends nothing until it is right.
+  const [nameShown, setNameShown] = useState(false)
+  const nameErr = nameError(p.name, `the ${t('product').toLowerCase()} name`)
   const billing = me!.business.billing
   const ws = me!.business.category === 'retail' && wholesaleOn(billing)
   const gst = billing.taxRates.some((r) => /gst/i.test(r.name))
@@ -159,6 +163,7 @@ export function ProductForm({ initial, onClose }: { initial: Partial<Product>; o
   return (
     <Modal open onClose={onClose} size="lg" title={isNew ? `Add ${t('product')}` : `Edit ${initial.name}`}
       footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button onClick={async () => {
+        if (nameErr) { setNameShown(true); return }
         const ok = await run(async () => {
           // A large shop's light row (if its full product couldn't be read): never send its empty sizes / add-ons /
           // details — they would replace the real ones. Left out, the server keeps them.
@@ -175,7 +180,7 @@ export function ProductForm({ initial, onClose }: { initial: Partial<Product>; o
         <div className="grid gap-5 sm:grid-cols-[176px_1fr]">
           <div className="mx-auto sm:mx-0"><PhotoDrop imageUrl={p.imageUrl} onChange={(img) => setP((x) => ({ ...x, imageUrl: img?.imageUrl ?? null, thumbUrl: img?.thumbUrl ?? null }))} /></div>
           <div className="grid content-start gap-4">
-            <Field required label="Item name"><Input autoFocus value={p.name} onChange={(e) => set('name', e.target.value)} placeholder={form.namePlaceholder} /></Field>
+            <Field required label="Item name" error={nameShown && nameErr ? nameErr : undefined}><Input autoFocus value={p.name} aria-invalid={nameShown && !!nameErr} onChange={(e) => { set('name', e.target.value); setNameShown(true) }} onBlur={() => setNameShown(true)} placeholder={form.namePlaceholder} /></Field>
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <Field label={t('category')}>

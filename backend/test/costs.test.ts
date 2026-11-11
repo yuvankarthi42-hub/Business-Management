@@ -139,9 +139,11 @@ test('app start-up in one call (auth.boot) returns exactly what the separate rea
   const s = await withShop()
   try {
     await s.call('business.update', { modules: { billing: true, qrOrdering: true, tables: true, products: true }, qr: { orderTypes: ['takeaway'], autoAccept: false, baseUrl: '' } })
-    const boot = await s.call<{ me: unknown; support: unknown; qrPending: unknown; feed: { supported: boolean } }>('auth.boot')
+    const boot = await s.call<{ me: unknown; support?: unknown; supportUnread: number; qrPending: unknown; feed: { supported: boolean } }>('auth.boot')
     assert.deepEqual(boot.me, await s.call('auth.me'))
-    assert.deepEqual(boot.support, await s.call('support.mine'))
+    // The menu's Help & support badge: only the count (the tickets are read when that page opens).
+    assert.equal(boot.supportUnread, await s.call('support.unread'))
+    assert.equal(boot.support, undefined)
     assert.deepEqual(boot.qrPending, await s.call('qr.pending'))
     const feed = await s.call<{ supported: boolean; latest?: number }>('sync.changes', null)
     assert.equal(boot.feed.supported, feed.supported)

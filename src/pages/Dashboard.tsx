@@ -25,6 +25,22 @@ function previousRange(key: RangeKey) {
   return { from: new Date(cur.from.getTime() - len - 1), to: new Date(cur.from.getTime() - 1) }
 }
 
+type Range = { from: Date; to: Date }
+/** The Dashboard's sales figures. A server without reports.dashboard (an older one): the three summaries, as before. */
+async function loadDashboard(key: RangeKey, cur: Range, prev: Range) {
+  const yesterday = key === 'today' ? rangeFor('yesterday') : undefined
+  try {
+    return await api.reports.dashboard(cur.from, cur.to, prev, { ...TOP, yesterday })
+  } catch (e) {
+    if ((e as { code?: string }).code !== 'NOT_FOUND') throw e
+    const [current, previous, y] = await Promise.all([
+      api.reports.summary(cur.from, cur.to, TOP), api.reports.summary(prev.from, prev.to, TOP),
+      yesterday ? api.reports.summary(yesterday.from, yesterday.to, TOP) : null,
+    ])
+    return { current, previous, yesterdaySeries: y ? y.series : null }
+  }
+}
+
 function Delta({ cur, prev, label, invert }: { cur: number; prev: number; label: string; invert?: boolean }) {
   const d = pctChange(cur, prev)
   const good = invert ? d <= 0 : d >= 0
@@ -42,10 +58,10 @@ export default function Dashboard() {
   // Stable per range so child queries don't refetch on every render.
   const cur = useMemo(() => rangeFor(range), [range])
   const prev = useMemo(() => previousRange(range), [range])
-  // The dashboard shows the top 5 items: only those come back (not every item sold in the range).
-  const { data: s } = useData(() => api.reports.summary(cur.from, cur.to, TOP), [range])
-  const { data: p } = useData(() => api.reports.summary(prev.from, prev.to, TOP), [range])
-  const { data: y } = useData(() => (range === 'today' ? api.reports.summary(rangeFor('yesterday').from, rangeFor('yesterday').to, TOP) : Promise.resolve(null)), [range])
+  // One request (reports.dashboard): this range with only the top 5 items, the totals it is compared with, and —
+  // for Today — yesterday's hourly sales.
+  const { data: dash } = useData(() => loadDashboard(range, cur, prev), [range])
+  const s = dash?.current, p = dash?.previous, y = dash ? { series: dash.yesterdaySeries ?? [] } : undefined
   const { data: running = [] } = useData(() => api.orders.running())
   const { data: kots = [] } = useData(() => (mod('kitchen') ? api.kitchen.list() : Promise.resolve([])))
   // The Low stock and Expiring soon cards come ready from the server (counts + first 3): the product list and batches

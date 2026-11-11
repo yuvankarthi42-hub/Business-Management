@@ -25,6 +25,7 @@ import { UsePoints } from '@/features/loyalty/Points'
 import { PriceEditModal } from '@/features/PriceEdit'
 import { QuickAddModal } from './QuickAdd'
 import { WeightModal } from './WeightModal'
+import { useCustomer, useCustomerLookup } from '@/features/customerLookup'
 
 interface HeldBill { id: string; at: string; items: OrderItem[]; customerId: string | null; type: OrderType; discount: number; salespersonId?: string | null }
 
@@ -72,7 +73,9 @@ export default function SuperBilling() {
   // A saved (open) order loaded into the bill — paying it bills that same order.
   const [order, setOrder] = useState<{ id: string; number: string } | null>(null)
   const { data: running = [] } = useData(() => api.orders.running().then((r) => r.filter((o) => o.qrStatus !== 'pending')))
-  const { data: customers = [] } = useData(() => api.customers.list())
+  // Only the bill's customer (price list, points) and the saved orders' customers are read — not every customer.
+  const billCustomer = useCustomer(customerId)
+  const customerOf = useCustomerLookup(running.map((o) => o.customerId))
   const [qtyDraft, setQtyDraft] = useState<Record<string, string>>({})
   const [scanFocused, setScanFocused] = useState(true)
   // Textile counters: who showed the customer the sarees (commission goes to them).
@@ -87,7 +90,8 @@ export default function SuperBilling() {
   // Same rules as the server: wholesale prices need "Change item price" (or a wholesale customer, set automatically);
   // counter salespeople (no app login) or yourself — another app user needs "Change item price" / "Business settings".
   const pickAnySeller = can('billing.price') || can('settings.manage')
-  useEffect(() => { if (wsOn) setTier(customers.find((c) => c.id === customerId)?.priceTier ?? 'retail') }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
+  // The customer's price list once they are read (no customer: retail).
+  useEffect(() => { if (wsOn && billCustomer !== undefined) setTier(billCustomer?.priceTier ?? 'retail') }, [customerId, billCustomer === undefined]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { cart.setPoints(0) }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
   const firstTier = useRef(true)
   useEffect(() => {
@@ -413,7 +417,7 @@ export default function SuperBilling() {
       <aside className="flex w-full shrink-0 flex-col gap-3 border-t border-slate-200 bg-white p-4 lg:w-[340px] lg:border-l lg:border-t-0">
         {types.length > 1 && <Segmented size="sm" block value={type} onChange={setType} options={types.map((x) => ({ value: x, label: x === 'counter' ? 'Counter' : isSupermarket(me!.business) ? 'Home delivery' : 'Delivery' }))} />}
         <div ref={customerRef}><CustomerPicker value={customerId} onChange={setCustomerId} /></div>
-        <UsePoints customer={customers.find((c) => c.id === customerId)} billTotal={cart.totalBeforePoints} points={cart.points} onChange={cart.setPoints} />
+        <UsePoints customer={billCustomer ?? undefined} billTotal={cart.totalBeforePoints} points={cart.points} onChange={cart.setPoints} />
         {textile && sellers.length > 1 && (
           <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 focus-within:border-brand-500">
             <UserRound className="h-4 w-4 shrink-0 text-slate-400" />
@@ -484,7 +488,7 @@ export default function SuperBilling() {
       <Drawer open={ordersOpen} onClose={() => setOrdersOpen(false)} title="Saved orders" subtitle="Home delivery, pickup and Take Order — open one to bill it">
         <ul className="divide-y divide-slate-100">
           {running.map((o) => {
-            const c = customers.find((x) => x.id === o.customerId)
+            const c = customerOf(o.customerId)
             return (
               <li key={o.id}>
                 <button onClick={() => openOrder(o.id)} className={clsx('flex w-full items-center gap-3 px-5 py-3 text-left hover:bg-slate-50', order?.id === o.id && 'bg-brand-50')}>

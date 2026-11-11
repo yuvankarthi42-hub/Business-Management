@@ -148,6 +148,10 @@ const UPSERT_STOCK = `INSERT INTO "branch_stock" ("business_id", "branch_id", "p
 ON CONFLICT ("uniq_key") DO UPDATE SET "qty_milli" = "qty_milli" + excluded."qty_milli", "row_version" = "row_version" + 1, "updated_at" = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 RETURNING "qty_milli"`
 
+/** A history row whose balance is the item's stock right after the change before it (same request). */
+const INSERT_MOVEMENT = `INSERT INTO "stock_movements" ("business_id", "branch_id", "product_id", "batch_id", "reason", "qty_milli", "balance_milli", "ref_type", "ref_id", "note", "created_by")
+VALUES (?, ?, ?, NULL, ?, ?, (SELECT "qty_milli" FROM "branch_stock" WHERE "uniq_key" = ?), ?, ?, ?, ?)`
+
 /**
  * Many stock changes (one bill): same result as moveStock() for each, in order. On SQL databases the branch
  * stock of every plain item changes in one round trip and the history rows go in one insert — this is what
@@ -160,13 +164,17 @@ export async function moveStockMany(c: Ctx, moves: StockMove[]) {
   const fastIdx = new Set(fast.map((x) => x.i))
   for (const [i, m] of moves.entries()) if (!fastIdx.has(i)) out[i] = await moveStock(c, m.p, m.branchId, m.qty, m.reason, m.opts)
   if (!fast.length) return out
-  const results = await c.db.sqlMany!(fast.map(({ m }) => ({ sql: UPSERT_STOCK, args: [Number(c.businessId), Number(m.branchId), Number(m.p.id), toMilli(m.qty), `${m.branchId}:${m.p.id}`] })))
-  const balances = results.map((r) => Number(r[0]?.qty_milli ?? 0))
-  await c.db.insertMany('stock_movements', fast.map(({ m }, k) => ({
-    business_id: c.businessId, branch_id: m.branchId, product_id: m.p.id, batch_id: null,
-    reason: code(E.StockReason, m.reason), qty_milli: toMilli(m.qty), balance_milli: balances[k],
-    ref_type: m.opts?.refType ? refTypes[m.opts.refType] : null, ref_id: m.opts?.refId ?? null, note: (m.opts?.note ?? '').slice(0, 255), created_by: c.actorId,
-  })))
+  // One round trip: each line's stock change, then its history row with the balance it just left (read in the same
+  // request, so a second line of the same item gets its own balance, as when they were sent one by one).
+  const actor = c.actorId ? Number(c.actorId) : null
+  const results = await c.db.sqlMany!(fast.flatMap(({ m }) => {
+    const key = `${m.branchId}:${m.p.id}`
+    return [
+      { sql: UPSERT_STOCK, args: [Number(c.businessId), Number(m.branchId), Number(m.p.id), toMilli(m.qty), key] },
+      { sql: INSERT_MOVEMENT, args: [Number(c.businessId), Number(m.branchId), Number(m.p.id), code(E.StockReason, m.reason), toMilli(m.qty), key, m.opts?.refType ? refTypes[m.opts.refType] : null, m.opts?.refId ? Number(m.opts.refId) : null, (m.opts?.note ?? '').slice(0, 255), actor] },
+    ]
+  }))
+  const balances = fast.map((_, k) => Number(results[k * 2][0]?.qty_milli ?? 0))
   fast.forEach(({ m, i }, k) => { const balance = fromMilli(balances[k]); out[i] = { balance, batches: [] }; c.addStock(m.p.id, m.branchId, balance, fromMilli(toMilli(m.qty))) })
   return out
 }

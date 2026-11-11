@@ -93,7 +93,8 @@ export function UserMenu({ onDark }: { onDark?: boolean }) {
   const nav = useNavigate()
   const loc = useLocation()
   // Replies from the Kadai Kalanjiyam team that this shop hasn't read yet.
-  const { data: tickets = [] } = useData(() => (me && !me.support ? api.support.mine() : Promise.resolve([])), [me?.business.id])
+  // (Only the count is read — the tickets themselves when the Help & support page opens.)
+  const { data: unread = 0 } = useData(() => (me && !me.support ? api.support.unread() : Promise.resolve(0)), [me?.business.id])
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -102,7 +103,6 @@ export function UserMenu({ onDark }: { onDark?: boolean }) {
     return () => document.removeEventListener('mousedown', h)
   }, [])
   if (!me) return null
-  const unread = tickets.filter((t) => t.unreadForCustomer).length
   return (
     <div className="relative" ref={ref}>
       <button onClick={() => setOpen(!open)} className={clsx('flex items-center gap-2.5 rounded-lg py-1 pl-1 pr-2', onDark ? 'hover:bg-white/10' : 'hover:bg-slate-100')}>

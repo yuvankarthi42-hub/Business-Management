@@ -15,6 +15,7 @@ import { CancelOrderModal } from './Tables'
 import { BillReturns, ReturnModal } from '@/features/Returns'
 import { formatPhone } from '@/core/phone'
 import { Pager, useServerPages } from '@/components/Pager'
+import { useCustomerLookup } from '@/features/customerLookup'
 
 export const statusBadge = (o: Order): { tone: Tone; label: string } =>
   o.status === 'cancelled' ? { tone: 'red', label: 'Cancelled' }
@@ -41,11 +42,13 @@ function OrdersList({ toggle }: { toggle?: React.ReactNode }) {
   const [search, setSearch] = useState('')
   useEffect(() => { const id = setTimeout(() => setSearch(q.trim()), 300); return () => clearTimeout(id) }, [q])
   // 50 bills a page from the server; status, type and search are applied there, totals cover the whole filter.
-  const filter = { from: r.from, to: r.to, status, type, q: search }
+  // summary: each bill's lines come as short text (opening a bill reads it in full).
+  const filter = { from: r.from, to: r.to, status, type, q: search, summary: true }
   const { data: orders, rows: list, p: pg } = useServerPages((before) => api.orders.page(filter, before), [range, status, type, search])
-  const { data: customers = [] } = useData(() => api.customers.list())
+  // Only the customers of the bills on this page (not every customer).
+  const customerOf = useCustomerLookup(list.map((o) => o.customerId))
   const { data: tables = [] } = useData(() => (mod('tables') ? api.tables.list() : Promise.resolve([])), [mod('tables')])
-  const cname = (id: string | null) => customers.find((c) => c.id === id)?.name
+  const cname = (id: string | null) => customerOf(id)?.name
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader title={t('order', true)} subtitle={`${orders?.count ?? 0} ${t('order', true).toLowerCase()} · ${money(orders?.billed ?? 0)} billed`}
@@ -74,7 +77,7 @@ function OrdersList({ toggle }: { toggle?: React.ReactNode }) {
                     <Td className="whitespace-nowrap text-slate-500">{range === 'today' ? fmtTime(o.createdAt) : fmtDateTime(o.createdAt)}</Td>
                     <Td className="whitespace-nowrap">{ORDER_TYPE_LABEL[o.type]}{o.tableId && <span className="text-slate-400"> · {tables.find((x) => x.id === o.tableId)?.label}</span>}</Td>
                     <Td className="hidden md:table-cell">{cname(o.customerId) ?? <span className="text-slate-400">Walk-in</span>}</Td>
-                    <Td className="hidden max-w-[240px] truncate text-slate-500 lg:table-cell">{o.items.map((i) => `${i.qty}× ${i.name}`).join(', ')}</Td>
+                    <Td className="hidden max-w-[240px] truncate text-slate-500 lg:table-cell">{o.itemSummary ?? o.items.map((i) => `${i.qty}× ${i.name}`).join(', ')}</Td>
                     <Td className="text-right font-semibold tabular">{money(o.total)}</Td>
                     <Td><Badge tone={b.tone}>{b.label}</Badge></Td>
                   </tr>

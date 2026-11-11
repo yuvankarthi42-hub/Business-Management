@@ -20,7 +20,7 @@ import { storeImage } from './catalog'
 import { loadRoles, loadUsers, payColumns, setUserBranches } from '../domain/people'
 import { saveUserWithLogins, syncBranchCount, syncOwner } from '../domain/directory'
 import { bumpEpoch } from '../domain/session'
-import { audit, code, E, getSetting, isId, keyPart, own, putSetting, readSequence, setSequence, str, toBp, type SeqName } from '../domain/util'
+import { audit, code, E, getSetting, isId, keyPart, own, putSetting, readSequence, setSequence, str, textArg, toBp, type SeqName } from '../domain/util'
 
 export function cleanPhone(input: string | null | undefined, iso: string | undefined, required?: string) {
   let v: string | null
@@ -150,11 +150,12 @@ define('business', {
     const b = c.business
     if (patch.defaultCountry && !COUNTRIES.some((x) => x.iso === patch.defaultCountry)) throw new ApiError('Unknown country')
     const row: Record<string, string | number | null> = {}
-    if (patch.name !== undefined) { if (!patch.name.trim()) throw new ApiError('Enter your business name'); row.name = patch.name.trim().slice(0, 150) }
+    // Text fields are read as text (a number as its digits; an object or list → 400), never trusted to be strings.
+    if (patch.name !== undefined) { const name = textArg(patch.name).trim(); if (!name) throw new ApiError('Enter your business name'); row.name = name.slice(0, 150) }
     if (patch.category !== undefined) row.category = code(E.BusinessCategory, patch.category)
     if (patch.subType !== undefined) row.sub_type = String(patch.subType).slice(0, 60)
-    if (patch.address !== undefined) row.address = patch.address.slice(0, 255)
-    if (patch.email !== undefined) row.email = patch.email.trim().slice(0, 150) || null
+    if (patch.address !== undefined) row.address = textArg(patch.address).slice(0, 255)
+    if (patch.email !== undefined) row.email = textArg(patch.email).trim().slice(0, 150) || null
     if (patch.gstin !== undefined && cleanGstin(patch.gstin) !== cleanGstin(b.gstin)) {
       // Checked only when it changes, so a profile with an older GSTIN can still be saved.
       const err = gstinError(patch.gstin)
@@ -162,9 +163,9 @@ define('business', {
       row.gstin = cleanGstin(patch.gstin) || null
     }
     if (patch.defaultCountry !== undefined) row.country_code = patch.defaultCountry
-    if (patch.currency !== undefined) row.currency_code = patch.currency.slice(0, 3)
-    if (patch.currencySymbol !== undefined) row.currency_symbol = patch.currencySymbol.slice(0, 5)
-    if (patch.timezone !== undefined) row.timezone = patch.timezone.slice(0, 40)
+    if (patch.currency !== undefined) row.currency_code = textArg(patch.currency).slice(0, 3)
+    if (patch.currencySymbol !== undefined) row.currency_symbol = textArg(patch.currencySymbol).slice(0, 5)
+    if (patch.timezone !== undefined) row.timezone = textArg(patch.timezone).slice(0, 40)
     if (patch.phone !== undefined) row.phone = cleanPhone(patch.phone, patch.defaultCountry ?? b.defaultCountry) || null
     if (patch.terminology) await putSetting(c.db, b.id, 'terminology', patch.terminology, c.userId)
     if (patch.modules) await putSetting(c.db, b.id, 'modules', await keepHiddenModules(c, patch.modules), c.userId)
@@ -219,7 +220,7 @@ define('business', {
     const probe = { category: input.category, subType: input.subType }
     const defaults = setupDefaultsFor(probe)
     const modules = { ...input.modules, ...defaults.modules }
-    await c.platform.update('businesses', c.businessId, { name: input.name.trim().slice(0, 150), category: code(E.BusinessCategory, input.category), sub_type: String(input.subType).slice(0, 60) })
+    await c.platform.update('businesses', c.businessId, { name: textArg(input.name).trim().slice(0, 150), category: code(E.BusinessCategory, input.category), sub_type: String(input.subType).slice(0, 60) })
     await putSetting(c.db, c.businessId, 'modules', modules, c.userId)
     await putSetting(c.db, c.businessId, 'terminology', input.terminology, c.userId)
     // The main branch starts with the bill layout we set up for the shop's type (a saved one is kept).

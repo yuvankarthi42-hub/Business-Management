@@ -5,7 +5,7 @@ import { subscriptionState, DEACTIVATED_MESSAGE, READ_ONLY_MESSAGE } from '@/cor
 import { adminCan, ADMIN_ROLES, type AdminPermission } from '@/core/adminRoles'
 import type { Databases } from '../db/databases'
 import { memoized, scoped } from '../db/scoped'
-import type { Db } from '../db/types'
+import type { Db, WriteOp } from '../db/types'
 import type { Epochs } from './epochs'
 import type { Kv } from './kv'
 import type { Files } from './files'
@@ -181,8 +181,10 @@ export class Ctx {
         await this.saveAuditsAndChange()
         return out
       } finally { this.audits = []; this.swap(prev.shop, prev.platform, null) }
-    })
+    }).then(async (out) => { if (this.changeAtCommit) await this.changeAtCommit; return out })
   }
+  /** The change-feed row written with COMMIT: its id is known once committed. */
+  private changeAtCommit: Promise<void> | null = null
   /** The same on the platform database (product admin writes). */
   async platformTx<T>(fn: () => Promise<T>): Promise<T> {
     if (this.txOpen) return fn()
@@ -209,6 +211,22 @@ export class Ctx {
    */
   private async saveAuditsAndChange() {
     const change = this.changeStmt()
+    // Turso: the audit rows and the change-feed row go WITH the COMMIT (one round trip, all or nothing).
+    if (this.audits.length || change) {
+      const ops: WriteOp[] = [...(this.audits.length ? [{ insert: 'audit_logs' as const, rows: this.audits }] : []), ...(change ? [change] : [])]
+      // Keep the feed small: now and then, drop rows older than two days (same transaction, uses the index).
+      if (change && Math.random() < 0.02) ops.push({ sql: 'DELETE FROM "change_log" WHERE "created_at" < ?', args: [new Date(this.now.getTime() - 2 * 86_400_000).toISOString()] })
+      const atCommit = this.db.writeAtCommit?.(ops) ?? null
+      if (atCommit) {
+        const hadAudits = this.audits.length > 0
+        this.audits = []
+        if (change) {
+          this.changeLogged = true
+          this.changeAtCommit = atCommit.then((rs) => { const logged = rs[hadAudits ? 1 : 0] as unknown as { id?: unknown }[]; this.changeId = logged?.[0]?.id != null ? Number(logged[0].id) : null }, () => {})
+        } else void atCommit.catch(() => {})
+        return
+      }
+    }
     if (this.audits.length && change && this.db.writeBatch) {
       const rows = this.audits
       this.audits = []

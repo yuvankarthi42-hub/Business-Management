@@ -6,8 +6,8 @@ import { ApiError } from '../core/errors'
 import type { Row, Value, Where } from '../db/types'
 import { cleanHsn, hsnError } from '@/core/gst'
 import { cleanDetails } from '@/core/stickers'
-import { fromLightRow, INDEX_MAX_CHANGES, INDEX_PAGE, L, LF, type IndexPage, type LightRow } from '@/core/catalogIndex'
-import { E, fromMilli, fromMinor, fromMinorOrNull, json, nameOf, str, strOrNull, toMilli, toMinor, money } from './util'
+import { fromLightRow, INDEX_MAX_CHANGES, INDEX_PAGE, L, LF, type IndexPage, type LightRow, type StockChange } from '@/core/catalogIndex'
+import { E, fromMilli, fromMinor, fromMinorOrNull, json, nameOf, str, strOrNull, textArg, toMilli, toMinor, money } from './util'
 
 export async function mediaMap(c: Ctx, ids: (string | null | undefined)[]) {
   const want = [...new Set(ids.filter(Boolean) as string[])]
@@ -116,12 +116,13 @@ async function productsFrom(c: Ctx, rows: Row[], ids: string[] | null, o: LoadPr
 /** Columns of the products table for a save. */
 export function productColumns(p: Partial<Product>) {
   const out: Record<string, string | number | boolean | null> = {}
-  if (p.name !== undefined) out.name = p.name.trim().slice(0, 150)
+  // Text fields are read as text (a number as its digits; an object or list → 400), never trusted to be strings.
+  if (p.name !== undefined) out.name = textArg(p.name).trim().slice(0, 150)
   if (p.categoryId !== undefined) out.category_id = p.categoryId || null
   if (p.kind !== undefined) out.kind = p.kind === 'service' ? E.ProductKind.service : E.ProductKind.goods
-  if (p.emoji !== undefined) out.emoji = (p.emoji || '').slice(0, 8) || null
-  if (p.sku !== undefined) out.sku = (p.sku || '').trim().slice(0, 40) || null
-  if (p.unit !== undefined) out.unit = (p.unit || 'pc').slice(0, 10)
+  if (p.emoji !== undefined) out.emoji = textArg(p.emoji).slice(0, 8) || null
+  if (p.sku !== undefined) out.sku = textArg(p.sku).trim().slice(0, 40) || null
+  if (p.unit !== undefined) out.unit = (textArg(p.unit) || 'pc').slice(0, 10)
   // Prices: real numbers from 0 to ₹1 crore (never negative).
   if (p.price !== undefined) out.price_minor = toMinor(money(p.price, 'Price'))
   if (p.mrp !== undefined) out.mrp_minor = p.mrp == null ? null : toMinor(money(p.mrp, 'MRP'))
@@ -255,13 +256,28 @@ async function lightRowsWhere(c: Ctx, pick: { sql: string; args: (string | numbe
   return { rows, dbNow, lastId: hi }
 }
 
-/** One page of the whole index, in id order: `after` = the last id of the previous page ('' for the first). */
+/**
+ * One page of the whole index, in id order: `after` = the last id of the previous page ('' for the first). The first
+ * page also says where every later page starts (`bounds`), worked out by the database, so the app can read them in
+ * parallel.
+ */
 export async function lightIndexPage(c: Ctx, after: string | null): Promise<IndexPage> {
   const from = /^\d{1,16}$/.test(String(after ?? '')) ? Number(after) : 0
-  const { rows, dbNow } = await lightRowsWhere(c, { sql: '"id" > ?', args: [from] }, 'range', undefined, INDEX_PAGE + 1)
+  const [{ rows, dbNow }, bounds] = await Promise.all([
+    lightRowsWhere(c, { sql: '"id" > ?', args: [from] }, 'range', undefined, INDEX_PAGE + 1),
+    from === 0 ? pageBounds(c) : Promise.resolve(undefined),
+  ])
   const more = rows.length > INDEX_PAGE
   const page = more ? rows.slice(0, INDEX_PAGE) : rows
-  return { rows: page, next: more ? page[page.length - 1][L.id] : null, at: dbNow }
+  return { rows: page, next: more ? page[page.length - 1][L.id] : null, at: dbNow, ...(bounds && more ? { bounds } : {}) }
+}
+/** The last id of every full INDEX_PAGE-row page (in id order) = where each next page starts. */
+async function pageBounds(c: Ctx): Promise<string[]> {
+  const rows = await c.db.sql!(
+    `SELECT "id" FROM (SELECT "id", ROW_NUMBER() OVER (ORDER BY "id") AS rn FROM "products" WHERE "business_id" = ?) WHERE rn % ? = 0 ORDER BY "id"`,
+    [Number(c.businessId), INDEX_PAGE],
+  )
+  return rows.map((r) => String(r.id))
 }
 
 /** These products (≤ 100) as light products, in the order of `ids` — Inventory's pages. */
@@ -272,8 +288,12 @@ export async function lightProducts(c: Ctx, ids: number[]): Promise<Product[]> {
   return ids.flatMap((id) => { const r = by.get(String(id)); return r ? [fromLightRow(r, c.businessId)] : [] })
 }
 
-/** What changed since `since` (a time the server gave): products edited, or whose stock moved, in the view's branches. */
-export async function lightChangesSince(c: Ctx, since: string): Promise<IndexPage> {
+/**
+ * What changed since `since` (a time the server gave): products edited, or whose stock moved, in the view's branches.
+ * `stockOnly` (the app asks so): a product whose only change is its stock comes as a small stock entry, not a whole
+ * row (a busy day's bills move hundreds of items). Without it (an older app): whole rows for all, as before.
+ */
+export async function lightChangesSince(c: Ctx, since: string, stockOnly = false): Promise<IndexPage> {
   const biz = Number(c.businessId)
   const branches = c.scope().map(Number)
   const [ed, mv] = await c.db.sqlReads!([
@@ -286,14 +306,48 @@ export async function lightChangesSince(c: Ctx, since: string): Promise<IndexPag
     const [now] = await c.db.sql!(`SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-2 seconds') AS now`)
     return { rows: [], next: null, at: String(now?.now ?? since) }
   }
+  const edited = new Set(ed.map((r) => Number(r.id)))
+  // Whole rows: every changed product, or (stockOnly) only the edited ones.
+  const full = stockOnly ? ids.filter((id) => edited.has(id)) : ids
   const all: LightRow[] = []
-  let at = since
+  let at = ''
   // In parts, so a burst of changes never makes one answer big.
-  for (let i = 0; i < ids.length; i += INDEX_PAGE) {
-    const part = ids.slice(i, i + INDEX_PAGE)
+  for (let i = 0; i < full.length; i += INDEX_PAGE) {
+    const part = full.slice(i, i + INDEX_PAGE)
     const r = await lightRowsWhere(c, { sql: `"id" IN (${part.map(() => '?').join(', ')})`, args: part }, 'list', part)
     all.push(...r.rows)
-    if (i === 0) at = r.dbNow
+    if (!at) at = r.dbNow
   }
-  return { rows: all, next: null, at }
+  if (!stockOnly) return { rows: all, next: null, at: at || since }
+  const moved = ids.filter((id) => !edited.has(id))
+  const st = moved.length ? await stockChanges(c, moved) : { changes: [] as StockChange[], dbNow: '' }
+  return { rows: all, stock: st.changes, next: null, at: at || st.dbNow || since }
+}
+
+/** Stock entries for these products (stock in the view's branches, by branch, next expiry): two reads per part. */
+async function stockChanges(c: Ctx, ids: number[]): Promise<{ changes: StockChange[]; dbNow: string }> {
+  const biz = Number(c.businessId)
+  const branches = c.scope().map(Number)
+  const bIn = branches.length ? ` AND "branch_id" IN (${branches.map(() => '?').join(', ')})` : ''
+  const changes: StockChange[] = []
+  let dbNow = ''
+  for (let i = 0; i < ids.length || (i === 0 && !dbNow); i += INDEX_PAGE) {
+    const part = ids.slice(i, i + INDEX_PAGE)
+    const inP = part.length ? part.map(() => '?').join(', ') : 'NULL'
+    const [stock, exp, now] = await c.db.sqlReads!([
+      { sql: `SELECT "product_id", "branch_id", "qty_milli" FROM "branch_stock" WHERE "business_id" = ? AND "product_id" IN (${inP})${bIn}`, args: [biz, ...part, ...branches] },
+      { sql: `SELECT "product_id", MIN("expiry_date") AS d FROM "stock_batches" WHERE "business_id" = ? AND "qty_left_milli" > 0 AND "expiry_date" IS NOT NULL AND "product_id" IN (${inP})${bIn} GROUP BY "product_id"`, args: [biz, ...part, ...branches] },
+      { sql: `SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-2 seconds') AS now`, args: [] },
+    ])
+    if (!dbNow) dbNow = String(now[0]?.now ?? '')
+    const by = new Map<string, Record<string, number>>()
+    for (const s of stock) { const k = String(s.product_id); const m = by.get(k) ?? {}; m[String(s.branch_id)] = Number(s.qty_milli) / 1000; by.set(k, m) }
+    const expiry = new Map(exp.map((x) => [String(x.product_id), x.d == null ? null : String(x.d)]))
+    for (const id of part.map(String)) {
+      const sb = by.get(id) ?? {}
+      changes.push([id, Math.round(Object.values(sb).reduce((a, v) => a + v, 0) * 1000) / 1000, sb, expiry.get(id) ?? null])
+    }
+    if (!part.length) break
+  }
+  return { changes, dbNow }
 }

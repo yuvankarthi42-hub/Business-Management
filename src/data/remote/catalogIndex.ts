@@ -1,7 +1,7 @@
 // A large shop's light product index on this device (src/core/catalogIndex.ts): read once, kept in IndexedDB (per
 // shop, user and branch view), then only "what changed since" is asked for. Without IndexedDB (private mode) it is
 // kept for this visit only. Cleared on sign-out. Small shops never use it (products.list loads them as before).
-import { fromLightRow, L, type IndexPage, type LightRow } from '@/core/catalogIndex'
+import { fromLightRow, INDEX_PARALLEL, L, LF, type IndexPage, type LightRow } from '@/core/catalogIndex'
 import type { Product } from '@/core/types'
 import { rpc } from './http'
 
@@ -62,16 +62,34 @@ export async function hasCatalogIndex(key: string) {
   return !!s && s.v === VERSION && Date.now() - s.savedAt < MAX_AGE
 }
 
+const readPage = async (after: string | null) => (await rpc<IndexPage>('products.index', [{ after }], 'user')).data
+
+/**
+ * The whole index. The first page says where every later page starts, so those are read INDEX_PARALLEL at a time;
+ * products added meanwhile come after the last one (followed by its `next`). Without that list (an older server):
+ * one page after another, as before. Changes from the first page's time on come with the next "since" read.
+ */
 async function readAll(): Promise<{ rows: LightRow[]; at: string }> {
-  const rows: LightRow[] = []
-  let after: string | null = null, at = ''
-  do {
-    const page: IndexPage = (await rpc<IndexPage>('products.index', [{ after }], 'user')).data
-    rows.push(...page.rows)
-    if (!at) at = page.at // changes from the first page's time on come with the next "since" read
-    after = page.next
-  } while (after !== null)
-  return { rows, at }
+  const first = await readPage(null)
+  const byId = new Map<string, LightRow>()
+  const add = (rs: LightRow[]) => { for (const r of rs) byId.set(r[L.id], r) }
+  add(first.rows)
+  let after = first.next
+  if (first.bounds?.length) {
+    const starts = first.bounds
+    let next = 0, tail: string | null = null
+    await Promise.all(Array.from({ length: Math.min(INDEX_PARALLEL, starts.length) }, async () => {
+      while (next < starts.length) {
+        const k = next++
+        const page = await readPage(starts[k])
+        add(page.rows)
+        if (k === starts.length - 1) tail = page.next // past the last start: carry on from there
+      }
+    }))
+    after = tail
+  }
+  while (after !== null) { const page = await readPage(after); add(page.rows); after = page.next }
+  return { rows: [...byId.values()], at: first.at }
 }
 
 /**
@@ -82,11 +100,19 @@ export async function loadCatalogIndex(key: string, businessId: string): Promise
   let saved = memory.get(key) ?? (await idbGet(key))
   if (saved && (saved.v !== VERSION || Date.now() - saved.savedAt > MAX_AGE)) saved = null
   if (saved) {
-    const ch = (await rpc<IndexPage>('products.index', [{ since: saved.at }], 'user')).data
+    // Edited products come as whole rows; products whose only change is stock as small stock entries.
+    const ch = (await rpc<IndexPage>('products.index', [{ since: saved.at, stockOnly: true }], 'user')).data
     if (ch.reset) saved = null
-    else if (ch.rows.length) {
+    else if (ch.rows.length || ch.stock?.length) {
       const byId = new Map(saved.rows.map((r) => [r[L.id], r]))
       for (const r of ch.rows) byId.set(r[L.id], r)
+      for (const [id, stock, stockByBranch, nextExpiry] of ch.stock ?? []) {
+        const r = byId.get(id)
+        if (!r) continue // not on this device yet: it comes with its next edit or the next full read
+        const n = [...r] as LightRow
+        n[L.stock] = stock; n[L.stockByBranch] = stockByBranch; n[L.nextExpiry] = r[L.flags] & LF.trackExpiry ? nextExpiry : null
+        byId.set(id, n)
+      }
       saved = { v: VERSION, at: ch.at, savedAt: Date.now(), rows: [...byId.values()] }
     } else saved = { ...saved, at: ch.at, savedAt: Date.now() }
   }

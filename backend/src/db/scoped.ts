@@ -23,6 +23,7 @@ export function scoped(db: Db, kind: DbKind): Db {
     ...(db.sqlMany ? { sqlMany: (x: { sql: string; args?: (string | number | null)[] }[]) => db.sqlMany!(x) } : {}),
     ...(db.sqlReads ? { sqlReads: (x: { sql: string; args?: (string | number | null)[] }[]) => db.sqlReads!(x) } : {}),
     ...(db.writeBatch ? { writeBatch: (ops: WriteOp[]) => (ops.forEach((o) => { if (!('sql' in o)) check('insert' in o ? o.insert : o.update) }), db.writeBatch!(ops)) } : {}),
+    ...(db.writeAtCommit ? { writeAtCommit: (ops: WriteOp[]) => (ops.forEach((o) => { if (!('sql' in o)) check('insert' in o ? o.insert : o.update) }), db.writeAtCommit!(ops)) } : {}),
     ...(db.describe ? { describe: () => db.describe!() } : {}),
     aggregate: (t, o) => (check(t), db.aggregate(t, o)),
     select: (t, o) => (check(t), db.select(t, o)),

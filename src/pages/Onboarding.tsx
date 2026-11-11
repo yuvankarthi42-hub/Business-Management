@@ -1,6 +1,7 @@
 import clsx from 'clsx'
 import { ArrowLeft, ArrowRight, Check, FileUp, PackagePlus, PartyPopper, Pencil, Plus, ScanLine, Trash2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { nameError } from '@/core/limits'
 import { useNavigate } from 'react-router-dom'
 import { useApp, useData } from '@/app/AppContext'
 import { Logo } from '@/app/Layout'
@@ -31,6 +32,8 @@ export default function Onboarding() {
   const run = useAction()
   const [key, setKey] = useState<StepKey>('business')
   const [name, setName] = useState(me?.business.name ?? '')
+  // The business name's red note shows once it is typed in or left (Next stays off until it is right).
+  const [nameShown, setNameShown] = useState(false)
   // Start from what is already saved (the user may reload half-way through the setup).
   const saved = me?.business
   const [category, setCategory] = useState<BusinessCategory>(saved?.category ?? 'food')
@@ -136,7 +139,7 @@ export default function Onboarding() {
             <>
               <h2 className="text-xl font-semibold">What’s your business called?</h2>
               <p className="mt-1 text-sm text-slate-500">This appears on your bills and dashboard. You can change it later.</p>
-              <Field required label="Business name" className="mt-6"><Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Sri Murugan Bakery" className="h-12 text-base" /></Field>
+              <Field required label="Business name" className="mt-6" error={nameShown ? nameError(name, 'your business name') ?? (name.trim().length < 2 ? 'Enter at least 2 letters' : undefined) : undefined}><Input autoFocus value={name} aria-invalid={nameShown && name.trim().length < 2} onChange={(e) => { setName(e.target.value); setNameShown(true) }} onBlur={() => setNameShown(true)} placeholder="e.g. Sri Murugan Bakery" className="h-12 text-base" /></Field>
             </>
           )}
 

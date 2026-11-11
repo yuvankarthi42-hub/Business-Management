@@ -15,6 +15,8 @@ type HResult = { type: 'ok'; response: { type: string; result?: HStmtResult | { 
 
 const FK_ON: HRequest = { type: 'execute', stmt: { sql: 'PRAGMA foreign_keys = ON' } }
 const TIMEOUT_MS = 15_000
+/** How long to keep retrying when another writer holds the lock (same as TursoDb.transaction). */
+const BUSY_RETRY_MS = Number(process.env.DB_BUSY_RETRY_MS ?? 8000)
 
 function toH(v: SqlValue): HValue {
   if (v === null || v === undefined) return { type: 'null' }
@@ -105,33 +107,101 @@ export class HranaDriver implements SqlDriver {
     return br.step_results.slice(1, 1 + stmts.length).map((x) => result(x!))
   }
 
+  /**
+   * An interactive write transaction. BEGIN is not sent on its own: it goes with the first statements in one request
+   * (a batch where every statement runs only if BEGIN took the write lock — so nothing runs outside it), and the
+   * last writes go with COMMIT (commitWith). A transaction that never ran a statement opens nothing at all.
+   * "Busy" (another device holds the lock) is waited for and retried here, before anything has run, as before.
+   */
   async begin(): Promise<SqlTx> {
-    const first = await this.pipeline([FK_ON, { type: 'execute', stmt: { sql: 'BEGIN IMMEDIATE' } }], null, this.base, true)
-    const begun = first.results[1]
-    if (begun?.type === 'error') {
-      if (first.baton) await this.pipeline([{ type: 'close' }], first.baton, first.base).catch(() => {})
-      throw sqlError(begun.error.message, begun.error.code)
-    }
-    let baton = first.baton, base = first.base, done = false
+    let baton: string | null = null, base = this.base, done = false, started = false
     const send = async (requests: HRequest[]) => {
       if (done) throw new SqlError('other', 'Transaction already finished')
       const r = await this.pipeline(requests, baton, base)
       baton = r.baton; base = r.base
       return r.results
     }
+    const stepsOf = (stmts: Stmt[], onlyIf: (k: number) => unknown) => stmts.map((st, k) => ({ stmt: { sql: st.sql, args: (st.args ?? []).map(toH) }, condition: onlyIf(k) }))
+    type Out = { ok: HStmtResult } | { error: { message: string; code?: string } }
+    /** BEGIN IMMEDIATE + these statements in one request; returns each statement's result or error. */
+    const start = async (stmts: Stmt[]): Promise<Out[]> => {
+      const steps = [{ stmt: { sql: 'BEGIN IMMEDIATE' } }, ...stepsOf(stmts, () => ({ type: 'ok', step: 0 }))]
+      const t0 = Date.now()
+      for (let attempt = 0; ; attempt++) {
+        const r = await this.pipeline([FK_ON, { type: 'batch', batch: { steps } }], null, this.base, true)
+        const res = r.results[1]
+        if (!res || res.type === 'error') {
+          if (r.baton) await this.pipeline([{ type: 'close' }], r.baton, r.base).catch(() => {})
+          throw sqlError(res?.type === 'error' ? res.error.message : 'No answer to BEGIN', res?.type === 'error' ? res.error.code : undefined)
+        }
+        const br = res.response.result as { step_results: (HStmtResult | null)[]; step_errors: ({ message: string; code?: string } | null)[] }
+        const begunErr = br.step_errors[0]
+        if (begunErr) {
+          // The lock wasn't taken, so nothing ran: close this connection; wait and try again while it is busy.
+          if (r.baton) await this.pipeline([{ type: 'close' }], r.baton, r.base).catch(() => {})
+          const e = sqlError(begunErr.message, begunErr.code)
+          if (e.kind === 'busy' && Date.now() - t0 < BUSY_RETRY_MS) { await sleep(Math.min(400, 25 * 2 ** attempt) * (0.5 + Math.random())); continue }
+          throw e
+        }
+        baton = r.baton; base = r.base; started = true
+        return stmts.map((_, k) => (br.step_errors[k + 1] ? { error: br.step_errors[k + 1]! } : { ok: br.step_results[k + 1]! }))
+      }
+    }
+    /** These statements (each on its own, like separate calls): their results or errors. */
+    const exec1 = async (stmts: Stmt[]): Promise<Out[]> => {
+      if (!started) return start(stmts)
+      if (!stmts.length) return []
+      return (await send(stmts.map(exec))).map((r) => (r.type === 'error' ? { error: r.error } : { ok: r.response.result as HStmtResult }))
+    }
+    const firstError = (outs: Out[]) => { const bad = outs.find((o): o is { error: { message: string; code?: string } } => 'error' in o); return bad ? sqlError(bad.error.message, bad.error.code) : null }
     const finish = async (sql: 'COMMIT' | 'ROLLBACK') => {
       if (done) return
+      if (!started) { done = true; return } // nothing ran: nothing to commit or undo
       const results = await send([{ type: 'execute', stmt: { sql } }, { type: 'close' }])
       done = true
       if (results[0]?.type === 'error') throw sqlError(results[0].error.message, results[0].error.code)
     }
     return {
-      run: async (stmts) => (stmts.length ? (await send(stmts.map(exec))).map((r) => result(HranaDriver.ok(r))) : []),
-      script: async (sql) => { const [r] = await send([{ type: 'sequence', sql }]); if (r?.type === 'error') throw sqlError(r.error.message, r.error.code) },
+      run: async (stmts) => { const outs = await exec1(stmts); const e = firstError(outs); if (e) throw e; return outs.map((o) => result((o as { ok: HStmtResult }).ok)) },
+      runGroups: async (groups) => {
+        const outs = await exec1(groups.flat())
+        let at = 0
+        return groups.map((g) => { const mine = outs.slice(at, at + g.length); at += g.length; return firstError(mine) ?? mine.map((o) => result((o as { ok: HStmtResult }).ok)) })
+      },
+      script: async (sql) => { if (!started) await start([]); const [r] = await send([{ type: 'sequence', sql }]); if (r?.type === 'error') throw sqlError(r.error.message, r.error.code) },
       commit: () => finish('COMMIT'),
+      commitWith: async (stmts) => {
+        if (done) throw new SqlError('other', 'Transaction already finished')
+        // Each statement only if the one before worked; COMMIT only if all did; else ROLLBACK — one request.
+        const own = stmts.map((st) => ({ stmt: { sql: st.sql, args: (st.args ?? []).map(toH) } }))
+        const steps: { stmt: { sql: string; args?: HValue[] }; condition?: unknown }[] = []
+        const offset = started ? 0 : 1
+        if (!started) steps.push({ stmt: { sql: 'BEGIN IMMEDIATE' } })
+        own.forEach((st, k) => steps.push({ ...st, ...(k + offset > 0 ? { condition: { type: 'ok', step: k + offset - 1 } } : {}) }))
+        const last = steps.length - 1
+        steps.push({ stmt: { sql: 'COMMIT' }, ...(last >= 0 ? { condition: { type: 'ok', step: last } } : {}) })
+        steps.push({ stmt: { sql: 'ROLLBACK' }, condition: { type: 'not', cond: { type: 'ok', step: last + 1 } } })
+        const t0 = Date.now()
+        for (let attempt = 0; ; attempt++) {
+          const r = started ? { results: await send([{ type: 'batch', batch: { steps } }, { type: 'close' }]) } : await this.pipeline([FK_ON, { type: 'batch', batch: { steps } }, { type: 'close' }], null, this.base) /* never re-sent after a network error: it may have committed */
+          const res = r.results[started ? 0 : 1]
+          done = true
+          if (!res || res.type === 'error') throw sqlError(res?.type === 'error' ? res.error.message : 'No answer to COMMIT', res?.type === 'error' ? res.error.code : undefined)
+          const br = res.response.result as { step_results: (HStmtResult | null)[]; step_errors: ({ message: string; code?: string } | null)[] }
+          if (!started && br.step_errors[0]) {
+            const e = sqlError(br.step_errors[0].message, br.step_errors[0].code)
+            if (e.kind === 'busy' && Date.now() - t0 < BUSY_RETRY_MS) { done = false; await sleep(Math.min(400, 25 * 2 ** attempt) * (0.5 + Math.random())); continue }
+            throw e
+          }
+          const err = br.step_errors.slice(offset, offset + own.length + 1).find((x) => x)
+          if (err) throw sqlError(err.message, err.code)
+          return br.step_results.slice(offset, offset + own.length).map((x) => result(x!))
+        }
+      },
       rollback: () => finish('ROLLBACK').catch(() => { done = true }),
     }
   }
+
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))

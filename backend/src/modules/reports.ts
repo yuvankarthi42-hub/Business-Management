@@ -11,7 +11,7 @@ import { ALL_BRANCHES, type Ctx } from '../core/context'
 import { ApiError, forbidden } from '../core/errors'
 import { define, userRead } from '../core/registry'
 import type { Row, SqlRow, Where } from '../db/types'
-import { imageOf, loadProducts, mediaMap, wholesaleList } from '../domain/catalog'
+import { imageOf, loadProducts, wholesaleList } from '../domain/catalog'
 import { CANCEL_STATION, customerFrom, loadOrders, paymentFrom, selectIn } from '../domain/orders'
 import { bizDay, bizDayStart, E, moduleOn, fromMilli, fromMinor, nameOf, selectOlder, str, strOrNull, hasAllBranches } from '../domain/util'
 import { categoryNames, expenseFrom } from './ops'
@@ -338,7 +338,11 @@ async function gstPreAdded(c: Ctx, start: string, end: string): Promise<{ pre: G
 }
 
 /** The SQL answers for one summary (step 1 — the database work; branches can run this in parallel). */
-async function sqlSummaryRows(c: Ctx, from: Date, to: Date, branches: string[]) {
+/**
+ * `top`: only the N best-selling items come back (ordered by the database exactly as the full list is sorted:
+ * revenue, then the first sale). `only`: the items to add up (reports.byBranch's overall top N; null = every item).
+ */
+async function sqlSummaryRows(c: Ctx, from: Date, to: Date, branches: string[], top: number | null = null, only: (string | null)[] | null = null) {
   const sql = c.db.sql!.bind(c.db)
   const f = from.toISOString(), t = to.toISOString(), tSlack = new Date(to.getTime() + PAYMENT_SLACK_MS).toISOString()
   const bid = Number(c.businessId)
@@ -355,6 +359,9 @@ async function sqlSummaryRows(c: Ctx, from: Date, to: Date, branches: string[]) 
   const salePay = `p."business_id" = ? AND ${inBr('p')} AND p."is_voided" = 0 AND p."kind" = ? AND p."order_id" IS NOT NULL AND p."created_at" >= ? AND p."created_at" <= ?`
   const salePayArgs = [bid, ...br, SALE, f, tSlack]
   const days = Math.round((to.getTime() - from.getTime()) / 86400000)
+  const onlyIds = only ? only.filter((x): x is string => x != null).map(Number) : []
+  const onlySql = !only ? '' : ` AND (${onlyIds.length ? `i."product_id" IN (${onlyIds.map(() => '?').join(', ')})` : '0'}${only.includes(null) ? ' OR i."product_id" IS NULL' : ''})`
+  const onlyArgs = only ? onlyIds : []
 
   // All the answers in ONE request (read-only, no transaction) where the database allows it; otherwise one by one.
   const stmts: { sql: string; args: (string | number | null)[] }[] = [
@@ -369,12 +376,19 @@ async function sqlSummaryRows(c: Ctx, from: Date, to: Date, branches: string[]) 
     { sql: `SELECT p."method" AS m, p."kind" AS k, SUM(p."amount_minor") AS s FROM "payments" p WHERE p."business_id" = ? AND ${inBr('p')} AND p."is_voided" = 0 AND p."created_at" >= ? AND p."created_at" <= ? GROUP BY p."method", p."kind"`, args: [bid, ...br, f, t] },
     { sql: `SELECT e."category_id" AS cat, SUM(e."amount_minor") AS s FROM "expenses" e WHERE e."business_id" = ? AND ${inBr('e')} AND e."is_voided" = 0 AND e."expense_date" >= ? AND e."expense_date" <= ? GROUP BY e."category_id"`, args: [bid, ...br, f, t] },
     { sql: `SELECT COUNT(*) AS n, SUM(r."total_minor") AS s FROM "sale_returns" r WHERE r."business_id" = ? AND ${inBr('r')} AND r."created_at" >= ? AND r."created_at" <= ?`, args: [bid, ...br, f, t] },
-    { sql: `SELECT l."product_id" AS pid, SUM(l."qty_milli") AS q FROM "sale_return_items" l JOIN "sale_returns" r ON r."id" = l."return_id" WHERE l."business_id" = ? AND l."restock" = 1 AND r."business_id" = ? AND ${inBr('r')} AND r."created_at" >= ? AND r."created_at" <= ? GROUP BY l."product_id"`, args: [bid, bid, ...br, f, t] },
+    // Cost of goods back on the shelf (restocked returns): quantity × the item's cost price, added up in whole units.
+    { sql: `SELECT SUM(l."qty_milli" * COALESCE(p."cost_minor", 0)) AS c FROM "sale_return_items" l JOIN "sale_returns" r ON r."id" = l."return_id" LEFT JOIN "products" p ON p."id" = l."product_id" AND p."business_id" = ? WHERE l."business_id" = ? AND l."restock" = 1 AND r."business_id" = ? AND ${inBr('r')} AND r."created_at" >= ? AND r."created_at" <= ?`, args: [bid, bid, bid, ...br, f, t] },
     // Items per product: quantity, revenue (qty × price before discount, each line rounded to the paisa as the full read
     // and the bill do), and where it first appears (keeps the tie order).
     // (SQLite: with one MIN(), the plain column `name` comes from that same first row — the name on the first bill.)
-    { sql: `SELECT i."product_id" AS pid, SUM(i."qty_milli") AS q, SUM((i."qty_milli" * i."unit_price_minor" + 500) / 1000) AS rev, MIN(o."billed_at" || printf('|%020d|%06d', o."id", i."sort_order")) AS first, i."product_name" AS name
-      FROM "order_items" i JOIN "orders" o ON o."id" = i."order_id" WHERE ${billed} GROUP BY i."product_id"`, args: billedArgs },
+    // With each item: its cost price, emoji and photo (joined here, not read in batches afterwards).
+    { sql: `SELECT x.pid, x.q, x.rev, x.first, x.name, p."id" AS known, p."cost_minor" AS cost, p."emoji" AS emoji, m."id" AS mid, m."bucket" AS bucket, m."object_key" AS object_key, m."thumb_key" AS thumb_key
+      FROM (SELECT i."product_id" AS pid, SUM(i."qty_milli") AS q, SUM((i."qty_milli" * i."unit_price_minor" + 500) / 1000) AS rev, MIN(o."billed_at" || printf('|%020d|%06d', o."id", i."sort_order")) AS first, i."product_name" AS name
+        FROM "order_items" i JOIN "orders" o ON o."id" = i."order_id" WHERE ${billed}${onlySql} GROUP BY i."product_id") x
+      LEFT JOIN "products" p ON p."id" = x.pid AND p."business_id" = ?
+      LEFT JOIN "media_files" m ON m."id" = p."image_media_id" AND m."business_id" = ?${top ? ` ORDER BY x.rev DESC, x.first ASC LIMIT ${top}` : ''}`, args: [...billedArgs, ...onlyArgs, bid, bid] },
+    // Cost of goods sold: quantity × the item's cost price, added up in whole units (the whole range, not only the top N).
+    { sql: `SELECT SUM(i."qty_milli" * COALESCE(p."cost_minor", 0)) AS c FROM "order_items" i JOIN "orders" o ON o."id" = i."order_id" LEFT JOIN "products" p ON p."id" = i."product_id" AND p."business_id" = ? WHERE ${billed}`, args: [bid, ...billedArgs] },
     // Cancelled in the range (cancelled_at), as the count the full read makes.
     { sql: `SELECT COUNT(*) AS n FROM "orders" o WHERE o."business_id" = ? AND ${inBr('o')} AND o."status" = ? AND o."cancelled_at" >= ? AND o."cancelled_at" <= ?`, args: [bid, ...br, E.OrderStatus.cancelled, f, t] },
     days <= 1
@@ -383,42 +397,21 @@ async function sqlSummaryRows(c: Ctx, from: Date, to: Date, branches: string[]) 
     ...(days <= 1 ? [] : [{ sql: `SELECT date(e."expense_date", ?) AS b, e."category_id" AS cat, SUM(e."amount_minor") AS s FROM "expenses" e WHERE e."business_id" = ? AND ${inBr('e')} AND e."is_voided" = 0 AND e."expense_date" >= ? AND e."expense_date" <= ? GROUP BY b, e."category_id"`, args: [shift, bid, ...br, f, t] }]),
   ]
   const answers = c.db.sqlReads ? await c.db.sqlReads(stmts) : await Promise.all(stmts.map((x) => sql(x.sql, x.args)))
-  const [tot, types, saleBy, credit, payBy, expBy, rets, retLines, items, cancelled, seriesO] = answers
-  const seriesE = days <= 1 ? [] : answers[11]
-  return { from, to, days, tot, types, saleBy, credit, payBy, expBy, rets, retLines, items, cancelled, seriesO, seriesE }
+  const [tot, types, saleBy, credit, payBy, expBy, rets, cogsBack, items, cogsSold, cancelled, seriesO] = answers
+  const seriesE = days <= 1 ? [] : answers[12]
+  return { from, to, days, tot, types, saleBy, credit, payBy, expBy, rets, cogsBack, items, cogsSold, cancelled, seriesO, seriesE }
 }
 type SummaryRows = NonNullable<Awaited<ReturnType<typeof sqlSummaryRows>>>
-/** The products and expense categories a set of summaries needs, read once for all of them. */
-async function summaryLookups(c: Ctx, sets: (SummaryRows | null)[]) {
-  const pid = (v: unknown) => (v == null ? '' : String(v))
-  const ids = [...new Set(sets.flatMap((d) => (d ? [...d.items.map((x) => pid(x.pid)), ...d.retLines.map((x) => pid(x.pid))] : [])).filter(Boolean))]
-  const [products, cat] = await Promise.all([productBits(c, ids), categoryNames(c)])
-  return { products, cat }
-}
-
-/**
- * What a summary needs of each sold item: cost price (profit), emoji and photo — the same values the full product
- * read gives (loadProducts), from only those columns (the full read also builds variants, stock, batches…).
- */
-async function productBits(c: Ctx, ids: string[]): Promise<Map<string, { costPrice: number; emoji: string; imageUrl: string | null }>> {
-  const out = new Map<string, { costPrice: number; emoji: string; imageUrl: string | null }>()
-  if (!ids.length) return out
-  const sql = c.db.sql!.bind(c.db)
-  const rows: SqlRow[] = []
-  for (let i = 0; i < ids.length; i += 500) {
-    const part = ids.slice(i, i + 500).map(Number)
-    rows.push(...await sql(`SELECT "id", "cost_minor", "emoji", "image_media_id" FROM "products" WHERE "business_id" = ? AND "id" IN (${part.map(() => '?').join(', ')})`, [Number(c.businessId), ...part]))
-  }
-  const media = await mediaMap(c, rows.map((r) => (r.image_media_id == null ? null : String(r.image_media_id))))
-  for (const r of rows) out.set(String(r.id), { costPrice: fromMinor(r.cost_minor), emoji: str(r.emoji), imageUrl: imageOf(c, media.get(r.image_media_id == null ? '' : String(r.image_media_id))).imageUrl })
-  return out
+/** The expense categories a set of summaries needs, read once for all of them (items come with their cost and photo). */
+async function summaryLookups(c: Ctx) {
+  return { cat: await categoryNames(c) }
 }
 type SummaryLookups = Awaited<ReturnType<typeof summaryLookups>>
 const emptySummary = (c: Ctx, from: Date, to: Date) => summarize(c, { from, to, orders: [], products: new Map(), payments: [], salePays: [], expenses: [], returns: [], cancelled: new Map() }, new Set())
 
 /** Step 2: the `Summary` from the SQL answers and the shared lookups (no database work). */
 function sqlSummaryFrom(c: Ctx, d: SummaryRows, look: SummaryLookups): Summary {
-  const { from, to, days, tot, types, saleBy, credit, payBy, expBy, rets, retLines, items, cancelled, seriesO, seriesE } = d
+  const { from, to, days, tot, types, saleBy, credit, payBy, expBy, rets, cogsBack, items, cogsSold, cancelled, seriesO, seriesE } = d
   const REFUND = E.PaymentKind.refund
   const num = (v: unknown) => Number(v ?? 0)
   const money = (minor: unknown) => r2(num(minor) / 100)
@@ -448,20 +441,19 @@ function sqlSummaryFrom(c: Ctx, d: SummaryRows, look: SummaryLookups): Summary {
   const byType: Summary['byType'] = {}
   for (const x of [...types].sort((a, b) => String(a.first).localeCompare(String(b.first)))) byType[nameOf(E.OrderType, x.k)] = { count: num(x.n), amount: money(x.total) }
 
-  // Products: emoji, photo and cost price (cost of goods = cost × quantity sold, less what came back to the shelf).
-  const products = look.products
-  let cogs = 0
+  // Cost of goods = cost × quantity sold, less what came back to the shelf (added up by the database, in whole
+  // units: qty in thousandths × cost in paise).
+  const cogs = (num(cogsSold[0]?.c) - num(cogsBack[0]?.c)) / 100000
   // First-sale keys all have one fixed layout (ISO time|20-digit id|6-digit line), so a plain character comparison
   // gives the same order as localeCompare did — without its cost on thousands of items.
   const byFirst = (a: SqlRow, b: SqlRow) => { const x = String(a.first), y = String(b.first); return x < y ? -1 : x > y ? 1 : 0 }
   const topProducts = [...items].sort(byFirst).map((x) => {
     const id = x.pid == null ? '' : String(x.pid)
-    const p = products.get(id)
-    const qty = fromMilli(num(x.q))
-    cogs += (p?.costPrice ?? 0) * qty
-    return { productId: id, name: String(x.name ?? ''), emoji: p?.emoji ?? '📦', imageUrl: p?.imageUrl ?? null, qty, revenue: r2(num(x.rev) / 100) }
+    // An item no longer in the catalogue: 📦 and no photo, as before.
+    const known = x.known != null
+    const photo = known && x.mid != null ? imageOf(c, { bucket: x.bucket, object_key: x.object_key, thumb_key: x.thumb_key } as unknown as Row).imageUrl : null
+    return { productId: id, name: String(x.name ?? ''), emoji: known ? str(x.emoji as Row['emoji']) : '📦', imageUrl: photo, qty: fromMilli(num(x.q)), revenue: r2(num(x.rev) / 100) }
   }).sort((a, b) => b.revenue - a.revenue)
-  for (const x of retLines) cogs -= (products.get(x.pid == null ? '' : String(x.pid))?.costPrice ?? 0) * fromMilli(num(x.q))
 
   // Chart: hourly (8 AM – 11 PM) for one day, daily otherwise — the same buckets as summarize().
   const series: Summary['series'] = []
@@ -491,16 +483,28 @@ function sqlSummaryFrom(c: Ctx, d: SummaryRows, look: SummaryLookups): Summary {
   }
 }
 
-/** One summary added up in SQL (reports.summary). */
-async function sqlSummary(c: Ctx, from: Date, to: Date, branches: string[]): Promise<Summary> {
-  const d = await sqlSummaryRows(c, from, to, branches)
-  return d ? sqlSummaryFrom(c, d, await summaryLookups(c, [d])) : emptySummary(c, from, to)
+/** One summary added up in SQL (reports.summary). `top`: only the N best-selling items. */
+async function sqlSummary(c: Ctx, from: Date, to: Date, branches: string[], top: number | null = null): Promise<Summary> {
+  const [d, look] = await Promise.all([sqlSummaryRows(c, from, to, branches, top), summaryLookups(c)])
+  return d ? sqlSummaryFrom(c, d, look) : emptySummary(c, from, to)
 }
-/** One summary per branch (reports.byBranch): the branches' queries run in parallel, products are read once. */
-async function sqlSummaries(c: Ctx, from: Date, to: Date, branches: string[]): Promise<Map<string, Summary>> {
-  const sets = await Promise.all(branches.map((b) => sqlSummaryRows(c, from, to, [b])))
-  const look = await summaryLookups(c, sets)
+/**
+ * One summary per branch (reports.byBranch): the branches' queries run in parallel. `top`: each branch's list has
+ * only the N items that sell best across all these branches (so the branches' lists, added up, give that top N).
+ */
+async function sqlSummaries(c: Ctx, from: Date, to: Date, branches: string[], top: number | null = null): Promise<Map<string, Summary>> {
+  const only = top && branches.length ? await topAcross(c, from, to, branches, top) : null
+  const [sets, look] = await Promise.all([Promise.all(branches.map((b) => sqlSummaryRows(c, from, to, [b], null, only))), summaryLookups(c)])
   return new Map(branches.map((b, k) => [b, sets[k] ? sqlSummaryFrom(c, sets[k]!, look) : emptySummary(c, from, to)]))
+}
+/** The N best-selling items (product ids; null = items without one) across these branches — same order as the lists. */
+async function topAcross(c: Ctx, from: Date, to: Date, branches: string[], top: number): Promise<(string | null)[]> {
+  const br = branches.map(Number)
+  const rows = await c.db.sql!(`SELECT i."product_id" AS pid FROM "order_items" i JOIN "orders" o ON o."id" = i."order_id"
+    WHERE o."business_id" = ? AND o."branch_id" IN (${br.map(() => '?').join(', ')}) AND o."status" = ? AND o."billed_at" >= ? AND o."billed_at" <= ?
+    GROUP BY i."product_id" ORDER BY SUM((i."qty_milli" * i."unit_price_minor" + 500) / 1000) DESC, MIN(o."billed_at" || printf('|%020d|%06d', o."id", i."sort_order")) ASC LIMIT ${top}`,
+  [Number(c.businessId), ...br, E.OrderStatus.completed, from.toISOString(), to.toISOString()])
+  return rows.map((r) => (r.pid == null ? null : String(r.pid)))
 }
 
 /**
@@ -523,21 +527,49 @@ const LATE_KOT_MS = 20 * 60_000
 /** Sales figures are for the dashboard / reports; cost of goods (profit) only with "View profit". */
 function canSeeSales(c: Ctx) { if (!c.can('dashboard.view') && !c.can('reports.view')) throw forbidden() }
 const forViewer = (c: Ctx, s: Summary): Summary => (c.can('reports.profit') ? s : { ...s, cogs: 0 })
+/**
+ * `top`: only the first N best-selling items (the dashboard shows 5); the list is sorted in full first, so they
+ * are exactly the first N of the whole list. Without it (Reports, older screens): every item, as before.
+ */
+const topOf = (top: unknown) => { const n = Math.floor(Number(top)); return n >= 1 && n <= 500 ? n : null }
+function cutTop(x: Summary, top: unknown): Summary {
+  const n = topOf(top)
+  return n && x.topProducts.length > n ? { ...x, topProducts: x.topProducts.slice(0, n) } : x
+}
+/** One range's summary (reports.summary, reports.dashboard). `top`: Turso reads only the N best sellers. */
+async function summaryOf(c: Ctx, f: Date, t: Date, top: unknown = null): Promise<Summary> {
+  const n = topOf(top)
+  // Turso: added up by the database; the Data Store (and REPORTS_SQL=off): the full read, as before.
+  const build = async () => (sqlSummaryOk(c, f, t) ? sqlSummary(c, f, t, c.scope(), n) : summarize(c, await loadRange(c, f, t, c.scope()), new Set(c.scope())))
+  // A finished range (yesterday, last week…): from the cache until something changes the past.
+  // (and late payments can no longer land in it: they count up to PAYMENT_SLACK_MS after the range).
+  // A top-N answer is kept apart from the full one (the Reports page needs every item).
+  if (t.getTime() < new Date(bizDayStart(c)).getTime() && c.now.getTime() - t.getTime() > PAYMENT_SLACK_MS) return pastReport(c, `sum:${c.scope().join(',')}:${f.toISOString()}:${t.toISOString()}${n ? `:top${n}` : ''}`, build)
+  return build()
+}
 
 define('reports', {
   summary: userRead(async (c, from: string, to: string, opts?: { top?: number }) => {
     canSeeSales(c)
-    const f = isoArg(from), t = isoArg(to)
-    // `top`: only the first N best-selling items (the dashboard shows 5); the list is sorted in full first, so they
-    // are exactly the first N of the whole list. Without it (Reports, older screens): every item, as before.
-    const n = Math.floor(Number(opts?.top))
-    const cut = (x: Summary): Summary => (n >= 1 && n <= 500 && x.topProducts.length > n ? { ...x, topProducts: x.topProducts.slice(0, n) } : x)
-    // Turso: added up by the database; the Data Store (and REPORTS_SQL=off): the full read, as before.
-    const build = async () => (sqlSummaryOk(c, f, t) ? sqlSummary(c, f, t, c.scope()) : summarize(c, await loadRange(c, f, t, c.scope()), new Set(c.scope())))
-    // A finished range (yesterday, last week…): from the cache until something changes the past.
-    // (and late payments can no longer land in it: they count up to PAYMENT_SLACK_MS after the range).
-    if (t.getTime() < new Date(bizDayStart(c)).getTime() && c.now.getTime() - t.getTime() > PAYMENT_SLACK_MS) return cut(forViewer(c, await pastReport(c, `sum:${c.scope().join(',')}:${f.toISOString()}:${t.toISOString()}`, build)))
-    return cut(forViewer(c, await build()))
+    return cutTop(forViewer(c, await summaryOf(c, isoArg(from), isoArg(to), opts?.top)), opts?.top)
+  }),
+  /**
+   * The Dashboard in one request (it asked reports.summary three times): the chosen range (top N items), only the
+   * totals of the range it is compared with, and — for Today — yesterday's hourly sales. Each part is worked out
+   * exactly as reports.summary does (same rules, cache and branch view), at the same time.
+   */
+  dashboard: userRead(async (c, from: string, to: string, prev: { from: string; to: string }, opts?: { top?: number; yesterday?: { from: string; to: string } }) => {
+    canSeeSales(c)
+    const f = isoArg(from), t = isoArg(to), pf = isoArg(prev?.from), pt = isoArg(prev?.to)
+    const yf = opts?.yesterday ? isoArg(opts.yesterday.from) : null, yt = opts?.yesterday ? isoArg(opts.yesterday.to) : null
+    // The compared range and yesterday need only totals / the chart: their item lists are not read in full (top 1).
+    const [cur, before, yday] = await Promise.all([summaryOf(c, f, t, opts?.top), summaryOf(c, pf, pt, 1), yf && yt ? summaryOf(c, yf, yt, 1) : null])
+    const { sales, orderCount, paymentsReceived, expenses, salary } = before
+    return {
+      current: cutTop(forViewer(c, cur), opts?.top),
+      previous: { sales, orderCount, paymentsReceived, expenses, salary },
+      yesterdaySeries: yday ? yday.series : null,
+    }
   }),
   /** Best sellers of the last `days` finished days (billing screen's quick picks) — from the cache, not today's bills. */
   topProducts: userRead(async (c, days = 7, limit = 10) => {
@@ -568,7 +600,8 @@ define('reports', {
   }, { perm: 'reports.view' }),
 
   /** One summary per branch in the current view, plus live alerts — for the multi-branch dashboard. */
-  byBranch: userRead(async (c, from: string, to: string) => {
+  /** `top` (the Dashboard sends 5): each branch's item list has only the N items that sell best across the branches. */
+  byBranch: userRead(async (c, from: string, to: string, opts?: { top?: number }) => {
     canSeeSales(c)
     const f = isoArg(from), t = isoArg(to)
     const scope = c.scope()
@@ -578,7 +611,7 @@ define('reports', {
     // Turso: each branch's summary added up in SQL (all branches in parallel); the Data Store: the full read, as before.
     const fast = sqlSummaryOk(c, f, t)
     const [data, open, kots, products, stock] = await Promise.all([
-      fast ? sqlSummaries(c, f, t, branches.map((b) => b.id)) : loadRange(c, f, t, scope),
+      fast ? sqlSummaries(c, f, t, branches.map((b) => b.id), topOf(opts?.top)) : loadRange(c, f, t, scope),
       c.db.aggregate('orders', { where: { ...where, status: E.OrderStatus.open }, groupBy: ['branch_id', 'qr_status'], fns: { n: ['COUNT', 'ROWID'] } }),
       // Late KOTs only with the kitchen on; low stock only with inventory on (no reads otherwise).
       moduleOn(c, 'kitchen') ? c.db.select('kitchen_tickets', { where: { ...where, status: { in: [E.KotStatus.new, E.KotStatus.preparing] }, CREATEDTIME: { lt: late } }, orderBy: [['CREATEDTIME', 'ASC']], limit: 500 }) : [],

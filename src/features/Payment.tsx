@@ -15,6 +15,7 @@ import { formatPhone } from '@/core/phone'
 import { useWhatsApp } from './whatsapp/useWhatsApp'
 import { amountInWords, fmtDateTime, money } from '@/lib/format'
 import { CustomerPicker } from './CustomerPicker'
+import { useCustomer } from './customerLookup'
 import { needsImage, receiptDoc, type ReceiptProps } from './printing/doc'
 import { BillLines } from './printing/BillLines'
 import { encodeImage, encodeText } from './printing/escpos'
@@ -429,7 +430,8 @@ export function BillSuccessModal({ orderId, onClose, onNew }: { orderId: string 
   const { me, mod } = useApp()
   const toast = useToast()
   const { data } = useData(() => (orderId ? api.orders.get(orderId) : Promise.resolve(null)), [orderId])
-  const { data: customers } = useData(() => api.customers.list())
+  // Only the bill's customer is read (not every customer).
+  const billCustomer = useCustomer(data && data.order.id === orderId ? data.order.customerId : undefined)
   const { data: users = [] } = useData(() => api.users.list())
   const { data: tables = [] } = useData(() => (mod('tables') ? api.tables.list() : Promise.resolve([])), [mod('tables')])
   const { print, portal } = usePrint()
@@ -439,10 +441,10 @@ export function BillSuccessModal({ orderId, onClose, onNew }: { orderId: string 
   const run = useAction()
   const [waSent, setWaSent] = useState<string | null>(null)
   const waDone = useRef<string | null>(null)
-  const ready = !!(orderId && data && me && customers && data.order.id === orderId)
+  const ready = !!(orderId && data && me && data.order.id === orderId && billCustomer !== undefined)
   const props: ReceiptProps | null = ready ? {
     order: data!.order, business: me!.business, branch: me!.branches.find((x) => x.id === data!.order.branchId),
-    customer: customers!.find((c) => c.id === data!.order.customerId) ?? null, users, tableLabel: tables.find((x) => x.id === data!.order.tableId)?.label,
+    customer: billCustomer ?? null, users, tableLabel: tables.find((x) => x.id === data!.order.tableId)?.label,
   } : null
   // Auto-print once per bill when the counter has it switched on.
   useEffect(() => {

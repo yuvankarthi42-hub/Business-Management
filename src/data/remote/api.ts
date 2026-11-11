@@ -12,7 +12,7 @@ import { clearCatalogIndex, hasCatalogIndex, loadCatalogIndex } from './catalogI
 import { CATALOG_FULL_MAX } from '@/core/catalogIndex'
 import { isRead } from './policy'
 import { setFeedStart, setSyncMode, startSync } from './sync'
-import { restartLive, stopLive } from './live'
+import { restartLive, setLiveHub, stopLive } from './live'
 
 /** Reads that must never be cached (big one-off downloads). */
 // public.order / public.track: the server answers from its own shared cache; Refresh must really ask.
@@ -93,16 +93,19 @@ export function createRemoteApi(shape: Api): Api {
   a.auth.demoLogin = notAvailable('Demo login') as Api['auth']['demoLogin']
   a.auth.demoUsers = (() => []) as unknown as Api['auth']['demoUsers']
   a.auth.logout = (async () => { stopLive(); auth.user = null; auth.branch = null; clearAll(); void clearCatalogIndex() }) as Api['auth']['logout']
-  // App start-up: one call for the user, support tickets, pending QR orders and the change-feed position (it fills
+  // App start-up: one call for the user, the support badge, pending QR orders and the change-feed position (it fills
   // the same cache entries those reads use). An older server without it: the separate reads, as before.
   let booting: Promise<void> | null = null
   const boot = () => (booting ??= (async () => {
     try {
-      const r = (await rpc<{ me: unknown; support: unknown; qrPending: unknown | null; feed: { supported?: boolean; latest?: number; epoch?: string | null } }>('auth.boot', [], 'user')).data
+      const r = (await rpc<{ me: unknown; support?: { unreadForCustomer?: boolean }[]; supportUnread?: number; qrPending: unknown | null; feed: { supported?: boolean; latest?: number; epoch?: string | null }; liveHub?: boolean }>('auth.boot', [], 'user')).data
       seed('auth.me', [], r.me)
-      seed('support.mine', [], r.support)
+      // The badge count; a server from before it sends the tickets themselves (kept for the Support page too).
+      if (r.supportUnread !== undefined) seed('support.unread', [], r.supportUnread)
+      else if (r.support) { seed('support.mine', [], r.support); seed('support.unread', [], r.support.filter((t) => t.unreadForCustomer).length) }
       if (r.qrPending !== null) seed('qr.pending', [], r.qrPending)
       setFeedStart(r.feed)
+      setLiveHub(r.liveHub)
     } catch (e) {
       if ((e as ApiError).status === 401 || (e as ApiError).code === 'DEACTIVATED') throw e
       /* older server (no auth.boot) or a hiccup: the reads below fetch on their own */
@@ -111,6 +114,14 @@ export function createRemoteApi(shape: Api): Api {
   // Reads that the start-up call also returns: if it is on its way, wait for it instead of asking separately.
   for (const [ns, m, name] of [['qr', 'pending', 'qr.pending'], ['support', 'mine', 'support.mine']] as const) {
     (out[ns] as Record<string, unknown>)[m] = async () => { if (booting) await booting.catch(() => {}); return cachedRead(name, [], 'user') }
+  }
+  // The Help & support badge. A server without support.unread (an older one): counted from the tickets, as before.
+  a.support.unread = async () => {
+    if (booting) await booting.catch(() => {})
+    try { return await cachedRead<number>('support.unread', [], 'user') } catch (e) {
+      if ((e as ApiError).code !== 'NOT_FOUND') throw e
+      return (await a.support.mine()).filter((t) => t.unreadForCustomer).length
+    }
   }
   a.auth.me = (async () => {
     if (!auth.user) return null
@@ -190,8 +201,10 @@ export function createRemoteApi(shape: Api): Api {
     const all: Awaited<ReturnType<Api['products']['list']>> = []
     let after: number | null = 0
     while (after !== null) {
-      const page: { rows: typeof all; next: number | null; total?: number } = (await rpc<{ rows: typeof all; next: number | null; total?: number }>('products.page', [after], 'user')).data
-      if (me && after === 0 && (page.total ?? 0) > CATALOG_FULL_MAX) return loadCatalogIndex(key, me.business.id)
+      // The first read asks "large shop?" first (no page is built for one); an older server sends the page and its total.
+      type Page = { rows: typeof all; next: number | null; total?: number; large?: boolean }
+      const page: Page = (await rpc<Page>('products.page', after === 0 && me ? [0, { checkLarge: true }] : [after], 'user')).data
+      if (me && after === 0 && (page.large === true || (page.total ?? 0) > CATALOG_FULL_MAX)) return loadCatalogIndex(key, me.business.id)
       all.push(...page.rows)
       after = page.next
     }

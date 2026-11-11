@@ -25,7 +25,10 @@ setArgs({
   'staff.mark': ['any', 'any', 'object?'],
   'staff.markAll': ['any', 'list?'],
   'products.assignBarcodes': ['list?'],
-  'products.page': ['number?'],
+  'customers.byIds': ['list'],
+  'customers.search': ['text?'],
+  'reports.dashboard': ['any', 'any', 'object', 'object?'], // from, to: checked by the handler ("Choose a date range")
+  'products.page': ['any', 'object?'], // any value: the handler reads it as a page start (bad → 0, huge → capped), as documented; then { checkLarge }
   'public.placeOrder': ['any', 'object'],
   'admin.updateCustomer': ['any', 'object'],
   'admin.renew': ['any', 'object', 'text?'],

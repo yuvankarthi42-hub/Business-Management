@@ -72,6 +72,8 @@ export interface Db {
   sqlReads?(stmts: { sql: string; args?: (string | number | null)[] }[]): Promise<SqlRow[][]>
   /** Inserts / updates on several tables in one round trip, all or nothing (SQL databases only). Rows come back per op. */
   writeBatch?(ops: WriteOp[]): Promise<Row[][]>
+  /** Inside a Turso transaction: these writes go with COMMIT (one round trip); their rows once committed. null = not here. */
+  writeAtCommit?(ops: WriteOp[]): Promise<Row[][]> | null
 
   /** Tables and columns as the Data Store reports them (Catalyst metadata API). */
   describe?(): Promise<SchemaInfo>

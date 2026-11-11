@@ -258,7 +258,8 @@ function AdjustModal({ product, initialType, onClose }: { product: Product; init
         )}
         {product.trackExpiry && !needsBatch && ['wastage', 'damage', 'adjustment'].includes(type) && <p className="text-xs text-slate-500">Taken from the batch that expires first. To remove one specific batch, use Inventory → Expiry → Write off.</p>}
         <Field label="Notes (optional)"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Supplier, reason…" /></Field>
-        {n !== 0 && !negative && <p className={clsx('rounded-lg px-3 py-2 text-sm font-medium', after < 0 ? 'bg-red-50 text-red-700' : 'bg-slate-50 text-slate-700')}>Stock after: {after} {product.unit}</p>}
+        {/* Adding stock to an item billed below zero is fine (still short — information); taking it below zero is refused. */}
+        {n !== 0 && !negative && <p className={clsx('rounded-lg px-3 py-2 text-sm font-medium', after >= 0 ? 'bg-slate-50 text-slate-700' : sign > 0 ? 'bg-amber-50 text-amber-800' : 'bg-red-50 text-red-700')}>Stock after: {after} {product.unit}{after < 0 && sign > 0 ? ` (still short by ${-after})` : ''}</p>}
       </div>
     </Modal>
   )

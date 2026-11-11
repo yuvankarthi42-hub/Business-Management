@@ -16,6 +16,13 @@ export interface SqlRunner {
 export interface SqlTx extends SqlRunner {
   commit(): Promise<void>
   rollback(): Promise<void>
+  /**
+   * Optional (Turso): several callers' statements in ONE round trip, each group getting its own results or error,
+   * exactly as if sent alone (statements started at the same moment inside a transaction).
+   */
+  runGroups?(groups: Stmt[][]): Promise<(SqlResult[] | Error)[]>
+  /** Optional (Turso): these last statements and COMMIT in one round trip (each only if the one before worked; else ROLLBACK). */
+  commitWith?(stmts: Stmt[]): Promise<SqlResult[]>
 }
 export interface SqlDriver extends SqlRunner {
   /** All statements or none, in one round trip. */

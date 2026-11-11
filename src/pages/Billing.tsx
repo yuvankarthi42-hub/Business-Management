@@ -20,6 +20,7 @@ import { loyaltyOn } from '@/core/loyalty'
 import { ItemOptionsModal, needsOptions } from '@/features/ItemOptions'
 import { BillSuccessModal, PaymentModal } from '@/features/Payment'
 import { ExchangeNote } from '@/features/Returns'
+import { useCustomer } from '@/features/customerLookup'
 
 /** Supermarket and hardware shops get the scan-first screen; everyone else the tile POS below. */
 export default function Billing() {
@@ -70,7 +71,8 @@ function TileBilling() {
   }
 
   const draft = (): OrderDraft => ({ id: orderId ?? undefined, type, tableId: type === 'dine_in' ? tableId : null, customerId, items: cart.items, discount: cart.discount, notes: '', source: 'pos', ...(cart.points ? { pointsToRedeem: cart.points } : {}) })
-  const { data: customers = [] } = useData(() => (loyaltyOn(me!.business) ? api.customers.list() : Promise.resolve([])))
+  // Points: only the bill's customer is read (not every customer).
+  const billCustomer = useCustomer(loyaltyOn(me!.business) ? customerId : null)
   useEffect(() => { cart.setPoints(0) }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // A bill is saved once: taps while saving are ignored, and a retry after a dropped connection reuses its id.
@@ -161,7 +163,7 @@ function TileBilling() {
           </Select>
         )}
         <CustomerPicker value={customerId} onChange={setCustomerId} />
-        <UsePoints customer={customers.find((c) => c.id === customerId)} billTotal={cart.totalBeforePoints} points={cart.points} onChange={cart.setPoints} />
+        <UsePoints customer={billCustomer ?? undefined} billTotal={cart.totalBeforePoints} points={cart.points} onChange={cart.setPoints} />
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto"><CartLines cart={cart} showKot={!!orderId && kitchenOn} /></div>

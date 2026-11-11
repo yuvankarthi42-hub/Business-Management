@@ -138,6 +138,21 @@ export const QR_BASE_URL = /^https?:\/\/[^\s"'<>\\]+$/i
 export const QR_BASE_URL_MAX = 200
 export const qrBaseUrlOk = (u: unknown) => typeof u === 'string' && (u === '' || (u.length <= QR_BASE_URL_MAX && QR_BASE_URL.test(u)))
 
+/**
+ * The billing settings a customer's phone may see (QR menu): only what prices the cart — tax, round-off, MRP
+ * discounts. The shop's running numbers (next bill / order / KOT / credit note), prefixes, payment methods and
+ * receipt text are never sent (they would show the shop's daily volume); those fields go out empty, so the
+ * menu's shape stays the same.
+ */
+export function publicBilling(billing: Business['billing']): Business['billing'] {
+  return {
+    taxEnabled: billing.taxEnabled, taxMode: billing.taxMode, taxRates: billing.taxRates, defaultTaxRateId: billing.defaultTaxRateId,
+    roundOff: billing.roundOff, ...(billing.mrpDiscounts !== undefined ? { mrpDiscounts: billing.mrpDiscounts } : {}),
+    invoicePrefix: '', nextInvoiceNumber: 0, orderPrefix: '', nextOrderNumber: 0, nextKotNumber: 0,
+    discountEnabled: false, paymentMethods: [], orderTypes: [], receiptFooter: '',
+  }
+}
+
 export function qrSettings(b: Pick<Business, 'qr' | 'billing'>): QrSettings {
   const saved = (b.qr ?? {}) as Partial<QrSettings>
   const own = typeof window !== 'undefined' ? `${window.location.origin}${((import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? '/').replace(/\/$/, '')}${(import.meta as { env?: { VITE_ROUTER?: string } }).env?.VITE_ROUTER === 'hash' ? '/#' : ''}` : ''

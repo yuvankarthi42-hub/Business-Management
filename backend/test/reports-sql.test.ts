@@ -195,7 +195,9 @@ test('reports.gst: database split = line-by-line report on many bills with varie
     for (let i = 0; i < 90; i++) {
       if (i === 60) s.setBranch(annex.id)
       const ls = Array.from({ length: 1 + (i % 4) }, (_, k) => { const at = (i * 5 + k * 7) % items.length; const p = items[at]; return line(p, (i + k) % 4 === 0 && at % 4 === 0 ? [0.125, 0.333, 1.75, 2.5][k % 4] : 1 + ((i + k) % 3)) })
-      await pay(ls, { ...(i % 9 === 0 ? { customerId: walkKa.id } : i % 13 === 0 ? { customerId: b2b.id } : {}), discount: i % 7 === 0 ? 3.33 : 0 })
+      // ₹3.33 off every 7th bill — only on bills worth more than that (a discount can't be more than the bill: K-9).
+      const worth = ls.reduce((a, l) => a + l.qty * (items.find((x) => x.id === l.productId) as P & { price: number }).price, 0)
+      await pay(ls, { ...(i % 9 === 0 ? { customerId: walkKa.id } : i % 13 === 0 ? { customerId: b2b.id } : {}), discount: i % 7 === 0 && worth > 3.33 ? 3.33 : 0 })
     }
     s.setBranch(null)
     const { fast, full } = await both(() => s.call<{ b2cs: unknown[]; hsn: unknown[]; summary: unknown }>('reports.gst', month))

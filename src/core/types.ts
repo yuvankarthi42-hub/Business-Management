@@ -435,6 +435,8 @@ export type PaymentStatus = 'unpaid' | 'partial' | 'paid'
 export interface Order extends Scoped, Audit {
   id: ID
   number: string
+  /** Orders list only (asked with summary): the lines as short text — `items` is then empty (opening a bill reads them). */
+  itemSummary?: string
   type: OrderType
   tableId: ID | null
   customerId: ID | null

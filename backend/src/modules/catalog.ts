@@ -1,5 +1,6 @@
 // Categories, products (save, CSV import, in-store barcodes), photos and daily specials.
 import { MAX_BILL_ITEMS } from '@/core/limits'
+import { CATALOG_FULL_MAX } from '@/core/catalogIndex'
 import { randomBytes } from 'node:crypto'
 import { templateFor } from '@/core/config'
 import type { ImportItem } from '@/core/productImport'
@@ -176,10 +177,17 @@ define('products', {
    * The catalogue in pages (the browser joins them, so each answer stays small): `after` = where the last page
    * ended (0 for the first). Catalyst Data Store: the whole list in one page.
    */
-  page: userRead(async (c, after?: number) => {
+  page: userRead(async (c, after?: number, opts?: { checkLarge?: boolean }) => {
     if (!c.dbs.perShop) return { rows: withCostFor(c, await loadProducts(c)), next: null }
     // A sane page start (a huge number can't be a page of this shop: the database would refuse it).
     const at = Math.min(1_000_000_000, Math.max(0, Math.floor(Number(after) || 0)))
+    // checkLarge (a device's first read): a large shop (more than CATALOG_FULL_MAX products) is told so at once —
+    // its app reads the light index instead — without building a page it would not use. One row past the limit is
+    // enough to know (the products aren't counted).
+    if (at === 0 && opts?.checkLarge === true) {
+      const past = await c.db.select('products', { where: { business_id: c.businessId }, limit: 1, offset: CATALOG_FULL_MAX })
+      if (past.length) return { rows: [], next: null, large: true }
+    }
     const page = await loadProductPage(c, at, PRODUCT_PAGE)
     // The first page also says how many there are: a large shop's app switches to the light index (catalogIndex.ts).
     const total = at === 0 && page.next !== null ? await c.db.count('products', { business_id: c.businessId }) : undefined
@@ -190,12 +198,12 @@ define('products', {
    * The light product index of a large shop (src/core/catalogIndex.ts), one database per shop only:
    * `{ after }` = the whole index in pages (id order); `{ since }` = only what changed after that time.
    */
-  index: userRead(async (c, input?: { after?: string | null; since?: string | null }) => {
+  index: userRead(async (c, input?: { after?: string | null; since?: string | null; stockOnly?: boolean }) => {
     if (!c.dbs.perShop) throw new ApiError('The product index is not used on this setup')
     const since = input?.since
     if (since != null) {
       if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(String(since))) throw new ApiError('Bad time')
-      return lightChangesSince(c, String(since))
+      return lightChangesSince(c, String(since), input?.stockOnly === true)
     }
     return lightIndexPage(c, input?.after ?? null)
   }),
@@ -417,19 +425,47 @@ define('products', {
 
   /** Give every listed product without a barcode its own in-store EAN-13 (prefix 20), for printing labels. */
   assignBarcodes: userWrite(async (c, ids: string[]) => {
-    const all = await c.db.select('products', { where: { business_id: c.businessId } })
-    const codes = all.map((p) => str(p.barcode))
+    // Only the chosen products, and the highest in-store code so far — not the whole catalogue.
+    const want = [...new Set((ids ?? []).map(String))].filter((x) => isId(x))
+    if (!want.length) return {}
+    const rows = (await selectIn(c, 'products', 'ROWID', want, { business_id: c.businessId })).filter((x) => !str(x.barcode).trim()).sort((a, b) => Number(a.ROWID) - Number(b.ROWID))
     const out: Record<string, string> = {}
-    for (const p of all.filter((x) => (ids ?? []).includes(x.ROWID) && !str(x.barcode).trim())) {
-      const bc = nextInStoreBarcode(codes)
-      codes.push(bc)
-      await c.db.update('products', p.ROWID, { barcode: bc, barcode_key: `${c.businessId}:${bc}` })
-      await audit(c, 'product', p.ROWID, 'update', `${str(p.name)}: barcode ${bc}`)
-      out[p.ROWID] = bc
+    if (!rows.length) return out
+    let top = await highestInStoreBarcode(c)
+    for (const p of rows) {
+      // Each code is the highest + 1. The unique barcode key refuses a code someone else took at the same moment:
+      // then the next free one is tried (a few times) — never a duplicate.
+      for (let attempt = 0; ; attempt++) {
+        const bc = nextInStoreBarcode(top ? [top] : [])
+        try {
+          await c.db.update('products', p.ROWID, { barcode: bc, barcode_key: `${c.businessId}:${bc}` })
+          top = bc
+          await audit(c, 'product', p.ROWID, 'update', `${str(p.name)}: barcode ${bc}`)
+          out[p.ROWID] = bc
+          break
+        } catch (e) {
+          if (!(e instanceof DuplicateError) || attempt >= 2) throw e
+          top = (await highestInStoreBarcode(c)) ?? bc
+          if (Number(top.slice(2, 12)) < Number(bc.slice(2, 12))) top = bc // never go back to a code just refused
+        }
+      }
     }
     return out
   }, { perm: 'products.manage' }),
 })
+
+/**
+ * The highest in-store barcode used in this shop ("20" + 10 digits + check digit), or null. Turso: one read on the
+ * unique barcode-key index (only the "20…" range); otherwise every product's code, as before.
+ */
+async function highestInStoreBarcode(c: Ctx): Promise<string | null> {
+  if (c.dbs.perShop && c.db.sql) {
+    const [r] = await c.db.sql(`SELECT MAX("barcode") AS b FROM "products" WHERE "barcode_key" >= ? AND "barcode_key" < ? AND "barcode" GLOB '20${'[0-9]'.repeat(11)}'`, [`${c.businessId}:20`, `${c.businessId}:21`])
+    return r?.b ? String(r.b) : null
+  }
+  const codes = (await c.db.select('products', { where: { business_id: c.businessId } })).map((p) => str(p.barcode)).filter((x) => /^20\d{11}$/.test(x))
+  return codes.length ? codes.reduce((a, b) => (Number(b.slice(2, 12)) > Number(a.slice(2, 12)) ? b : a)) : null
+}
 
 define('media', {
   /** Photo already compressed in the browser (≤ 50 KB, 320 px thumbnail). The server checks the size again. */

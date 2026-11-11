@@ -1,0 +1,349 @@
+<title>Kadai Kalanjiyam Schema Audit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column; a summary ledger up top, then findings as severity-striped entries, then reference tables. */
+:root {
+  --bg: #f6f8f9; --panel: #ffffff; --ink: #17222b; --muted: #5b6b76; --line: #dbe3e8; --accent: #0f6b74;
+  --high: #b42318; --high-bg: #fdecea; --med: #a15c00; --med-bg: #fdf3e2; --low: #3d5a80; --low-bg: #e9eff7;
+  --sugg: #6b4fa0; --sugg-bg: #f1ecf9; --ok: #1f7a4d; --ok-bg: #e6f4ec; --code-bg: #eef2f4;
+  --f-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #11171c; --panel: #182129; --ink: #e3eaee; --muted: #93a4ae; --line: #2a3640; --accent: #5cc3cc;
+  --high: #ff8a7a; --high-bg: #3a1d1a; --med: #f0b35a; --med-bg: #36280f; --low: #9cb8e0; --low-bg: #1d2a3b;
+  --sugg: #c3aef0; --sugg-bg: #2a2340; --ok: #6fd3a0; --ok-bg: #163327; --code-bg: #202b34; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #11171c; --panel: #182129; --ink: #e3eaee; --muted: #93a4ae; --line: #2a3640; --accent: #5cc3cc;
+  --high: #ff8a7a; --high-bg: #3a1d1a; --med: #f0b35a; --med-bg: #36280f; --low: #9cb8e0; --low-bg: #1d2a3b;
+  --sugg: #c3aef0; --sugg-bg: #2a2340; --ok: #6fd3a0; --ok-bg: #163327; --code-bg: #202b34; color-scheme: dark }
+
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--ink); font: 15px/1.6 var(--f-body); padding-inline: 16px; padding-block: 32px 64px }
+.wrap { max-width: 920px; margin: 0 auto; display: grid; gap: 40px }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; line-height: 1.2; margin: 0 }
+h1 { font-size: 2.1rem; letter-spacing: -0.01em }
+h2 { font-size: 1.35rem; padding-bottom: 6px; border-bottom: 2px solid var(--ink) }
+h3 { font-size: 1.1rem }
+p { margin: 0; max-width: 68ch }
+code, .mono { font-family: var(--f-mono); font-size: 0.86em }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere }
+a { color: var(--accent) }
+.eyebrow { font: 500 0.75rem/1 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted) }
+header { display: grid; gap: 12px }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 20px; color: var(--muted); font-size: 0.88rem }
+section { display: grid; gap: 16px }
+
+/* summary ledger */
+.ledger { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line) }
+.ledger div { background: var(--panel); padding: 14px 16px; display: grid; gap: 2px }
+.ledger b { font: 700 1.9rem/1 var(--f-display); font-variant-numeric: tabular-nums }
+.ledger span { font-size: 0.8rem; color: var(--muted) }
+.ledger .c b { color: var(--ok) } .ledger .h b { color: var(--high) } .ledger .m b { color: var(--med) } .ledger .l b { color: var(--low) } .ledger .s b { color: var(--sugg) }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px }
+.facts div { background: var(--panel); border: 1px solid var(--line); padding: 12px 14px; display: grid; gap: 4px; min-width: 0 }
+.facts b { font-variant-numeric: tabular-nums }
+
+/* findings */
+.finding { background: var(--panel); border: 1px solid var(--line); border-left: 5px solid var(--sev); padding: 18px 20px; display: grid; gap: 14px; min-width: 0 }
+.finding.high { --sev: var(--high); --sev-bg: var(--high-bg) } .finding.med { --sev: var(--med); --sev-bg: var(--med-bg) }
+.finding.low { --sev: var(--low); --sev-bg: var(--low-bg) } .finding.sugg { --sev: var(--sugg); --sev-bg: var(--sugg-bg) }
+.fhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px }
+.fid { font: 600 0.85rem/1 var(--f-mono); color: var(--sev) }
+.pill { font: 500 0.72rem/1 var(--f-mono); letter-spacing: 0.04em; text-transform: uppercase; padding: 4px 7px; border-radius: 3px; background: var(--sev-bg); color: var(--sev) }
+.pill.conf { background: var(--ok-bg); color: var(--ok) }
+.pill.part { background: var(--sugg-bg); color: var(--sugg) }
+.tables { display: flex; flex-wrap: wrap; gap: 6px }
+.tables code { background: transparent; border: 1px solid var(--line); padding: 1px 6px }
+dl.five { display: grid; grid-template-columns: 9.5rem 1fr; gap: 10px 18px; margin: 0 }
+dl.five dt { font: 500 0.78rem/1.5 var(--f-mono); letter-spacing: 0.03em; text-transform: uppercase; color: var(--muted); padding-top: 2px }
+dl.five dd { margin: 0; min-width: 0 }
+.evidence { font-size: 0.86rem; color: var(--muted); border-top: 1px dashed var(--line); padding-top: 10px }
+@media (max-width: 560px) { dl.five { grid-template-columns: 1fr; gap: 2px } dl.five dd { margin-bottom: 10px } }
+
+/* tables */
+.tw { overflow-x: auto; border: 1px solid var(--line); background: var(--panel) }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top }
+th { font: 500 0.75rem/1.4 var(--f-mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); background: var(--code-bg) }
+tr:last-child td { border-bottom: 0 }
+td.n { font-variant-numeric: tabular-nums; text-align: right }
+.keep { color: var(--ok); font-weight: 600 } .change { color: var(--med); font-weight: 600 } .stop { color: var(--high); font-weight: 600 }
+ol.order { margin: 0; padding-left: 1.4rem; display: grid; gap: 6px }
+ul.plain { margin: 0; padding-left: 1.2rem; display: grid; gap: 6px }
+pre { margin: 0; background: var(--code-bg); padding: 12px 14px; overflow-x: auto; font: 0.82rem/1.55 var(--f-mono) }
+.note { background: var(--panel); border: 1px solid var(--line); padding: 14px 16px; display: grid; gap: 8px }
+footer { color: var(--muted); font-size: 0.82rem; border-top: 1px solid var(--line); padding-top: 14px }
+</style>
+
+<div class="wrap">
+
+<header>
+  <span class="eyebrow">Database schema audit · Shop DB · Platform DB · Catalyst Data Store</span>
+  <h1>Kadai Kalanjiyam Schema Audit</h1>
+  <div class="meta"><span>11 Nov 2026</span><span>Working tree after commit <span class="mono">077ea5e</span> + uncommitted fixes</span><span>Read-only: no code or schema changed</span></div>
+  <p>A check of every table, column, key, index and JSON column against how the code actually uses them. Each finding states the evidence it rests on. Performance rule applied to every recommendation: it must not add server CPU time, database calls or queries.</p>
+</header>
+
+<section aria-labelledby="sum">
+  <h2 id="sum">Summary</h2>
+  <div class="ledger" role="list">
+    <div class="c" role="listitem"><b>0</b><span>Critical</span></div>
+    <div class="h" role="listitem"><b>1</b><span>High</span></div>
+    <div class="m" role="listitem"><b>4</b><span>Medium</span></div>
+    <div class="l" role="listitem"><b>4</b><span>Low</span></div>
+    <div class="s" role="listitem"><b>4</b><span>Suggestions (need proof)</span></div>
+  </div>
+  <p>The design is sound: money in paise, quantities in thousandths, snapshots on bills, retry-safe <code>client_uuid</code> keys, soft deletes, and references across the two databases handled in code. No Critical issue was found. The one High item is about report correctness, not structure.</p>
+  <div class="facts">
+    <div><span class="eyebrow">Tables in use</span><b>68 different tables</b><span>54 in each shop database, 19 in the platform database; 5 names in both</span></div>
+    <div><span class="eyebrow">Catalyst Data Store</span><b>64 tables</b><span>The same set minus 4 SQL-only tables: <code>change_log</code>, <code>sync_epochs</code>, <code>kv_cache</code>, <code>schema_migrations</code></span></div>
+    <div><span class="eyebrow">Source of truth</span><b><code>server/catalyst/schema.sql</code></b><span>Turso migrations and <code>tables.json</code> are generated from it</span></div>
+  </div>
+</section>
+
+<section aria-labelledby="how">
+  <h2 id="how">How this was checked</h2>
+  <ul class="plain">
+    <li>Read the full source schema (1,014 lines), all 13 shop and 3 platform migrations, and <code>backend/setup/tables.json</code>.</li>
+    <li>Counted, for every column, where the backend code mentions it (generated files excluded), then checked each low count by hand.</li>
+    <li>Listed every index and ran <code>EXPLAIN QUERY PLAN</code> on the generated shop schema (<code>server/turso/shop.sql</code>) in SQLite.</li>
+    <li>Confirmed in code that the SQL schema is only used with one database per shop (<code>PerShopDatabases</code>; <code>SingleDatabases</code> is only the Data Store and in-memory test store).</li>
+    <li>Traced every hard delete, because a foreign-key index is needed only when it is queried or its parent row can be deleted.</li>
+  </ul>
+</section>
+
+<section aria-labelledby="conf">
+  <h2 id="conf">Confirmed issues</h2>
+
+  <article class="finding high">
+    <div class="fhead"><span class="fid">H-1</span><span class="pill">High</span><span class="pill conf">Confirmed</span><h3>Profit reports use today's cost price, not the cost at billing time</h3></div>
+    <div class="tables"><code>order_items.cost_minor</code><code>products.cost_minor</code><code>sale_return_items</code></div>
+    <dl class="five">
+      <dt>Issue</dt><dd>Every bill line saves the item's cost when it is billed, but every profit and cost-of-goods report joins to the product's current cost. The saved cost is never read.</dd>
+      <dt>Why it matters</dt><dd>If the owner edits an item's cost today, last month's profit changes too. A report for a closed period should not move.</dd>
+      <dt>Change</dt><dd>Add up cost of goods from <code>order_items.cost_minor</code>. For returns, take the cost of the sold line through <code>sale_return_items.order_item_id</code>.</dd>
+      <dt>CPU / DB calls</dt><dd>Lower. The join to <code>products</code> for cost is no longer needed; still one request.</dd>
+      <dt>Risk / migration</dt><dd>No migration: the column already exists and is filled. Past-period profit numbers will change (they become correct). Bills made while an item's cost was still 0 will show cost 0. Needs the owner's decision because report values change.</dd>
+    </dl>
+    <p class="evidence">Evidence: cost saved at billing in <code>backend/src/domain/orders.ts:208</code> and <code>:216</code>; reports join current cost in <code>backend/src/modules/reports.ts:380–391</code>.</p>
+  </article>
+
+  <article class="finding med">
+    <div class="fhead"><span class="fid">M-1</span><span class="pill">Medium</span><span class="pill conf">Confirmed</span><h3>32 single-column <code>business_id</code> indexes in every shop database</h3></div>
+    <div class="tables"><code>order_items</code><code>order_item_addons</code><code>order_item_batches</code><code>kitchen_ticket_items</code><code>customer_points</code><code>purchase_items</code><code>stock_batches</code><code>purchases</code><code>+ 24 more</code></div>
+    <dl class="five">
+      <dt>Issue</dt><dd>Each shop has its own database, so <code>business_id</code> holds the same value in every row. An index on it cannot narrow anything down, yet it is updated on every insert.</dd>
+      <dt>Why it matters</dt><dd>A 20-line bill writes 20 or more extra index entries for <code>order_items</code> alone, plus the add-on, kitchen and points rows. The query planner also picks these indexes: the GST purchases query uses <code>ix_purchases_business_id</code>, which reads every row. Fix B-4 dropped the one on <code>branch_stock</code> for the same reason.</dd>
+      <dt>Change</dt><dd>One migration that drops these 32 indexes. Keep the column (the code shares it with the Data Store) and keep every composite index.</dd>
+      <dt>CPU / DB calls</dt><dd>App CPU and DB calls unchanged. Database write time goes down. No query gets slower: these indexes already mean a full scan.</dd>
+      <dt>Risk / migration</dt><dd>Low. Index drops only, recreatable. Confirm with <code>EXPLAIN</code> over the test suite's queries before dropping. Turso only.</dd>
+    </dl>
+    <p class="evidence">Evidence: one business per database in <code>backend/src/db/databases.ts</code>; the full list of 32 is in the appendix.</p>
+  </article>
+
+  <article class="finding med">
+    <div class="fhead"><span class="fid">M-2</span><span class="pill">Medium</span><span class="pill conf">Confirmed</span><h3>The GST report reads every purchase and return ever made</h3></div>
+    <div class="tables"><code>purchases</code><code>sale_returns</code></div>
+    <dl class="five">
+      <dt>Issue</dt><dd><code>purchases</code> has only a <code>business_id</code> index. <code>sale_returns</code> has <code>(business_id, branch_id, created_at)</code>, but the GST query has no branch filter, so only the useless first column is used.</dd>
+      <dt>Why it matters</dt><dd>Every monthly GST report reads all history. It gets slower every year the shop runs.</dd>
+      <dt>Change</dt><dd>Add an index on <code>purchases (purchase_date)</code> and one on <code>sale_returns (created_at)</code>.</dd>
+      <dt>CPU / DB calls</dt><dd>Same calls. Each read covers one month instead of all history. One extra index write on two low-volume tables.</dd>
+      <dt>Risk / migration</dt><dd>Low. Index-add migration only.</dd>
+    </dl>
+    <p class="evidence">Evidence: <code>EXPLAIN</code> shows <code>SEARCH purchases USING INDEX ix_purchases_business_id (business_id=?)</code> and <code>SEARCH sale_returns USING INDEX ix_sale_returns_business_id_branch_id_created_at (business_id=?)</code>.</p>
+  </article>
+
+  <article class="finding med">
+    <div class="fhead"><span class="fid">M-3</span><span class="pill">Medium</span><span class="pill conf">Confirmed</span><h3><code>orders.tax_breakup_json</code> is written on every bill and never read</h3></div>
+    <div class="tables"><code>orders</code></div>
+    <dl class="five">
+      <dt>Issue</dt><dd>Each bill runs <code>JSON.stringify</code> on its tax lines and stores the text. Nothing reads it.</dd>
+      <dt>Why it matters</dt><dd>CPU and storage on the busiest write. GST per line is already stored relationally in <code>order_items.taxable_minor</code> and <code>tax_minor</code>.</dd>
+      <dt>Change</dt><dd>Stop writing it. Keep the column: dropping a column rewrites the whole <code>orders</code> table.</dd>
+      <dt>CPU / DB calls</dt><dd>Lower CPU and fewer bytes on every bill.</dd>
+      <dt>Risk / migration</dt><dd>Very low, no migration. The data export includes this column, so old exports have it and new ones will not.</dd>
+    </dl>
+    <p class="evidence">Evidence: the only reference in the backend is the write in <code>backend/src/domain/orders.ts:612</code>.</p>
+  </article>
+
+  <article class="finding med">
+    <div class="fhead"><span class="fid">M-4</span><span class="pill">Medium</span><span class="pill conf">Confirmed</span><h3>Two duplicate checks exist only in code, with no database constraint</h3></div>
+    <div class="tables"><code>purchases.client_uuid</code><code>suppliers.name_key</code></div>
+    <dl class="five">
+      <dt>Issue</dt><dd><code>purchases.client_uuid</code> is nullable and not unique; <code>suppliers.name_key</code> is not unique. The schema says "checked by the API": the code looks first, then inserts.</dd>
+      <dt>Why it matters</dt><dd>Two retries arriving together can both pass the check: a purchase saved twice adds stock twice; a supplier can be created twice. Bills, payments and returns already have UNIQUE keys for this.</dd>
+      <dt>Change</dt><dd>UNIQUE index on <code>purchases (client_uuid) WHERE client_uuid IS NOT NULL</code> and on <code>suppliers (name_key)</code>. Data Store: set IsUnique on both columns.</dd>
+      <dt>CPU / DB calls</dt><dd>Unchanged; one index entry per purchase or supplier.</dd>
+      <dt>Risk / migration</dt><dd>Medium. Existing duplicates must be found and resolved first, or the migration fails.</dd>
+    </dl>
+    <p class="evidence">Evidence: check-then-insert in <code>backend/src/modules/purchases.ts:228</code> (purchases) and <code>:119</code> (suppliers); no UNIQUE in migration 0004.</p>
+  </article>
+
+  <article class="finding low">
+    <div class="fhead"><span class="fid">L-1</span><span class="pill">Low</span><span class="pill conf">Confirmed</span><h3>Three tables are never used</h3></div>
+    <div class="tables"><code>plans</code><code>devices</code><code>payment_allocations</code></div>
+    <dl class="five">
+      <dt>Issue</dt><dd>No backend code reads or writes them. Pricing actually lives in <code>platform_settings</code> under <code>pricing</code>, so <code>plans</code> and <code>businesses.plan_id</code> duplicate it. <code>orders.device_id</code> is always empty.</dd>
+      <dt>Why it matters</dt><dd>Confusing for maintenance. <code>ix_orders_device_id</code> is still updated on every bill.</dd>
+      <dt>Change</dt><dd>Drop <code>ix_orders_device_id</code> now. Mark the three tables as not used, or drop them in a later migration.</dd>
+      <dt>CPU / DB calls</dt><dd>One fewer index write per bill; nothing else.</dd>
+      <dt>Risk / migration</dt><dd>Low.</dd>
+    </dl>
+  </article>
+
+  <article class="finding low">
+    <div class="fhead"><span class="fid">L-2</span><span class="pill">Low</span><span class="pill conf">Confirmed</span><h3>The shop logo is stored in two places</h3></div>
+    <div class="tables"><code>businesses.logo_media_id</code><code>business_settings · brand.logoKey</code></div>
+    <dl class="five">
+      <dt>Issue</dt><dd><code>businesses.logo_media_id</code> is written (<code>backend/src/modules/business.ts:200</code>), but the app reads the logo from the <code>brand</code> setting.</dd>
+      <dt>Why it matters</dt><dd>Two sources for one fact can drift apart.</dd>
+      <dt>Change</dt><dd>Keep one of them.</dd>
+      <dt>CPU / DB calls</dt><dd>Unchanged, or one write fewer.</dd>
+      <dt>Risk / migration</dt><dd>Low.</dd>
+    </dl>
+  </article>
+
+  <article class="finding low">
+    <div class="fhead"><span class="fid">L-3</span><span class="pill">Low</span><span class="pill conf">Confirmed</span><h3>A stale schema file</h3></div>
+    <div class="tables"><code>server/schema.sql</code></div>
+    <dl class="five">
+      <dt>Issue</dt><dd>An old MySQL schema (705 lines) that nothing references. It differs from the real one.</dd>
+      <dt>Why it matters</dt><dd>Someone may read or change the wrong file.</dd>
+      <dt>Change</dt><dd>Delete it, or mark it obsolete at the top.</dd>
+      <dt>CPU / DB calls</dt><dd>None.</dd>
+      <dt>Risk / migration</dt><dd>None.</dd>
+    </dl>
+  </article>
+
+  <article class="finding low">
+    <div class="fhead"><span class="fid">L-4</span><span class="pill">Low</span><span class="pill conf">Confirmed</span><h3>25 columns are never read or written by the backend</h3></div>
+    <div class="tables"><code>users.catalyst_user_id</code><code>users.pin_hash</code><code>users.joined_on</code><code>products.name_local</code><code>customers.credit_limit_minor</code><code>orders.discount_note</code><code>orders.service_charge_minor</code><code>sale_returns.credit_expires_on</code><code>sequences.fiscal_year</code><code>categories.parent_id</code><code>dining_tables.qr_token</code><code>audit_logs.changes_json</code><code>campaigns.poster_media_id</code><code>whatsapp_messages.attachment_media_id</code><code>businesses.city</code><code>subscription_periods.payment_ref</code><code>plans.*</code><code>devices.*</code></div>
+    <dl class="five">
+      <dt>Issue</dt><dd>Several are planned features (sub-categories, Tamil names, quick PIN).</dd>
+      <dt>Why it matters</dt><dd>Readers assume they work. Any index on them is maintained for nothing.</dd>
+      <dt>Change</dt><dd>Do not drop them (that rewrites tables). Mark them reserved in the schema and drop any index that sits on one of them.</dd>
+      <dt>CPU / DB calls</dt><dd>None, or fewer index writes.</dd>
+      <dt>Risk / migration</dt><dd>None for marking; low for index drops.</dd>
+    </dl>
+  </article>
+</section>
+
+<section aria-labelledby="sug">
+  <h2 id="sug">Suggestions that need more proof</h2>
+
+  <article class="finding sugg">
+    <div class="fhead"><span class="fid">S-1</span><span class="pill">Suggestion</span><span class="pill part">Partial evidence</span><h3>Possibly extra indexes on the busiest tables</h3></div>
+    <div class="tables"><code>orders · 16</code><code>payments · 8</code><code>stock_movements · 7</code><code>customer_points · 6</code></div>
+    <dl class="five">
+      <dt>Issue</dt><dd>Some single-column indexes look covered by composite ones (<code>orders.customer_id</code>, <code>orders.branch_id</code>). Others sit on parents that are never hard-deleted (<code>created_by</code>, <code>updated_by</code>, <code>price_list_id</code>).</dd>
+      <dt>Why it matters</dt><dd>Every bill updates all of them.</dd>
+      <dt>Change</dt><dd>Log every SQL statement during the full test run, <code>EXPLAIN</code> each one, list indexes never used, and drop only those. Keep indexes whose parent can be deleted (<code>table_id</code>, <code>order_item_id</code>, <code>category_id</code>, media ids, <code>template_id</code>): <code>EXPLAIN</code> shows <code>ix_orders_table_id</code> is used when a table is removed.</dd>
+      <dt>CPU / DB calls</dt><dd>Fewer index writes per bill; app CPU unchanged.</dd>
+      <dt>Risk / migration</dt><dd>Low once proven; index drops only.</dd>
+    </dl>
+  </article>
+
+  <article class="finding sugg">
+    <div class="fhead"><span class="fid">S-2</span><span class="pill">Suggestion</span><span class="pill part">Checked against the CPU rule</span><h3>JSON columns: what to change and what to keep</h3></div>
+    <div class="tw"><table>
+      <thead><tr><th>Column</th><th>Recommendation</th><th>Reason</th></tr></thead>
+      <tbody>
+        <tr><td><code>products.details_json</code><br><span class="mono">design, fabric, colour, size</span></td><td class="change">Change to 4 columns</td><td>Same row, no extra query, no JSON parsing; filtering by fabric or colour becomes possible.</td></tr>
+        <tr><td><code>orders.tax_breakup_json</code></td><td class="stop">Stop writing (M-3)</td><td>Never read; already stored per line.</td></tr>
+        <tr><td><code>campaigns.product_ids_json</code></td><td class="keep">Keep</td><td>A separate table would add one insert per product plus a join on every read: more DB calls.</td></tr>
+        <tr><td><code>business_settings</code>, <code>platform_settings</code>, <code>bill_formats.format_json</code>, <code>branches.printer_json</code>, <code>branches.scale_json</code></td><td class="keep">Keep</td><td>Always read and written as a whole document and cached once per session. Tables would mean many rows or columns and more reads.</td></tr>
+        <tr><td><code>request_log.answer_json</code>, <code>audit_logs.changes_json</code></td><td class="keep">Keep</td><td>Stored answers and change history, never searched by field.</td></tr>
+      </tbody>
+    </table></div>
+  </article>
+
+  <article class="finding sugg">
+    <div class="fhead"><span class="fid">S-3</span><span class="pill">Suggestion</span><h3>Stock is kept in three places with no consistency check</h3></div>
+    <div class="tables"><code>branch_stock.qty_milli</code><code>stock_movements.balance_milli</code><code>stock_batches.qty_left_milli</code></div>
+    <dl class="five">
+      <dt>Issue</dt><dd>The three are kept in step by code. That is a sound design (a ledger plus current totals), but nothing detects drift.</dd>
+      <dt>Change</dt><dd>A read-only admin or offline check that compares them.</dd>
+      <dt>CPU / DB calls</dt><dd>Zero at runtime; it never runs on a request.</dd>
+      <dt>Risk / migration</dt><dd>None.</dd>
+    </dl>
+  </article>
+
+  <article class="finding sugg">
+    <div class="fhead"><span class="fid">S-4</span><span class="pill">Suggestion</span><h3>Small consistency points</h3></div>
+    <ul class="plain">
+      <li><code>expenses.expense_date</code> is a DATETIME while <code>purchase_date</code> and <code>paid_on</code> are DATE.</li>
+      <li><code>daily_specials</code> has no uniqueness on (product, date, branch); the code decides it.</li>
+    </ul>
+  </article>
+</section>
+
+<section aria-labelledby="ok">
+  <h2 id="ok">Checked and correct (not issues)</h2>
+  <ul class="plain">
+    <li><strong>Copied totals:</strong> <code>orders.paid_minor</code> / <code>balance_minor</code> / <code>returned_minor</code> and <code>customers.points_balance</code>, kept for fast reads beside their ledgers.</li>
+    <li><strong>Tables in both databases:</strong> <code>media_files</code>, <code>secrets</code>, <code>whatsapp_templates</code>, <code>whatsapp_messages</code> (shop rows in the shop DB, platform rows in the platform DB).</li>
+    <li><strong>Sign-in names across databases:</strong> <code>login_names</code> is claimed first, bound after the user is saved, undone on failure, and unbound claims are cleaned daily.</li>
+    <li><strong>References across the two databases:</strong> stored as plain columns with comments, not foreign keys that SQLite could not check.</li>
+    <li><strong>Composite uniqueness:</strong> <code>uniq_key</code> columns, needed because Catalyst's IsUnique works on one column.</li>
+    <li><strong>Bill snapshots and money:</strong> snapshot names on bill lines, money in paise, quantities in thousandths, rates in basis points.</li>
+  </ul>
+</section>
+
+<section aria-labelledby="lim">
+  <h2 id="lim">Assumptions and limits</h2>
+  <div class="note">
+    <p>The Catalyst Data Store's real indexes and ZCQL query plans cannot be inspected from here. For it, only the match between <code>tables.json</code> and the schema was checked (64 tables, none missing or extra).</p>
+    <p>Index gains in M-1, M-2 and S-1 are database write and read time, not app CPU. They should be measured on real Turso.</p>
+  </div>
+</section>
+
+<section aria-labelledby="order">
+  <h2 id="order">Recommended order</h2>
+  <ol class="order">
+    <li><strong>H-1</strong>: decide first, because past profit numbers will change.</li>
+    <li><strong>M-3</strong>: code change only, no migration.</li>
+    <li><strong>M-1 and M-2</strong>: together, in one index migration.</li>
+    <li><strong>M-4</strong>: find existing duplicates first, then the migration.</li>
+    <li><strong>S-1</strong>: after the final test run, from the logged queries.</li>
+    <li><strong>Low items</strong>: together, later.</li>
+  </ol>
+</section>
+
+<section aria-labelledby="app">
+  <h2 id="app">Appendix</h2>
+  <h3>The 32 tables with a single-column <code>business_id</code> index (shop database)</h3>
+  <div class="tables"><code>bill_formats</code><code>branches</code><code>business_settings</code><code>campaigns</code><code>categories</code><code>customer_points</code><code>devices</code><code>dining_tables</code><code>expense_categories</code><code>kitchen_ticket_items</code><code>media_files</code><code>order_item_addons</code><code>order_item_batches</code><code>order_items</code><code>payment_allocations</code><code>price_lists</code><code>product_addons</code><code>product_prices</code><code>product_variants</code><code>purchase_items</code><code>purchases</code><code>roles</code><code>salary_payments</code><code>sale_return_items</code><code>secrets</code><code>sequences</code><code>staff_advances</code><code>stock_batches</code><code>supplier_payments</code><code>suppliers</code><code>tax_rates</code><code>whatsapp_templates</code></div>
+
+  <h3>Indexes per table (busiest, shop database)</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Table</th><th style="text-align:right">Indexes</th><th>Written</th></tr></thead>
+    <tbody>
+      <tr><td><code>orders</code></td><td class="n">16</td><td>Every bill (insert and updates)</td></tr>
+      <tr><td><code>payments</code></td><td class="n">8</td><td>Every payment</td></tr>
+      <tr><td><code>whatsapp_messages</code></td><td class="n">8</td><td>Every WhatsApp message</td></tr>
+      <tr><td><code>stock_movements</code></td><td class="n">7</td><td>Every stock line</td></tr>
+      <tr><td><code>sale_returns</code></td><td class="n">7</td><td>Every return</td></tr>
+      <tr><td><code>customer_points</code></td><td class="n">6</td><td>Every points change</td></tr>
+      <tr><td><code>users</code></td><td class="n">6</td><td>Rarely</td></tr>
+      <tr><td><code>order_items</code></td><td class="n">5</td><td>Every bill line</td></tr>
+    </tbody>
+  </table></div>
+  <p class="evidence">Counts include SQLite's own indexes for UNIQUE columns.</p>
+
+  <h3>Query plans</h3>
+  <pre>GST purchases     SEARCH purchases USING INDEX ix_purchases_business_id (business_id=?)
+GST returns       SEARCH sale_returns USING INDEX ix_sale_returns_business_id_branch_id_created_at (business_id=?)
+Orders by customer SEARCH orders USING INDEX ix_orders_business_id_customer_id_status (business_id=? AND customer_id=?)
+Remove a table    SEARCH orders USING COVERING INDEX ix_orders_table_id (table_id=?)</pre>
+
+  <h3>Hard deletes found in code</h3>
+  <p><code>login_names</code>, <code>push_subscriptions</code>, <code>whatsapp_templates</code>, <code>categories</code>, <code>businesses</code>, <code>user_branches</code>, <code>shop_databases</code>, <code>secrets</code>, <code>roles</code>, <code>role_permissions</code>, <code>request_log</code>, <code>product_prices</code>, <code>platform_settings</code>, <code>order_items</code>, <code>order_item_addons</code>, <code>media_files</code>, <code>feature_flag_businesses</code>, <code>dining_tables</code>, <code>daily_specials</code>, plus raw deletes on <code>change_log</code>, <code>kv_cache</code> and <code>request_log</code>. Every other parent is only soft-deleted.</p>
+</section>
+
+<footer>Kadai Kalanjiyam POS · schema audit, 11 Nov 2026 · read-only review; no code or schema was changed.</footer>
+</div>

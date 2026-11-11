@@ -55,8 +55,12 @@ test('Tracking: by random code only; counter bills and other ids are not readabl
     await assert.rejects(s.call('public.order', s.businessId, String(Number(placed.orderId) + 50)), /Order not found/)
     await assert.rejects(s.call('public.order', s.businessId, 'A'.repeat(22)), /Order not found/)
     await assert.rejects(s.call('public.order', s.businessId, '../../etc'), /Order not found/)
-    // A QR link made before codes (row id) still opens inside the tracking window.
-    assert.equal((await s.call<{ number: string }>('public.order', s.businessId, placed.orderId)).number, placed.number)
+    // An order that has a code is never opened by its row id (ids can be counted through).
+    await assert.rejects(s.call('public.order', s.businessId, placed.orderId), /Order not found/)
+    // A QR link made before codes (row id, an order without a code) still opens inside the tracking window.
+    const older = await s.call<{ orderId: string; number: string }>('public.placeOrder', s.businessId, { type: 'takeaway', tableId: null, items: [{ productId: tea.id, variantId: null, addOnIds: [], qty: 1, notes: '' }], guest: { name: 'Ravi', phone: '9811111112', address: '' }, notes: '' })
+    s.useShop(s.businessId); await s.db.update('orders', older.orderId, { track_code: null }); s.useShop(null)
+    assert.equal((await s.call<{ number: string }>('public.order', s.businessId, older.orderId)).number, older.number)
     // "Track my order" by number: the counter bill gets a code (made now) — its row id is never handed out.
     const t = await s.call<{ orderId: string }>('public.track', s.businessId, counter.order.number)
     assert.match(t.orderId, /^[A-Za-z0-9_-]{22}$/)

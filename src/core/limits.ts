@@ -26,3 +26,20 @@ export function qtyError(qty: unknown, unit: string | null | undefined): string 
   if (!allowsDecimalQty(unit) && !Number.isInteger(n)) return `Whole numbers only for ${String(unit || 'pc')}`
   return null
 }
+
+/** Text from a request: text as it is, a number as its digits, nothing as ''; anything else (an object, a list) → null. */
+export function asText(v: unknown): string | null {
+  if (v === undefined || v === null) return ''
+  if (typeof v === 'string') return v
+  if (typeof v === 'number' || typeof v === 'bigint') return String(v)
+  return null
+}
+
+/** Why this isn't a valid name (null = fine): something typed, at most `max` characters. `what`: "the item name"… */
+export function nameError(v: unknown, what: string, max = 150): string | null {
+  const s = asText(v)
+  if (s === null) return `Check ${what}`
+  if (!s.trim()) return `Enter ${what}`
+  if (s.trim().length > max) return `${what[0].toUpperCase()}${what.slice(1)} can be at most ${max} characters`
+  return null
+}

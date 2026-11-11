@@ -216,7 +216,9 @@ define('inventory', {
     if (!p.track_stock) p = await c.db.update('products', p.ROWID, { track_stock: true })
     const signed = type === 'purchase' || type === 'opening' || type === 'return' ? Math.abs(n) : type === 'adjustment' ? n : -Math.abs(n)
     const branchId = c.writeBranch()
-    if (toMilli(await stockOf(c, p.ROWID, branchId)) + toMilli(signed) < 0) throw new ApiError('Stock cannot go below zero')
+    // Only taking stock away can't go below zero. Adding (purchase, opening, return, + adjustment) is always allowed,
+    // even to an item billed below zero (it was sold before it was entered): −3 + 1 = −2 is a step towards zero.
+    if (signed < 0 && toMilli(await stockOf(c, p.ROWID, branchId)) + toMilli(signed) < 0) throw new ApiError('Stock cannot go below zero')
     if (p.track_batches && signed > 0 && (type === 'purchase' || type === 'opening') && !batch?.expiry) throw new ApiError('Enter the expiry date for this batch')
     if (batch?.expiry && !/^\d{4}-\d{2}-\d{2}$/.test(batch.expiry)) throw new ApiError('Expiry date is not valid')
     const text = String(note ?? '').slice(0, 200)

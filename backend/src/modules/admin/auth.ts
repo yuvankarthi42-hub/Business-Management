@@ -51,7 +51,7 @@ define('admin', {
     const locked = await lockedMinutes(c, 'admin', a)
     if (locked) throw lockedError(locked, 'admin')
     if (!(await checkPassword(password, str(a.password_hash)))) {
-      await recordWrongPassword(c, c.platform, 'platform_admins', a)
+      await recordWrongPassword(c, c.platform, 'platform_admins', a, a.ROWID)
       await wrongWithDevice(c, 'admin', a.ROWID)
       throw new ApiError(WRONG_ADMIN, 401, 'BAD_LOGIN')
     }

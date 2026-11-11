@@ -6,7 +6,7 @@ import { ApiError } from '../core/errors'
 import { checkPassword, hashPassword, needsRehash } from '../core/passwords'
 import { define, handler, publicRead, publicWrite, userRead, userWrite } from '../core/registry'
 import { signToken, verifyToken } from '../core/tokens'
-import { loadBusiness } from '../domain/business'
+import { loadBusiness, withFreshNumbers } from '../domain/business'
 import { findLogin } from '../domain/directory'
 import { issueDeviceToken, WRONG_SHOP, lockedError, lockedMinutes, loginRateLimits, recordWrongPassword, wrongWithDevice } from '../domain/loginGuard'
 import { rateLimit } from '../domain/tracking'
@@ -23,11 +23,12 @@ const dummyHash = () => (dummy ??= hashPassword('not-a-real-password'))
 /** What the app keeps as "me" — the same shape the screens used with the mock. */
 export async function meFor(c: Ctx) {
   const s = c.s
-  // Next bill / order numbers change with every bill, so they're read fresh (not from the cached session).
-  const fresh = await loadBusiness(c, s.business.id)
-  // …with the session's modules (a module whose feature isn't released to the customer counts as off).
-  const business = { ...(fresh?.business ?? s.business), modules: s.business.modules }
-  const branchesAll = fresh?.branches ?? s.allBranches
+  // Next bill / order numbers change with every bill, so they're read fresh; the rest is the session's (built by the
+  // same loadBusiness, and read again after any change to the shop), with its modules (a module whose feature
+  // isn't released to the customer counts as off).
+  const fresh = await withFreshNumbers(c.db, s.business, s.allBranches)
+  const business = fresh.business
+  const branchesAll = fresh.branches
   const branches = branchesAll.filter((b) => s.allowed.includes(b.id))
   const isAll = s.branchId === ALL_BRANCHES
   const branch = isAll ? { id: ALL_BRANCHES, businessId: business.id, name: 'All branches', address: '', isDefault: false, active: true } : branches.find((b) => b.id === s.branchId)!
@@ -84,7 +85,7 @@ define('auth', {
     if (locked) throw lockedError(locked)
     if (!(await checkPassword(password, str(row.password_hash)))) {
       // Counted only now (a right password is never counted), in one atomic step.
-      await recordWrongPassword(c, c.db, 'users', row)
+      await recordWrongPassword(c, c.db, 'users', row, account)
       await wrongWithDevice(c, 'shop', account)
       throw new ApiError(WRONG_SHOP, 401, 'BAD_LOGIN')
     }
@@ -122,9 +123,12 @@ define('auth', {
     const run = (name: string, ...args: unknown[]) => handler(name)!.run(c, ...args)
     const qrOn = !!c.business.modules.qrOrdering && c.can('tables.manage')
     const [me, support, qrPending, feed] = await Promise.all([
-      meFor(c), run('support.mine'), qrOn ? run('qr.pending') : Promise.resolve(null), run('sync.changes', null),
+      meFor(c), run('support.unread'), qrOn ? run('qr.pending') : Promise.resolve(null), run('sync.changes', null),
     ])
-    return { me, support, qrPending, feed }
+    // liveHub: whether this server has live updates (events.ticket gives a stream) — none on Catalyst, so the app
+    // doesn't ask for a ticket on every page load.
+    // supportUnread: the menu's Help & support badge (the tickets themselves are read when that page opens).
+    return { me, supportUnread: support, qrPending, feed, liveHub: !!c.liveUrl }
   }),
 
   /** Check the branch is allowed. The app then sends it with every request (x-branch). */

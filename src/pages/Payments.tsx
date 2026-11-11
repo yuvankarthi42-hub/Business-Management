@@ -1,6 +1,6 @@
 import { CreditCard } from 'lucide-react'
 import { useState } from 'react'
-import { useApp, useData } from '@/app/AppContext'
+import { useApp } from '@/app/AppContext'
 import { Badge, Card, EmptyState, PageHeader, Segmented, Select, Table, Td, Th } from '@/components/ui'
 import { PAYMENT_LABEL } from '@/core/config'
 import type { PaymentMethod } from '@/core/types'
@@ -9,6 +9,7 @@ import { fmtDateTime, money, rangeFor, type RangeKey } from '@/lib/format'
 import { METHOD_COLOR } from '@/lib/chart'
 import { OrderDetail } from './Orders'
 import { Pager, useServerPages } from '@/components/Pager'
+import { useCustomerLookup } from '@/features/customerLookup'
 
 export default function Payments() {
   const { t, me } = useApp()
@@ -19,7 +20,8 @@ export default function Payments() {
   const r = rangeFor(range)
   // Page by page from the server (50 at a time); the method totals are for the whole range.
   const { data: pays, rows: list, p: pg } = useServerPages((before) => api.payments.page({ from: r.from, to: r.to, method }, before), [range, method])
-  const { data: customers = [] } = useData(() => api.customers.list())
+  // Only the customers of the payments on this page (not every customer).
+  const customerOf = useCustomerLookup(list.map((p) => p.customerId))
   const totals: Partial<Record<PaymentMethod, number>> = pays?.totals ?? {}
   const grand = Object.values(totals).reduce((a, v) => a + (v ?? 0), 0)
 
@@ -51,7 +53,7 @@ export default function Payments() {
                     <Td className="whitespace-nowrap text-slate-500">{fmtDateTime(p.createdAt)}</Td>
                     {showBranch && <Td><Badge>{me?.branches.find((b) => b.id === p.branchId)?.name ?? '—'}</Badge></Td>}
                     <Td className="font-medium">{p.billNumber ?? '—'}</Td>
-                    <Td className="hidden sm:table-cell">{customers.find((c) => c.id === p.customerId)?.name ?? <span className="text-slate-400">Walk-in</span>}</Td>
+                    <Td className="hidden sm:table-cell">{customerOf(p.customerId)?.name ?? <span className="text-slate-400">Walk-in</span>}</Td>
                     <Td><Badge>{PAYMENT_LABEL[p.method]}</Badge>{p.reference && <span className="ml-1.5 text-xs text-slate-400">{p.reference}</span>}</Td>
                     <Td className="hidden md:table-cell">{p.voided ? <Badge tone="red">Voided</Badge> : p.kind === 'due_collection' ? <Badge tone="violet">Due collected</Badge> : <Badge tone="green">Sale</Badge>}</Td>
                     <Td className={`text-right font-semibold tabular ${p.voided ? 'text-slate-400 line-through' : ''}`}>{money(p.amount)}</Td>

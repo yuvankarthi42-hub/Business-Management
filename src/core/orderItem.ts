@@ -114,3 +114,14 @@ export function clearCounterPrice(i: OrderItem, product?: Pick<Product, 'mrp'> |
   const mrp = !i.variantId && product?.mrp && product.mrp > base ? product.mrp : undefined
   return { ...rest, unitPrice: listPrice, ...(mrp ? { mrp } : {}) }
 }
+
+/** Text for a bill's lines in a list ("2× Dosa, 1× Tea +17 more"): as the Orders list shows them, kept short. */
+export function itemSummary(lines: { name: string; qty: number }[], max = 160): string {
+  let out = ''
+  for (const [k, l] of lines.entries()) {
+    const part = `${l.qty}× ${l.name}`
+    if (out && out.length + 2 + part.length > max) return `${out} +${lines.length - k} more`
+    out = out ? `${out}, ${part}` : part
+  }
+  return out
+}

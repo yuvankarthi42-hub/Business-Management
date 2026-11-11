@@ -1,18 +1,19 @@
 import { Check, UserPlus, UserRound, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useApp, useData } from '@/app/AppContext'
 import { Button, Input, Modal, SearchInput, useAction } from '@/components/ui'
 import { api } from '@/data'
 import { money } from '@/lib/format'
 import { PhoneInput } from '@/components/PhoneInput'
-import { formatPhone, normalizePhone, phoneMatches } from '@/core/phone'
+import { formatPhone, normalizePhone } from '@/core/phone'
+import { searchCustomers, useCustomer } from '@/features/customerLookup'
 
 /** Compact customer selector: shows current customer, opens a searchable picker with quick-add. */
 export function CustomerPicker({ value, onChange, compact }: { value: string | null; onChange: (id: string | null) => void; compact?: boolean }) {
   const { t, mod } = useApp()
   const [open, setOpen] = useState(false)
-  const { data: customers = [] } = useData(() => api.customers.list())
-  const current = customers.find((c) => c.id === value)
+  // Only the chosen customer is read (the picker searches on the server) — not every customer.
+  const current = useCustomer(mod('customers') ? value : null)
   if (!mod('customers')) return null
   return (
     <>
@@ -27,24 +28,23 @@ export function CustomerPicker({ value, onChange, compact }: { value: string | n
         {current && current.stats.outstanding > 0 && <span className="shrink-0 rounded bg-amber-50 px-1.5 text-[11px] font-semibold text-amber-700">Due {money(current.stats.outstanding)}</span>}
         {current && <X className="h-4 w-4 shrink-0 text-slate-400 hover:text-slate-700" onClick={(e) => { e.stopPropagation(); onChange(null) }} />}
       </button>
-      {open && <CustomerSearchModal customers={customers} value={value} onClose={() => setOpen(false)} onPick={(id) => { onChange(id); setOpen(false) }} />}
+      {open && <CustomerSearchModal value={value} onClose={() => setOpen(false)} onPick={(id) => { onChange(id); setOpen(false) }} />}
     </>
   )
 }
 
-type Row = Awaited<ReturnType<typeof api.customers.list>>[number]
-
-function CustomerSearchModal({ customers, value, onClose, onPick }: { customers: Row[]; value: string | null; onClose: () => void; onPick: (id: string) => void }) {
+function CustomerSearchModal({ value, onClose, onPick }: { value: string | null; onClose: () => void; onPick: (id: string) => void }) {
   const { t, me } = useApp()
   const toE164 = (typed: string) => { try { return normalizePhone(typed, me?.business.defaultCountry) ?? '' } catch { return '' } }
   const run = useAction()
   const [q, setQ] = useState('')
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState({ name: '', phone: '' })
-  const list = useMemo(() => {
-    const s = q.trim().toLowerCase()
-    return customers.filter((c) => !s || c.name.toLowerCase().includes(s) || phoneMatches(c.phone, s)).slice(0, 50)
-  }, [q, customers])
+  // Searched on the server once typing pauses (≤ 50 matches, same rules as before: name, or the phone's digits).
+  const [term, setTerm] = useState('')
+  useEffect(() => { const id = setTimeout(() => setTerm(q.trim().toLowerCase()), 250); return () => clearTimeout(id) }, [q])
+  const { data: found } = useData(() => searchCustomers(term), [term])
+  const list = found ?? []
 
   return (
     <Modal open onClose={onClose} title={`Select ${t('customer').toLowerCase()}`} size="sm">
@@ -66,7 +66,7 @@ function CustomerSearchModal({ customers, value, onClose, onPick }: { customers:
                 {c.id === value && <Check className="h-4 w-4 text-brand-600" />}
               </button>
             ))}
-            {!list.length && <p className="py-6 text-center text-sm text-slate-500">No match. Add as new {t('customer').toLowerCase()}.</p>}
+            {found && !list.length && <p className="py-6 text-center text-sm text-slate-500">No match. Add as new {t('customer').toLowerCase()}.</p>}
           </div>
         </>
       ) : (

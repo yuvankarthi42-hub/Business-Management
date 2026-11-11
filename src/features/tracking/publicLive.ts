@@ -4,6 +4,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '@/data'
 
+/** "This server has no live hub", remembered on the phone for an hour (Catalyst: the screens check on a timer). */
+const NO_HUB_KEY = 'kk.publicLive.none'
+const NO_HUB_MS = 60 * 60_000
+const noHubKnown = () => { try { return Number(localStorage.getItem(NO_HUB_KEY)) > Date.now() } catch { return false } }
+const rememberNoHub = (none: boolean) => { try { if (none) localStorage.setItem(NO_HUB_KEY, String(Date.now() + NO_HUB_MS)); else localStorage.removeItem(NO_HUB_KEY) } catch { /* no storage: ask each time */ } }
+
 /** Returns true while the server has live updates for public screens (a hub); false = none (check on a timer). */
 export function usePublicLive(shop: string | null | undefined, order: string | null, on: { menu?: () => void; order?: () => void }): boolean {
   const handlers = useRef(on)
@@ -17,7 +23,10 @@ export function usePublicLive(shop: string | null | undefined, order: string | n
     let wait = 1000
     const run = async () => {
       let url: string | null = null
-      try { url = (await api.public.live()).url } catch { /* no hub */ }
+      if (noHubKnown()) return // told within the hour: no hub here — no call
+      let answered = false
+      try { url = (await api.public.live()).url; answered = true } catch { /* no hub */ }
+      if (answered) rememberNoHub(!url)
       if (!url || stopped) return
       setLive(true)
       const base = new URL(url, location.href).href.replace(/\/$/, '')

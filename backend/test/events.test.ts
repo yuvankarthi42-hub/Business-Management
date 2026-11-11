@@ -242,8 +242,8 @@ test('Catalyst (no hub): no live address, no "screens open" marks, bills and tra
     assert.equal(t.ticket, null)
     s.setToken(null)
     assert.equal((await s.call<{ url: string | null }>('public.live')).url, null)
-    const placed = await s.call<{ orderId: string }>('public.placeOrder', s.businessId, { type: 'takeaway', tableId: null, items: [{ productId: tea.id, variantId: null, addOnIds: [], qty: 1, notes: '' }], guest: { name: 'Anu', phone: '9811111112', address: '' }, notes: '' })
-    await s.call('public.order', s.businessId, placed.orderId)
+    const placed = await s.call<{ orderId: string; trackCode: string }>('public.placeOrder', s.businessId, { type: 'takeaway', tableId: null, items: [{ productId: tea.id, variantId: null, addOnIds: [], qty: 1, notes: '' }], guest: { name: 'Anu', phone: '9811111112', address: '' }, notes: '' })
+    await s.call('public.order', s.businessId, placed.trackCode)
     s.setToken(s.ownerToken)
     await s.call('qr.accept', placed.orderId)
     const shared = s.env.shared ?? s.env.kv

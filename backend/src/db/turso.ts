@@ -6,7 +6,7 @@ import { decryptSecret, encryptSecret, secretPlace } from '../core/crypto'
 import { ApiError } from '../core/errors'
 import { column, columns } from './columns'
 import { type TableName, TABLES } from './schema.gen'
-import { SqlError, type SqlDriver, type SqlRunner, type SqlTx, type SqlValue, type Stmt } from './sql/driver'
+import { SqlError, type SqlDriver, type SqlResult, type SqlRunner, type SqlTx, type SqlValue, type Stmt } from './sql/driver'
 import { DuplicateError, type AggregateOptions, type Cond, type Db, type NewRow, type Row, type SchemaInfo, type SelectOptions, type SqlRow, type Value, type Where, type WriteOp } from './types'
 
 const SYSTEM_SQL: Record<string, string> = { ROWID: 'id', CREATEDTIME: 'created_at', MODIFIEDTIME: 'updated_at' }
@@ -157,22 +157,100 @@ function mapError(e: unknown, table: TableName): Error {
   return e as Error
 }
 
-/** Calls on one transaction go one after another (one connection), even when the code uses Promise.all. */
+/**
+ * Calls on one transaction go one after another (one connection), even when the code uses Promise.all. Where the
+ * driver can (Turso: runGroups), calls started at the same moment go out together in ONE round trip — each still
+ * gets exactly its own results or error, as if sent alone.
+ */
 class Serial implements SqlRunner {
   private tail: Promise<unknown> = Promise.resolve()
-  constructor(private tx: SqlTx) {}
-  private next<T>(fn: () => Promise<T>): Promise<T> {
+  private waiting: { stmts: Stmt[]; res: (r: SqlResult[]) => void; rej: (e: unknown) => void }[] = []
+  constructor(readonly tx: SqlTx) {}
+  next<T>(fn: () => Promise<T>): Promise<T> {
     const p = this.tail.then(fn, fn)
     this.tail = p.catch(() => {})
     return p
   }
-  run(stmts: Stmt[]) { return this.next(() => this.tx.run(stmts)) }
+  run(stmts: Stmt[]): Promise<SqlResult[]> {
+    if (!this.tx.runGroups) return this.next(() => this.tx.run(stmts))
+    return new Promise<SqlResult[]>((res, rej) => {
+      this.waiting.push({ stmts, res, rej })
+      if (this.waiting.length > 1) return // joins the round trip already waiting to go
+      void this.next(async () => {
+        await new Promise((r) => setImmediate(r)) // calls started at the same moment join this one
+        const group = this.waiting.splice(0)
+        try {
+          const outs = await this.tx.runGroups!(group.map((g) => g.stmts))
+          outs.forEach((o, k) => (o instanceof Error ? group[k].rej(o) : group[k].res(o)))
+        } catch (e) { for (const g of group) g.rej(e) }
+      })
+    })
+  }
   script(sql: string) { return this.next(() => this.tx.script(sql)) }
+}
+
+/**
+ * A result's rows as { column: value } objects (what sql / sqlReads / sqlMany return) — a plain loop, the same
+ * objects as Object.fromEntries but without a temporary array per column per row (big reads: the light index).
+ */
+function toObjects(r: { columns: string[]; rows: unknown[][] }): SqlRow[] {
+  const cols = r.columns, n = cols.length, out: SqlRow[] = new Array(r.rows.length)
+  for (let k = 0; k < r.rows.length; k++) {
+    const row = r.rows[k], o: SqlRow = {}
+    for (let i = 0; i < n; i++) o[cols[i]] = row[i] as SqlRow[string]
+    out[k] = o
+  }
+  return out
+}
+
+/** Each database's queue of write transactions in this server instance (one connection holds the write lock at a time). */
+const turns = new WeakMap<SqlDriver, { tail: Promise<void> }>()
+/**
+ * Waits until this database's earlier write transactions (in this instance) are done, in arrival order; returns the
+ * function that lets the next one go. Waiting longer than `limitMs` gives up its place and answers "busy".
+ */
+async function waitTurn(driver: SqlDriver, limitMs: number): Promise<() => void> {
+  let q = turns.get(driver)
+  if (!q) turns.set(driver, (q = { tail: Promise.resolve() }))
+  let release!: () => void
+  const mine = new Promise<void>((r) => { release = r })
+  const before = q.tail
+  q.tail = before.then(() => mine)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const turn = await Promise.race([before.then(() => true), new Promise<boolean>((r) => { timer = setTimeout(() => r(false), limitMs) })])
+  clearTimeout(timer)
+  if (!turn) {
+    void before.then(release) // our place passes on as soon as it comes
+    throw mapError(new SqlError('busy', 'Waited too long for the shop’s other saves'), 'businesses')
+  }
+  return release
 }
 
 export class TursoDb implements Db {
   readonly inTransaction: boolean
-  constructor(private driver: SqlDriver, private runner: SqlRunner = driver, inTx = false) { this.inTransaction = inTx }
+  /** Writes to send with COMMIT (writeAtCommit), in order. */
+  private finals: { stmts: Stmt[]; decode: (rs: SqlResult[]) => Row[][]; res: (r: Row[][]) => void; rej: (e: unknown) => void }[] = []
+  constructor(private driver: SqlDriver, private runner: SqlRunner = driver, inTx = false, private commitsWith = false) { this.inTransaction = inTx }
+
+  /**
+   * Inside a transaction whose driver can (Turso): these writes go with COMMIT in one round trip (all or nothing).
+   * The promise gives their rows once committed. null = not available here (write them now instead).
+   */
+  writeAtCommit(ops: WriteOp[]): Promise<Row[][]> | null {
+    if (!this.inTransaction || !this.commitsWith) return null
+    const { stmts, decode } = this.batchOf(ops)
+    return new Promise<Row[][]>((res, rej) => { this.finals.push({ stmts, decode, res, rej }) })
+  }
+  /** End of the transaction: COMMIT — with the waiting final writes in the same round trip where there are any. */
+  private async commitOn(tx: SqlTx) {
+    const finals = this.finals.splice(0)
+    if (!finals.length || !tx.commitWith) { await tx.commit(); return }
+    let results: SqlResult[]
+    try { results = await tx.commitWith(finals.flatMap((f) => f.stmts)) } catch (e) { for (const f of finals) f.rej(e); throw e }
+    let at = 0
+    for (const f of finals) { f.res(f.decode(results.slice(at, at + f.stmts.length))); at += f.stmts.length }
+  }
+  private dropFinals(e: unknown) { for (const f of this.finals.splice(0)) f.rej(e) }
 
   private async exec(table: TableName, stmts: Stmt[]) {
     try { return await this.runner.run(stmts) } catch (e) { throw mapError(e, table) }
@@ -186,6 +264,13 @@ export class TursoDb implements Db {
   async transaction<T>(fn: (tx: Db) => Promise<T>): Promise<T> {
     if (this.inTransaction) return fn(this)
     const started = Date.now()
+    // Wait our turn: this database's write transactions in this server instance go one after another, first come
+    // first served — instead of all trying BEGIN and sleeping at random (where a bill could keep losing its turn).
+    // At most BUSY_RETRY_MS (shared with the BEGIN retries below), then the same "busy" answer as before.
+    const release = await waitTurn(this.driver, BUSY_RETRY_MS)
+    try { return await this.transactionNow(fn, started) } finally { release() }
+  }
+  private async transactionNow<T>(fn: (tx: Db) => Promise<T>, started: number): Promise<T> {
     let tx: SqlTx
     for (let attempt = 0; ; attempt++) {
       try { tx = await this.driver.begin(); break } catch (e) {
@@ -194,12 +279,14 @@ export class TursoDb implements Db {
         throw mapError(e, 'businesses')
       }
     }
-    const handle = new TursoDb(this.driver, new Serial(tx), true)
+    const runner = new Serial(tx)
+    const handle = new TursoDb(this.driver, runner, true, !!tx.commitWith)
     try {
       const out = await fn(handle)
-      await tx.commit()
+      await runner.next(() => handle.commitOn(tx)) // after every statement already started
       return out
     } catch (e) {
+      handle.dropFinals(e)
       await tx.rollback()
       throw e instanceof SqlError ? mapError(e, 'businesses') : e
     }
@@ -207,7 +294,7 @@ export class TursoDb implements Db {
 
   async sql(sql: string, args: (string | number | null)[] = []): Promise<SqlRow[]> {
     const [r] = await this.exec('businesses', [{ sql, args }])
-    return r.rows.map((row) => Object.fromEntries(r.columns.map((c, i) => [c, row[i]])))
+    return toObjects(r)
   }
 
   /**
@@ -218,13 +305,13 @@ export class TursoDb implements Db {
     if (!stmts.length) return []
     if (!stmts.every((x) => /^\s*(SELECT|WITH)\b/i.test(x.sql))) throw new Error('sqlReads: read-only statements only')
     const results = await this.exec('businesses', stmts.map((x) => ({ sql: x.sql, args: x.args ?? [] })))
-    return results.map((r) => r.rows.map((row) => Object.fromEntries(r.columns.map((c, i) => [c, row[i]]))))
+    return results.map(toObjects)
   }
 
   async sqlMany(stmts: { sql: string; args?: (string | number | null)[] }[]): Promise<SqlRow[][]> {
     if (!stmts.length) return []
     const results = await this.execAll('businesses', stmts.map((x) => ({ sql: x.sql, args: x.args ?? [] })))
-    return results.map((r) => r.rows.map((row) => Object.fromEntries(r.columns.map((c, i) => [c, row[i]]))))
+    return results.map(toObjects)
   }
 
   async select(table: TableName, o: SelectOptions = {}): Promise<Row[]> {
@@ -292,6 +379,14 @@ export class TursoDb implements Db {
    * Each op gives back its rows as insertMany / updateMany would.
    */
   async writeBatch(ops: WriteOp[]): Promise<Row[][]> {
+    const { stmts, decode } = this.batchOf(ops)
+    if (!stmts.length) return ops.map(() => [])
+    const named = ops.find((o) => !('sql' in o)) as Exclude<WriteOp, { sql: string }> | undefined
+    const first: TableName = named ? ('insert' in named ? named.insert : named.update) : 'businesses'
+    return decode(await this.execAll(first, stmts))
+  }
+  /** The statements of these ops, and how to turn their results back into each op's rows (as insertMany / updateMany). */
+  private batchOf(ops: WriteOp[]): { stmts: Stmt[]; decode: (results: SqlResult[]) => Row[][] } {
     const stmts: Stmt[] = [], spans: { op: WriteOp; from: number; to: number }[] = []
     for (const op of ops) {
       const from = stmts.length
@@ -300,19 +395,16 @@ export class TursoDb implements Db {
       else stmts.push(...op.rows.map(({ ROWID, ...p }) => this.updateStmt(op.update, ROWID, p)))
       spans.push({ op, from, to: stmts.length })
     }
-    if (!stmts.length) return ops.map(() => [])
-    const named = ops.find((o) => !('sql' in o)) as Exclude<WriteOp, { sql: string }> | undefined
-    const first: TableName = named ? ('insert' in named ? named.insert : named.update) : 'businesses'
-    const results = await this.execAll(first, stmts)
-    return spans.map(({ op, from, to }) => {
+    const decode = (results: SqlResult[]) => spans.map(({ op, from, to }) => {
       const part = results.slice(from, to)
-      if ('sql' in op) return part.flatMap((r) => r.rows.map((v) => Object.fromEntries(r.columns.map((c, i) => [c, v[i]])) as unknown as Row))
+      if ('sql' in op) return part.flatMap((r) => toObjects(r) as unknown as Row[])
       if ('insert' in op) return part.flatMap((r) => r.rows.map((v) => rowFrom(op.insert, r.columns, v))).sort((a, b) => Number(a.ROWID) - Number(b.ROWID))
       return part.map((r, i) => {
         if (!r.rows.length) throw new Error(`${op.update} row ${op.rows[i].ROWID} not found`)
         return rowFrom(op.update, r.columns, r.rows[0])
       })
     })
+    return { stmts, decode }
   }
 
   private insertStmts(table: TableName, rows: NewRow[]): Stmt[] {

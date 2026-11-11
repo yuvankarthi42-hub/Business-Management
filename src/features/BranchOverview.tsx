@@ -7,6 +7,9 @@ import { api } from '@/data'
 import { AXIS } from '@/lib/chart'
 import { money, num, pctChange } from '@/lib/format'
 
+/** The overview's Top items card shows 5: each branch sends only the 5 best sellers across the branches. */
+const TOP_ITEMS = { top: 5 }
+
 // Fixed categorical order (validated palette) — a branch keeps its colour on every chart.
 export const BRANCH_COLORS = ['#1f55eb', '#0d9488', '#d97706', '#9333ea', '#e11d48']
 
@@ -15,8 +18,8 @@ export function BranchOverview({ from, to, prevFrom, prevTo, hourly }: { from: D
   const { t, can } = useApp()
   const run = useAction()
   const key = `${from.toISOString()}|${to.toISOString()}`
-  const { data: rows } = useData(() => api.reports.byBranch(from, to), [key])
-  const { data: prev } = useData(() => api.reports.byBranch(prevFrom, prevTo), [key])
+  const { data: rows } = useData(() => api.reports.byBranch(from, to, TOP_ITEMS), [key])
+  const { data: prev } = useData(() => api.reports.byBranch(prevFrom, prevTo, TOP_ITEMS), [key])
   const showNet = can('reports.profit')
 
   const total = rows?.reduce((a, r) => a + r.summary.sales, 0) ?? 0

@@ -50,20 +50,41 @@ export async function loadBusiness(c: { platform: Db; db: Db; files?: Files }, b
   return { business, branches: branches.map((b) => branchFrom(b, seqs, formats, business)), supportReset: supportReset?.userId ? { userId: String(supportReset.userId), at: String(supportReset.at ?? '') } : null }
 }
 
+/** The shop's bill / order / KOT / credit-note prefixes and next numbers (the `sequences` rows). */
+function numbersFrom(seqs: Row[]) {
+  const seq = (name: SeqName) => seqs.find((s) => s.branch_id == null && Number(s.name) === code(E.SequenceName, name))
+  return {
+    invoicePrefix: str(seq('invoice')?.prefix ?? DEFAULT_SEQ.invoice.prefix), nextInvoiceNumber: Number(seq('invoice')?.next_value ?? DEFAULT_SEQ.invoice.start),
+    orderPrefix: str(seq('order')?.prefix ?? DEFAULT_SEQ.order.prefix), nextOrderNumber: Number(seq('order')?.next_value ?? DEFAULT_SEQ.order.start),
+    nextKotNumber: Number(seq('kot')?.next_value ?? DEFAULT_SEQ.kot.start),
+    creditNotePrefix: str(seq('credit_note')?.prefix ?? DEFAULT_SEQ.credit_note.prefix), nextCreditNoteNumber: Number(seq('credit_note')?.next_value ?? DEFAULT_SEQ.credit_note.start),
+  }
+}
+/** A branch with its own bill series: its next bill number. */
+const branchNext = (seqs: Row[], branchId: string) => Number(seqs.find((s) => s.branch_id === branchId && Number(s.name) === E.SequenceName.invoice)?.next_value ?? 10001)
+
+/**
+ * The business and branches (as loadBusiness built them, e.g. from the cached session) with their next numbers read
+ * fresh — they change with every bill. One read of `sequences` instead of the whole business again.
+ */
+export async function withFreshNumbers(db: Db, business: Business, branches: Branch[]): Promise<{ business: Business; branches: Branch[] }> {
+  const seqs = await db.select('sequences', { where: { business_id: business.id } })
+  return {
+    business: { ...business, billing: { ...business.billing, ...numbersFrom(seqs) } },
+    branches: branches.map((b) => (b.invoicePrefix !== undefined ? { ...b, nextInvoiceNumber: branchNext(seqs, b.id) } : b)),
+  }
+}
+
 export function businessFrom(row: Row, settings: Row[], taxes: Row[], seqs: Row[], lists: Row[], files?: Files): Business {
   const category = nameOf(E.BusinessCategory, row.category) as Business['category']
   const setting = <T,>(k: string, fb: T) => { const r = settings.find((s) => s.setting_key === k); return r ? json<T>(r.value_json, fb) : fb }
-  const seq = (name: SeqName) => seqs.find((s) => s.branch_id == null && Number(s.name) === code(E.SequenceName, name))
   const tpl = templateFor(category)
   const billingJson = { ...defaultBilling(category), ...setting<Partial<BillingJson>>('billing', {}) }
   const wholesaleList = lists.find((l) => !l.is_default)
   const def = taxes.find((t) => t.is_default) ?? taxes[0]
   const billing: BillingSettings = {
     ...billingJson,
-    invoicePrefix: str(seq('invoice')?.prefix ?? DEFAULT_SEQ.invoice.prefix), nextInvoiceNumber: Number(seq('invoice')?.next_value ?? DEFAULT_SEQ.invoice.start),
-    orderPrefix: str(seq('order')?.prefix ?? DEFAULT_SEQ.order.prefix), nextOrderNumber: Number(seq('order')?.next_value ?? DEFAULT_SEQ.order.start),
-    nextKotNumber: Number(seq('kot')?.next_value ?? DEFAULT_SEQ.kot.start),
-    creditNotePrefix: str(seq('credit_note')?.prefix ?? DEFAULT_SEQ.credit_note.prefix), nextCreditNoteNumber: Number(seq('credit_note')?.next_value ?? DEFAULT_SEQ.credit_note.start),
+    ...numbersFrom(seqs),
     taxRates: taxes.filter((t) => t.is_active !== false).map((t) => ({ id: t.ROWID, name: str(t.name), rate: fromBp(t.rate_bp) })),
     defaultTaxRateId: def?.ROWID ?? null,
     ...(wholesaleList ? { wholesale: { enabled: !!wholesaleList.is_active, label: str(wholesaleList.name) } } : {}),
@@ -94,13 +115,12 @@ export const PRINTER_DEFAULTS: BranchPrinter = { transport: 'browser', paper: nu
 
 /** One branch as the app sees it. `formats` (bill_formats rows) and `shop` add its bill format, when it has one. */
 export function branchFrom(b: Row, seqs: Row[], formats: Row[] = [], shop?: Pick<Business, 'category' | 'subType'>): Branch {
-  const own = seqs.find((s) => s.branch_id === b.ROWID && Number(s.name) === E.SequenceName.invoice)
   const printer = json<BranchPrinter | null>(b.printer_json, null)
   const fmt = shop && formats.find((f) => f.branch_id === b.ROWID)
   return {
     id: b.ROWID, businessId: str(b.business_id), name: str(b.name), address: str(b.address), phone: str(b.phone),
     isDefault: !!b.is_default, active: b.is_active !== false,
-    ...(b.invoice_prefix ? { invoicePrefix: str(b.invoice_prefix), nextInvoiceNumber: Number(own?.next_value ?? 10001) } : {}),
+    ...(b.invoice_prefix ? { invoicePrefix: str(b.invoice_prefix), nextInvoiceNumber: branchNext(seqs, b.ROWID) } : {}),
     ...(printer ? { printer } : {}),
     ...(b.scale_json ? { scale: cleanScale(json<unknown>(b.scale_json, null)) } : {}),
     // Completed from the shop type's default, so a format saved before a new option existed still works.

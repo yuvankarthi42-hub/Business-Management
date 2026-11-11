@@ -17,9 +17,9 @@ test('order tracking: cached status (no database read until something changes), 
     const placed = await s.call<{ orderId: string; number: string; trackCode: string }>('public.placeOrder', s.businessId, { type: 'takeaway', tableId: null, items: [{ productId: dosa.id, variantId: null, addOnIds: [], qty: 1, notes: '' }], guest: { name: 'Anu', phone: '9811122233', address: '' }, notes: '' })
 
     // First look reads the database; asking again while nothing changed is answered from the cache.
-    const v1 = await s.call<View>('public.order', s.businessId, placed.orderId)
+    const v1 = await s.call<View>('public.order', s.businessId, placed.trackCode)
     assert.deepEqual([v1.qrStatus, v1.cached], ['pending', false])
-    const v2 = await s.call<View>('public.order', s.businessId, placed.orderId)
+    const v2 = await s.call<View>('public.order', s.businessId, placed.trackCode)
     assert.equal(v2.cached, true, 'unchanged → no database read')
     assert.equal(JSON.stringify(v2).includes('9811122233'), false, 'never shows the customer’s phone')
 
@@ -27,9 +27,9 @@ test('order tracking: cached status (no database read until something changes), 
     s.setToken(s.ownerToken)
     await s.call('qr.accept', placed.orderId)
     s.setToken(null)
-    const v3 = await s.call<View>('public.order', s.businessId, placed.orderId)
+    const v3 = await s.call<View>('public.order', s.businessId, placed.trackCode)
     assert.deepEqual([v3.qrStatus, v3.cached], ['accepted', false])
-    assert.equal((await s.call<View>('public.order', s.businessId, placed.orderId)).cached, true)
+    assert.equal((await s.call<View>('public.order', s.businessId, placed.trackCode)).cached, true)
 
     // Track my order: by number, with or without the prefix.
     const digits = placed.number.replace(/\D/g, '')
@@ -53,11 +53,11 @@ test('notify me: a push when the order is confirmed and ready; unsubscribed when
     const dosa = await s.call<P>('products.save', { name: 'Dosa', price: 60, sendToKitchen: true })
     s.setToken(null)
     assert.equal((await s.call<{ publicKey: string }>('public.pushKey')).publicKey, push.publicKey)
-    const placed = await s.call<{ orderId: string; number: string }>('public.placeOrder', s.businessId, { type: 'takeaway', tableId: null, items: [{ productId: dosa.id, variantId: null, addOnIds: [], qty: 1, notes: '' }], guest: { name: 'Anu', phone: '9811122233', address: '' }, notes: '' })
+    const placed = await s.call<{ orderId: string; number: string; trackCode: string }>('public.placeOrder', s.businessId, { type: 'takeaway', tableId: null, items: [{ productId: dosa.id, variantId: null, addOnIds: [], qty: 1, notes: '' }], guest: { name: 'Anu', phone: '9811122233', address: '' }, notes: '' })
     const ua = createECDH('prime256v1'); ua.generateKeys()
     const sub = { endpoint: 'https://fcm.googleapis.com/fcm/send/test-device-1', keys: { p256dh: ua.getPublicKey().toString('base64url'), auth: randomBytes(16).toString('base64url') } }
-    await assert.rejects(s.call('public.subscribePush', s.businessId, placed.orderId, { ...sub, endpoint: 'http://169.254.169.254/latest' }), /can’t receive notifications/)
-    assert.deepEqual(await s.call('public.subscribePush', s.businessId, placed.orderId, sub), { ok: true, stage: 'sent' })
+    await assert.rejects(s.call('public.subscribePush', s.businessId, placed.trackCode, { ...sub, endpoint: 'http://169.254.169.254/latest' }), /can’t receive notifications/)
+    assert.deepEqual(await s.call('public.subscribePush', s.businessId, placed.trackCode, sub), { ok: true, stage: 'sent' })
     assert.equal(push.sent.length, 0)
 
     s.setToken(s.ownerToken)

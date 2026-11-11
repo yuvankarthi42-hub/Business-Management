@@ -26,6 +26,18 @@ let cached: { user: string; t: Ticket; until: number } | null = null
 
 const resolveUrl = (u: string) => { try { return new URL(u, location.href).href.replace(/\/$/, '') } catch { return u } }
 
+/** Whether this server has a live hub (auth.boot says so). null = not told yet (or an older server). */
+let liveHub: boolean | null = null
+const hubWaiters: (() => void)[] = []
+/** From auth.boot: true / false. Anything else is ignored (then a ticket is asked for, as before). */
+export function setLiveHub(v: unknown) {
+  if (typeof v !== 'boolean') return
+  liveHub = v
+  for (const w of hubWaiters.splice(0)) w()
+}
+/** Start-up may get here before auth.boot answered: wait for it a little (an older server never says: go on). */
+const hubKnown = () => (liveHub !== null ? Promise.resolve() : new Promise<void>((r) => { hubWaiters.push(r); setTimeout(r, 3000) }))
+
 export function startLive() {
   if (started || typeof window === 'undefined') return
   started = true
@@ -69,6 +81,9 @@ async function openStream(): Promise<{ res: Response; c: AbortController } | nul
   const user = auth.user!
   if (forUser !== user) { forUser = user; lastId = null } // another sign-in: start fresh
   // Reconnects reuse the ticket while it is valid (no API call); a refused or expired one gets a new one.
+  // No hub on this server (Catalyst): no ticket to ask for — the change feed stays as it was (as a "no url" answer).
+  await hubKnown()
+  if (liveHub === false) { setLive(false); return null }
   let t: Ticket
   if (cached && cached.user === user && Date.now() < cached.until) t = cached.t
   else {

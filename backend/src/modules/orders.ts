@@ -1,7 +1,7 @@
 // Billing & orders, kitchen tickets, tables, payments, customers & dues, QR orders and the public QR menu.
 import { cleanPartyGst } from '@/core/gst'
 import { r2 } from '@/core/pricing'
-import { qrSettings } from '@/core/config'
+import { publicBilling, qrSettings } from '@/core/config'
 import { applySpecials } from '@/core/specials'
 import { featuresFor, withFeatures } from '@/core/features'
 import { subscriptionState } from '@/core/subscription'
@@ -13,12 +13,12 @@ import { DuplicateError, type Cond, type Row, type Where } from '../db/types'
 import { DEFAULT_SEQ, loadBusiness } from '../domain/business'
 import { loadCategories, loadProducts, wholesaleList } from '../domain/catalog'
 import {
-  customerFrom, kitchenDelta, kotsFrom, loadOrder, loadOrders, paymentFrom, priceItems, selectIn, settle, tableFrom, withItems, writeOrder, clientUuid,
+  customerFrom, kitchenDelta, kotsFrom, loadOrder, loadOrders, orderFrom, paymentFrom, priceItems, selectIn, settle, tableFrom, withItems, writeOrder, clientUuid,
   type OrderDraft, type PaymentInput, type WriteInfo,
 } from '../domain/orders'
 import { movePoints, pointsFrom } from '../domain/points'
 import { moveStock, restorableStock, stockProduct, takeRestorable } from '../domain/stock'
-import { audit, bizDay, bizDayStart, code, cursorArg, moduleOn, E, fromMinor, isId, keyPart, nameOf, own, readSequence, str, toMinor, money, mayUseBranch, assertBranch } from '../domain/util'
+import { audit, bizDay, bizDayStart, code, cursorArg, moduleOn, E, fromMilli, fromMinor, isId, keyPart, nameOf, own, readSequence, str, toMinor, money, mayUseBranch, assertBranch } from '../domain/util'
 import { idBefore } from '@/core/paging'
 import { cleanPhone } from './business'
 import { buildView, countIn, ensureTrackCode, limitIn, markPushOn, rateLimit, trackedView, trackRef } from '../domain/tracking'
@@ -28,6 +28,7 @@ import { featureFlagsFor } from '../domain/session'
 import { isPushEndpoint } from '../core/webpush'
 import { orderNumberCandidates, trackStage, trackStamp, TRACK_WINDOW_MS } from '@/core/tracking'
 import { createHash } from 'node:crypto'
+import { itemSummary } from '@/core/orderItem'
 import { QR_MENU_FULL_MAX } from '@/core/catalogIndex'
 import type { Product, Special } from '@/core/types'
 import { afterKey, nameLike, type Arg } from '../domain/productSql'
@@ -41,6 +42,25 @@ function customerGst(input: { gstin?: string | null; stateCode?: string | null }
 const inScope = (c: Ctx): Where => ({ business_id: c.businessId, branch_id: { in: c.scope() } })
 const isoArg = (v: unknown) => { const d = new Date(String(v)); if (Number.isNaN(d.getTime())) throw new ApiError('Choose a date range'); return d.toISOString() }
 const one = async (c: Ctx, id: string) => (await loadOrder(c, id, { inScope: false })).order
+
+/** Bills with their lines as short text (itemSummary) and no lines — the Orders list. Turso: one small read. */
+async function withSummary(c: Ctx, rows: Row[]): Promise<Order[]> {
+  if (!rows.length) return []
+  const ids = rows.map((r) => r.ROWID)
+  const lines: { order_id: string; name: string; qty: number; sort: number }[] = []
+  if (c.dbs.perShop && c.db.sql) {
+    for (let i = 0; i < ids.length; i += 100) {
+      const part = ids.slice(i, i + 100)
+      const rs = await c.db.sql(`SELECT "order_id", "product_name", "qty_milli", "sort_order" FROM "order_items" WHERE "order_id" IN (${part.map(() => '?').join(', ')})`, part.map(Number))
+      for (const r of rs) lines.push({ order_id: String(r.order_id), name: str(r.product_name as string), qty: fromMilli(r.qty_milli as number), sort: Number(r.sort_order) })
+    }
+  } else {
+    for (const r of await selectIn(c, 'order_items', 'order_id', ids)) lines.push({ order_id: str(r.order_id), name: str(r.product_name), qty: fromMilli(r.qty_milli), sort: Number(r.sort_order) })
+  }
+  const byOrder = new Map<string, typeof lines>()
+  for (const l of lines) { const a = byOrder.get(l.order_id); if (a) a.push(l); else byOrder.set(l.order_id, [l]) }
+  return rows.map((r) => ({ ...orderFrom(r, []), itemSummary: itemSummary((byOrder.get(r.ROWID) ?? []).sort((a, b) => a.sort - b.sort)) }))
+}
 
 /** Merge two lists of orders (two queries for an OR) without duplicates. */
 
@@ -127,6 +147,14 @@ async function restoreCreditNote(c: Ctx, returnId: string, amount: number) {
 const LIST_NEWEST = 50
 /** Who may read customers (names, phones, dues): billing, orders, customers, payments or reports — not kitchen staff. */
 const CUSTOMER_READ: Permission[] = ['billing.create', 'orders.view', 'customers.manage', 'payments.view', 'payments.collect', 'reports.view']
+/** Customers per search / lookup answer (the picker shows 50). */
+const CUSTOMER_PAGE = 50
+/** Rows as customers.list gives them (with their totals), for only these customers. */
+async function withStats(c: Ctx, rows: Row[], wholesaleId: string | null) {
+  if (!rows.length) return []
+  const stats = await customerStats(c, rows.map((r) => r.ROWID))
+  return rows.map((r) => ({ ...customerFrom(r, wholesaleId), stats: stats(r.ROWID) }))
+}
 
 define('orders', {
   /** `limit`: only the newest n (e.g. the dashboard's last 6 bills) — never more than 500 without a date range. */
@@ -148,7 +176,7 @@ define('orders', {
    * (the last bill the screen has). `count` / `billed` are for the whole filter (the header), not just this page.
    * Same rows and order as orders.list; status, type and search are applied here instead of in the browser.
    */
-  page: userRead(async (c, filter: { from: string; to: string; status?: Order['status'] | 'all'; type?: OrderType | 'all'; q?: string }, before?: unknown, limit = 50) => {
+  page: userRead(async (c, filter: { from: string; to: string; status?: Order['status'] | 'all'; type?: OrderType | 'all'; q?: string; summary?: boolean }, before?: unknown, limit = 50) => {
     const n = Math.min(100, Math.max(1, Math.floor(Number(limit)) || 50))
     const range = { gte: isoArg(filter?.from), lte: isoArg(filter?.to) }
     const base: Where = { ...inScope(c) }
@@ -192,7 +220,9 @@ define('orders', {
       count = uniq.length
       billedMinor = uniq.filter((r) => Number(r.status) === E.OrderStatus.completed).reduce((a, r) => a + Number(r.total_minor ?? 0), 0)
     }
-    return { rows: await withItems(c, pageRows), next, count, billed: fromMinor(billedMinor) }
+    // The Orders screen asks for a summary: each bill's lines as short text (one small read), not every line in full.
+    const rows = filter?.summary === true ? await withSummary(c, pageRows) : await withItems(c, pageRows)
+    return { rows, next, count, billed: fromMinor(billedMinor) }
   }, { anyPerm: ['orders.view', 'billing.create'] }),
   running: userRead(async (c) => loadOrders(c, { ...inScope(c), status: E.OrderStatus.open }, { orderBy: [['CREATEDTIME', 'ASC']] }), { anyPerm: ['billing.create', 'orders.view', 'tables.manage', 'dashboard.view'] }),
   get: userRead(async (c, id: string) => {
@@ -442,6 +472,30 @@ define('customers', {
     const stats = await customerStats(c)
     return rows.map((r) => ({ ...customerFrom(r, list?.ROWID ?? null), stats: stats(r.ROWID) }))
   }, { anyPerm: CUSTOMER_READ }),
+  /**
+   * Only these customers (≤ 100), as customers.list gives them — for screens that show the customers of the bills
+   * on screen (Orders, Payments, saved orders) instead of downloading every customer.
+   */
+  byIds: userRead(async (c, ids: unknown) => {
+    const want = [...new Set((Array.isArray(ids) ? ids : []).map(String).filter(isId))].slice(0, CUSTOMER_PAGE * 2)
+    if (!want.length) return []
+    const [rows, list] = await Promise.all([c.db.select('customers', { where: { business_id: c.businessId, is_active: true, ROWID: { in: want } } }), wholesaleList(c)])
+    return withStats(c, rows, list?.ROWID ?? null)
+  }, { anyPerm: CUSTOMER_READ }),
+  /**
+   * The customer picker's search (≤ 50, oldest first, like the list it searched before): name contains the text,
+   * or the phone contains its digits. Empty text: the first 50.
+   */
+  search: userRead(async (c, q: unknown) => {
+    const text = String(q ?? '').trim().slice(0, 60), dial = text.replace(/\D/g, '')
+    const base = { business_id: c.businessId, is_active: true }
+    const read = (where: Where) => c.db.select('customers', { where: { ...base, ...where }, orderBy: [['ROWID', 'ASC']], limit: CUSTOMER_PAGE })
+    const [byName, byPhone, list] = await Promise.all([read(text ? { name: { contains: text } } : {}), dial ? read({ phone: { contains: dial } }) : [], wholesaleList(c)])
+    const seen = new Map<string, Row>()
+    for (const r of [...byName, ...byPhone]) seen.set(r.ROWID, r)
+    const rows = [...seen.values()].sort((a, b) => a.ROWID.length - b.ROWID.length || (a.ROWID < b.ROWID ? -1 : a.ROWID > b.ROWID ? 1 : 0)).slice(0, CUSTOMER_PAGE)
+    return withStats(c, rows, list?.ROWID ?? null)
+  }, { anyPerm: CUSTOMER_READ }),
   /** One customer with totals (a bill's drawer) — instead of the whole list. null when not found. */
   one: userRead(async (c, id: string) => {
     if (!isId(id)) return null
@@ -614,7 +668,7 @@ async function buildMenu(c: Ctx, businessId: string, branchId?: string | null, t
   ])
   const sp = applySpecials(b.modules.inventory ? products.filter((p) => !(p.trackStock && p.stock <= 0)) : products, specials)
   return {
-    business: { id: b.id, name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, address: b.address, phone: b.phone, defaultCountry: b.defaultCountry ?? 'IN', currencySymbol: b.currencySymbol, billing: b.billing, modules: b.modules, terminology: b.terminology, qr: qrSettings(b) },
+    business: { id: b.id, name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, address: b.address, phone: b.phone, defaultCountry: b.defaultCountry ?? 'IN', currencySymbol: b.currencySymbol, billing: publicBilling(b.billing), modules: b.modules, terminology: b.terminology, qr: qrSettings(b) },
     categories: cats, products: sp.products, specials: sp.specials, // read for customers: no cost, no wholesale prices
     specialInfo: [...sp.info.entries()].map(([productId, v]) => ({ productId, tag: v.special.tag, originalPrice: v.originalPrice, specialPrice: v.special.specialPrice })),
     tables: tables.map((t) => ({ id: t.ROWID, label: str(t.label) })),
@@ -640,7 +694,7 @@ async function buildLargeMenu(c: Ctx, branch: Row) {
   const sp = applySpecials(b.modules.inventory ? specialRows.filter((p) => !(p.trackStock && p.stock <= 0)) : specialRows, specials)
   const has = new Set(catIds.map((r) => String(r.id)))
   return {
-    business: { id: b.id, name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, address: b.address, phone: b.phone, defaultCountry: b.defaultCountry ?? 'IN', currencySymbol: b.currencySymbol, billing: b.billing, modules: b.modules, terminology: b.terminology, qr: qrSettings(b) },
+    business: { id: b.id, name: b.name, logoEmoji: b.logoEmoji, logoUrl: b.logoUrl ?? null, subType: b.subType, address: b.address, phone: b.phone, defaultCountry: b.defaultCountry ?? 'IN', currencySymbol: b.currencySymbol, billing: publicBilling(b.billing), modules: b.modules, terminology: b.terminology, qr: qrSettings(b) },
     categories: cats.filter((x) => has.has(x.id)), products: first.products, specials: sp.specials,
     specialInfo: [...sp.info.entries()].map(([productId, v]) => ({ productId, tag: v.special.tag, originalPrice: v.originalPrice, specialPrice: v.special.specialPrice })),
     tables: tables.map((t) => ({ id: t.ROWID, label: str(t.label) })),

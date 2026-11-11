@@ -13,6 +13,7 @@ import { formatPhone } from '@/core/phone'
 import { fmtTime, minutesSince, money } from '@/lib/format'
 import { PaymentModal } from '@/features/Payment'
 import { CancelOrderModal } from './Tables'
+import { useCustomerLookup } from '@/features/customerLookup'
 
 type Stage = 'new' | 'packing' | 'ready' | 'delivered'
 const LABEL: Record<Stage, string> = { new: 'New', packing: 'Packing', ready: 'Ready', delivered: 'Delivered' }
@@ -27,7 +28,8 @@ export default function CustomerOrders() {
   const nav = useNavigate()
   const now = useNow(15000)
   const { data: orders = [] } = useData(() => api.orders.board())
-  const { data: customers = [] } = useData(() => api.customers.list())
+  // Only the customers of the orders on the board (not every customer).
+  const customerOf = useCustomerLookup(orders.map((o) => o.customerId))
   const [tab, setTab] = useState<'board' | Stage>('board')
   const [paying, setPaying] = useState<Order | null>(null)
   const [payCustomer, setPayCustomer] = useState<string | null>(null)
@@ -39,7 +41,7 @@ export default function CustomerOrders() {
   if (me && !usesRetailPos(me.business)) return <EmptyState icon={PackageOpen} title="Customer orders are for supermarket and hardware shops" description="Food and restaurant orders use the Kitchen (KOT) screen." />
 
   const ticket = (o: Order) => (
-    <OrderTicket key={o.id} o={o} now={now} customer={customers.find((c) => c.id === o.customerId)}
+    <OrderTicket key={o.id} o={o} now={now} customer={customerOf(o.customerId)}
       onStage={(s) => run(() => api.orders.setFulfilment(o.id, s))}
       onCollect={() => { setPaying(o); setPayCustomer(o.customerId) }}
       onEdit={() => nav(`/billing?order=${o.id}`)}

@@ -11,8 +11,10 @@ export const CATALOG_FULL_MAX = 2000
  * — so building it stays small (each item costs JSON text; ~500 items took ~17–26 ms). Staff screens keep CATALOG_FULL_MAX.
  */
 export const QR_MENU_FULL_MAX = 150
-/** Rows per products.index answer (keeps each answer's server CPU small). */
-export const INDEX_PAGE = 1000
+/** Rows per products.index answer (keeps each answer's server CPU small — 1,000 rows took 15–50 ms; 400 ≈ 5 ms). */
+export const INDEX_PAGE = 400
+/** Index pages a device downloads at the same time (the first page tells where every page starts). */
+export const INDEX_PARALLEL = 4
 /** More changes than this since the device's copy: the whole index is read again. */
 export const INDEX_MAX_CHANGES = 3000
 
@@ -32,14 +34,24 @@ export type LightRow = [
   nextExpiry: string | null,
 ]
 
+/** A product whose only change is its stock: [id, stock in the view, stock by branch, next expiry]. */
+export type StockChange = [id: string, stock: number, stockByBranch: Record<string, number>, nextExpiry: string | null]
+
 export interface IndexPage {
   rows: LightRow[]
+  /** "since" reads asked with stockOnly: products whose only change is stock, as small entries (not whole rows). */
+  stock?: StockChange[]
   /** Next page (id cursor), or null when this was the last one. */
   next: string | null
   /** Changes after this time are not in these rows (ask again "since" it). */
   at: string
   /** Too many changes since the device's copy: read the whole index again. */
   reset?: boolean
+  /**
+   * First page only: where each later page starts (the `after` of page 2, 3, …), so a device can read several
+   * pages at once. Products added meanwhile come after the last one (that page's `next` carries on).
+   */
+  bounds?: string[]
 }
 
 /** A light row → the app's Product (variants / add-ons left empty; `light` says how many there are). */

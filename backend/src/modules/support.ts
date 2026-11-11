@@ -135,6 +135,11 @@ define('support', {
     return { url: r.url, bytes: r.bytes }
   }, { readOnlyOk: true, tx: 'none', quiet: true }),
 
+  /** How many of this shop's tickets have a reply not yet seen (the menu's Help & support badge). */
+  unread: userRead(async (c) => {
+    const [r] = await c.platform.aggregate('support_tickets', { where: { business_id: c.businessId, unread_for_customer: true }, fns: { n: ['COUNT', 'ROWID'] } })
+    return Number(r?.n ?? 0)
+  }),
   mine: userRead(async (c) => {
     const rows = await c.platform.select('support_tickets', { where: { business_id: c.businessId }, orderBy: [['last_message_at', 'DESC']], limit: 300 })
     return (await ticketsFrom(c, rows)).map(withoutCount)

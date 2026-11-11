@@ -1,6 +1,7 @@
 import clsx from 'clsx'
 import { Building2, Check, Plug, Printer, Star, Store, Database, Languages, LayoutGrid, Plus, Receipt, RotateCcw, ShieldCheck, Tag, Trash2, UserPlus, UtensilsCrossed } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
+import { nameError } from '@/core/limits'
 import { useSearchParams } from 'react-router-dom'
 import { useApp, useData } from '@/app/AppContext'
 import { Badge, Button, Card, Checkbox, Field, FieldLabel, Input, Modal, PageHeader, Select, Table, Td, Th, Toggle, useAction, useReadOnly } from '@/components/ui'
@@ -103,11 +104,14 @@ function useBusinessForm<T>(pick: (b: Business) => T) {
 function ProfileSettings() {
   const f = useBusinessForm((b) => ({ name: b.name, address: b.address, phone: b.phone, defaultCountry: b.defaultCountry ?? 'IN', email: b.email, gstin: b.gstin, stateCode: b.stateCode ?? '', currencySymbol: b.currencySymbol, timezone: b.timezone, category: b.category, subType: b.subType }))
   const set = (k: keyof typeof f.v, val: string) => f.setV({ ...f.v, [k]: val })
+  // The name is checked here first (red under the box) — Save sends nothing until it is right.
+  const [nameShown, setNameShown] = useState(false)
+  const nameErr = nameError(f.v.name, 'your business name')
   return (
-    <Section title="Business Profile" subtitle="Shown on bills and receipts" onSave={() => f.save((v) => v)} dirty={f.dirty}>
+    <Section title="Business Profile" subtitle="Shown on bills and receipts" onSave={() => { if (nameErr) { setNameShown(true); return } f.save((v) => v) }} dirty={f.dirty}>
       <div className="mb-4"><ShopLogoUpload /></div>
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field required label="Business name"><Input value={f.v.name} onChange={(e) => set('name', e.target.value)} /></Field>
+        <Field required label="Business name" error={nameShown && nameErr ? nameErr : undefined}><Input value={f.v.name} aria-invalid={nameShown && !!nameErr} onChange={(e) => { set('name', e.target.value); setNameShown(true) }} onBlur={() => setNameShown(true)} /></Field>
         <Field required label="Business type">
           <Select value={`${f.v.category}|${f.v.subType}`} onChange={(e) => { const [c, s] = e.target.value.split('|'); f.setV({ ...f.v, category: c as Business['category'], subType: s }) }}>
             {!TEMPLATES.some((tp) => tp.subTypes.includes(f.v.subType)) && <option value={`${f.v.category}|${f.v.subType}`}>{f.v.subType}</option>}

@@ -3,7 +3,7 @@ import { r2 } from '@/core/pricing'
 import type { ModuleKey } from '@/core/types'
 import { idBefore, type Cursor } from '@/core/paging'
 import * as E from '../../../server/catalyst/enums'
-import { amountError, qtyError } from '@/core/limits'
+import { amountError, asText, qtyError } from '@/core/limits'
 import type { Ctx } from '../core/context'
 import { ApiError } from '../core/errors'
 import type { TableName } from '../db/schema.gen'
@@ -38,6 +38,12 @@ export const nameOrNull = <M extends EnumMap>(m: M, c: Value | undefined) => (c 
 
 // ---------- strings ----------
 export const str = (v: Value | undefined) => (v == null ? '' : String(v))
+/** A text field from a request (name, address…): a number is read as its digits; an object or list is a 400, never a crash. */
+export function textArg(v: unknown): string {
+  const s = asText(v)
+  if (s === null) throw new ApiError('Check the request', 400, 'BAD_REQUEST')
+  return s
+}
 export const strOrNull = (v: Value | undefined) => (v == null || v === '' ? null : String(v))
 /** For unique keys built from names: lower-case, no quotes (ZCQL-safe), trimmed. */
 export const keyPart = (s: string) => s.trim().toLowerCase().replace(/['"\\\s]+/g, ' ').slice(0, 80)
