@@ -114,6 +114,8 @@ export function createApp(envFor: (req: Request) => Env) {
   const twin = (o: string) => o.replace(/\.(onslate|catalystserverless|catalystappsail|zohostratus)\.(in|com)$/, (_m, d: string, t: string) => `.${d}.${t === 'in' ? 'com' : 'in'}`)
   const origins = [...new Set([...listed, ...listed.map(twin)])]
   app.use((req, res, next) => {
+    // Answers are JSON (or files with their own type): browsers must never guess another type from the content.
+    res.setHeader('X-Content-Type-Options', 'nosniff')
     const o = req.header('origin')
     if (o && origins.includes(o)) {
       res.setHeader('Access-Control-Allow-Origin', o)
