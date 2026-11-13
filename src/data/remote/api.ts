@@ -16,7 +16,8 @@ import { restartLive, setLiveHub, stopLive } from './live'
 
 /** Reads that must never be cached (big one-off downloads). */
 // public.order / public.track: the server answers from its own shared cache; Refresh must really ask.
-const UNCACHED = new Set(['dataExport.mine', 'public.order', 'public.track'])
+// Service-job reads: always fresh from the server (a stage change shows on the next open / Refresh; no polling).
+const UNCACHED = new Set(['dataExport.mine', 'public.order', 'public.track', 'serviceJobs.counts', 'serviceJobs.board', 'serviceJobs.get', 'serviceJobs.search'])
 
 const tokenFor = (name: string): TokenKind => {
   if (name === 'admin.login' || name === 'admin.setup' || name === 'auth.login') return 'none'

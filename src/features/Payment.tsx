@@ -329,8 +329,8 @@ function ClassicReceipt({ order: o, business: b, branch, customer, users = [], t
             {!narrow && <span className="text-right">{d2(i.unitPrice)}</span>}
             <span className="text-right">{d2(lineTotal(i))}</span>
           </div>
-          {(i.addOns.length > 0 || narrow || !!i.mrp || !!i.hsn || i.listPrice !== undefined) && (
-            <p className="pl-2 text-[10px]">{[narrow ? `@ ${d2(i.unitPrice)}` : '', i.listPrice !== undefined && !i.mrp ? `was ${d2(i.listPrice)}` : '', i.mrp ? `MRP ${d2(i.mrp)}` : '', i.hsn ? `HSN ${i.hsn}` : '', i.addOns.length ? `+ ${i.addOns.map((a) => a.name).join(', ')}` : ''].filter(Boolean).join(' · ')}</p>
+          {(i.addOns.length > 0 || narrow || !!i.mrp || !!i.hsn) && (
+            <p className="pl-2 text-[10px]">{[narrow ? `@ ${d2(i.unitPrice)}` : '', i.mrp ? `MRP ${d2(i.mrp)}` : '', i.hsn ? `HSN ${i.hsn}` : '', i.addOns.length ? `+ ${i.addOns.map((a) => a.name).join(', ')}` : ''].filter(Boolean).join(' · ')}</p>
           )}
         </div>
       ))}

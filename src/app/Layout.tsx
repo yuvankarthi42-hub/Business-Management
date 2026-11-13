@@ -177,7 +177,7 @@ export function AppLayout() {
   const badges = { '/qr-orders': qrPending }
   const [drawer, setDrawer] = useState(false)
   const loc = useLocation()
-  const fullBleed = loc.pathname.startsWith('/billing') || loc.pathname.startsWith('/kitchen') || loc.pathname.startsWith('/customer-orders')
+  const fullBleed = loc.pathname.startsWith('/billing') || loc.pathname.startsWith('/kitchen') || loc.pathname.startsWith('/customer-orders') || loc.pathname.startsWith('/service-jobs')
   const tabs = items.filter((i) => i.mobileTab).slice(0, 4)
   const today = new Date().toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })
 

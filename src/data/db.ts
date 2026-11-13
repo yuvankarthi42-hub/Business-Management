@@ -5,6 +5,7 @@ import type {
   Campaign, Role, Special, StockBatch, StockMovement, User, WaMessage, SaleReturn, Attendance, StaffAdvance, SalaryPayment, ReminderLog, Ticket, PlatformAdmin, SubscriptionPeriod, AdminAuditLog, PlatformSettings,
   PointsEntry, Purchase, Supplier, SupplierPayment,
 } from '@/core/types'
+import type { ServiceJob } from '@/core/serviceJobs'
 import { seedAdminTeam, seedPlatform } from './seedPlatform'
 import { dropHealthEvents, dropSmsReminders, fixFutureDemoTimes, markContractors, seedStaffAndWholesale, seedSupport } from './seedOps'
 import { buildSeed, demoSpecials } from './seed'
@@ -52,7 +53,12 @@ export interface DB {
   supplierPayments: (SupplierPayment & { businessId: string; branchId: string })[]
   /** Loyalty points history; `remaining` = earned points not yet used / expired (used oldest first). */
   points: (PointsEntry & { businessId: string; remaining: number; returnId?: string | null })[]
+  /** Service jobs (repairs, laundry…): the job with its history; the bill is the order it points to. */
+  serviceJobs?: DemoJob[]
 }
+
+/** A service job as the demo stores it. */
+export type DemoJob = Omit<ServiceJob, 'invoiceNumber' | 'total'> & { businessId: string; advancePaymentId: string | null; clientUuid?: string; updatedAt: string; updatedBy: string }
 
 const KEY = 'billpoodum.db' // legacy localStorage key (moved to IndexedDB on first load)
 const VERSION = 29

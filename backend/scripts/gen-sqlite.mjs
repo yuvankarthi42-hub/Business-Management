@@ -103,6 +103,8 @@ const PLANNED = {
   daily_specials: [['business_id', 'special_date']],
   subscription_periods: [['business_id', 'created_at']],
   users: [['business_id', 'is_active']],
+  service_jobs: [['business_id', 'branch_id', 'stage', 'promised_at'], ['business_id', 'branch_id', 'stage', 'stage_at'], ['business_id', 'phone_key'], ['business_id', 'serial_key']],
+  service_job_events: [['job_id', 'created_at']],
 }
 
 

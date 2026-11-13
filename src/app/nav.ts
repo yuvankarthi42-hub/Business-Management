@@ -1,6 +1,6 @@
 import {
   Flame, PackageOpen, QrCode, BarChart3, Boxes, ChefHat, CreditCard, LayoutDashboard, NotebookPen, ReceiptText, Settings, ShoppingBag, Tag, Users,
-  UserCheck, UtensilsCrossed, Wallet, type LucideIcon,
+  UserCheck, UtensilsCrossed, Wallet, Wrench, type LucideIcon,
 } from 'lucide-react'
 import type { ModuleKey, Permission, TermKey } from '@/core/types'
 
@@ -20,6 +20,7 @@ export const NAV: NavItem[] = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', perm: 'dashboard.view', mobileTab: true },
   { to: '/billing', icon: ReceiptText, label: 'Billing', module: 'billing', perm: 'billing.create', mobileTab: true },
   { to: '/customer-orders', icon: PackageOpen, label: 'Customer Orders', module: 'customerOrders', perm: 'orders.view', only: 'retailPos', mobileTab: true },
+  { to: '/service-jobs', icon: Wrench, label: 'Service Jobs', module: 'serviceJobs', perm: 'jobs.manage', mobileTab: true },
   { to: '/tables', icon: UtensilsCrossed, label: { term: 'table' }, module: 'tables', perm: 'tables.manage', mobileTab: true },
   { to: '/m/order', icon: NotebookPen, label: 'Take Order', module: 'mobileOrders', perm: 'tables.manage' },
   { to: '/qr-orders', icon: QrCode, label: 'QR Orders', module: 'qrOrdering', perm: 'tables.manage' },

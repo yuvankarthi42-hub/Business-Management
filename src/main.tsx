@@ -39,6 +39,7 @@ const load = {
   SpecialsDisplay: () => import('./pages/SpecialsDisplay'),
   QrOrders: () => import('./pages/QrOrders'),
   CustomerOrders: () => import('./pages/CustomerOrders'),
+  ServiceJobs: () => import('./pages/ServiceJobs'),
   CustomerMenu: () => import('./pages/CustomerMenu'),
   AdminLogin: () => import('./admin/AdminLogin'),
   AdminLayout: () => import('./admin/AdminLayout'),
@@ -77,6 +78,7 @@ const Specials = lazy(load.Specials)
 const SpecialsDisplay = lazy(load.SpecialsDisplay)
 const QrOrders = lazy(load.QrOrders)
 const CustomerOrders = lazy(load.CustomerOrders)
+const ServiceJobs = lazy(load.ServiceJobs)
 const CustomerMenu = lazy(load.CustomerMenu)
 const TrackOrderPage = lazy(() => load.CustomerMenu().then((m) => ({ default: m.TrackOrderPage })))
 const AdminLogin = lazy(load.AdminLogin)
@@ -182,6 +184,7 @@ function App() {
           <Route path="/orders" element={<Gate module="orders" perm="orders.view"><Orders /></Gate>} />
           <Route path="/tables" element={<Gate branch="tables" module="tables" perm="tables.manage"><Tables /></Gate>} />
           <Route path="/customer-orders" element={<Gate branch="customer orders" module="customerOrders" perm="orders.view"><CustomerOrders /></Gate>} />
+          <Route path="/service-jobs" element={<Gate branch="service jobs" module="serviceJobs" perm="jobs.manage"><ServiceJobs /></Gate>} />
           <Route path="/qr-orders" element={<Gate branch="QR orders" module="qrOrdering" perm="tables.manage"><QrOrders /></Gate>} />
           <Route path="/specials" element={<Gate module="specials" perm="products.manage"><Specials /></Gate>} />
           <Route path="/kitchen" element={<Gate branch="the kitchen display" module="kitchen" perm="kitchen.view"><Kitchen /></Gate>} />

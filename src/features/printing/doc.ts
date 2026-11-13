@@ -104,7 +104,7 @@ function classicDoc({ order: o, business: b, branch, customer, users = [], table
   out.push({ k: 'hr' })
   for (const i of o.items) {
     out.push({ k: 'row', cells: narrow ? [itemLabel(i), String(i.qty), d2(lineTotal(i))] : [itemLabel(i), String(i.qty), d2(i.unitPrice), d2(lineTotal(i))], widths: cols })
-    const sub = [narrow ? `@ ${d2(i.unitPrice)}` : '', i.listPrice !== undefined && !i.mrp ? `was ${d2(i.listPrice)}` : '', i.mrp ? `MRP ${d2(i.mrp)}` : '', i.hsn ? `HSN ${i.hsn}` : '', i.addOns.length ? `+ ${i.addOns.map((a) => a.name).join(', ')}` : ''].filter(Boolean).join(' · ')
+    const sub = [narrow ? `@ ${d2(i.unitPrice)}` : '', i.mrp ? `MRP ${d2(i.mrp)}` : '', i.hsn ? `HSN ${i.hsn}` : '', i.addOns.length ? `+ ${i.addOns.map((a) => a.name).join(', ')}` : ''].filter(Boolean).join(' · ')
     if (sub) t(`  ${sub}`, { small: true })
   }
   }

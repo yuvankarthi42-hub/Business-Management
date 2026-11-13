@@ -44,6 +44,12 @@ export const WRITE_MODULE: Record<string, ModuleKey> = {
   'orders.setFulfilment': 'customerOrders',
   // Customers (collecting dues from the Customers screen)
   'customers.collectDue': 'customers',
+  // Service jobs (repairs, laundry, tailoring)
+  'serviceJobs.create': 'serviceJobs',
+  'serviceJobs.update': 'serviceJobs',
+  'serviceJobs.setStage': 'serviceJobs',
+  'serviceJobs.close': 'serviceJobs',
+  'serviceJobs.deliver': 'serviceJobs',
 }
 
 /**
@@ -74,6 +80,10 @@ export const READ_MODULE: Record<string, { module: ModuleKey; empty?: [] | { row
   'orders.board': { module: 'customerOrders', empty: [] },
   'reports.gst': { module: 'reports' },
   'reports.receivables': { module: 'reports', empty: [] },
+  'serviceJobs.board': { module: 'serviceJobs', empty: { rows: [], next: null, count: 0 } },
+  'serviceJobs.search': { module: 'serviceJobs', empty: [] },
+  'serviceJobs.counts': { module: 'serviceJobs' },
+  'serviceJobs.get': { module: 'serviceJobs' },
 }
 
 /** For a module-owned read while its module is off: `{ empty }` to answer with, or `{ error }`. Null = run it. */

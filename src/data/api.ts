@@ -19,7 +19,7 @@ import type {
 } from '@/core/types'
 import { uid } from '@/lib/format'
 import { nextInStoreBarcode } from '@/lib/barcode'
-import { getDB, notify, resetDB, tx as dbTx, type DB } from './db'
+import { getDB, notify, resetDB, tx as dbTx, type DB, type DemoJob } from './db'
 import { addMonths, branchLimitMessage, dateInputToEnd, DEACTIVATED_MESSAGE, endOfDay, READ_ONLY_MESSAGE, subscriptionState } from '@/core/subscription'
 import { cleanPlanPrice, monthlyValue, PLAN_KEYS, PLAN_LABEL, PLAN_START, planAmount, plansFrom, priceFor, type PlanKey, type PlanPrice } from '@/core/plans'
 import { ownerOf } from './seedPlatform'
@@ -27,6 +27,7 @@ import { compressImage, ensureStoredImage, LOGO_IMAGE } from './media'
 import { orderNumberCandidates, TRACK_WINDOW_MS, type TrackStage, type TrackView } from '@/core/tracking'
 import { afterCursor, idBefore, type Cursor } from '@/core/paging'
 import { moduleOffError, moduleOffRead, READ_MODULE, WRITE_MODULE } from '@/core/moduleGuards'
+import { CLOSED_STAGES, jobStagesFor, type JobCard, type JobInput, type JobStage, type ServiceJob } from '@/core/serviceJobs'
 import type { WaMessageQuery } from '@/core/waReceipts'
 
 /** What a customer's phone may see of a product: no cost or wholesale prices. */
@@ -989,6 +990,64 @@ export type CustomerRow = ReturnType<typeof customerRow>
 
 // ======================================================================================
 
+
+// ---------- Service jobs (same rules as backend/src/modules/serviceJobs.ts) ----------
+
+const JOB_PAGE = 50
+const JOB_MAX_PAGES = 20
+const JOB_PAY_METHODS = ['cash', 'upi', 'card', 'bank'] as const
+const JOB_CONFLICT = 'This job was just changed on another device. Refresh and try again.'
+const serialKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+const jobCard = (j: DemoJob): JobCard => ({
+  id: j.id, number: j.number, stage: j.stage, stageAt: j.stageAt, item: j.item, brandModel: j.brandModel, customerName: j.customerName, customerPhone: j.customerPhone,
+  problem: j.problem, promisedAt: j.promisedAt, technicianId: j.technicianId, estimate: j.estimate, advance: j.advance, version: j.version,
+})
+function fullJob(d: DB, j: DemoJob): ServiceJob {
+  const { businessId: _b, advancePaymentId: _a, clientUuid: _c, updatedAt: _u, updatedBy: _ub, ...rest } = j
+  const o = j.orderId ? d.orders.find((x) => x.id === j.orderId) : null
+  return { ...rest, invoiceNumber: o?.invoiceNumber ?? null, total: o ? o.total : null }
+}
+/** A job of this shop, in a branch this user may open. */
+function ownJob(d: DB, id: string): DemoJob {
+  const user = d.users.find((u) => u.id === ctx().userId)
+  const allowed = user ? allowedBranches(d, user) : []
+  const j = mine(d.serviceJobs ?? []).find((x) => x.id === id)
+  if (!j || !allowed.includes(j.branchId)) throw new ApiError('Job not found')
+  return j
+}
+function jobOpen(j: DemoJob) {
+  if (CLOSED_STAGES.includes(j.stage)) throw new ApiError(j.stage === 'delivered' ? 'This job is already delivered' : 'This job is closed')
+}
+/** The fields a job's form sends (create and edit): checked and cut to size. */
+function jobDetails(d: DB, input: Partial<JobInput>, isNew: boolean) {
+  const out: Partial<DemoJob> = {}
+  const set = (key: 'item' | 'brandModel' | 'serial' | 'colour' | 'problem' | 'accessories' | 'conditionNote', max: number, required?: string) => {
+    if (input[key] === undefined && !isNew) return
+    const v = String(input[key] ?? '').trim().slice(0, max)
+    if (!v && required) throw new ApiError(required)
+    out[key] = v
+  }
+  set('item', 80, 'Enter the item (e.g. Mobile)')
+  set('brandModel', 120)
+  set('serial', 40)
+  set('colour', 30)
+  set('problem', 500, 'Describe the problem')
+  set('accessories', 255)
+  set('conditionNote', 255)
+  if (input.estimate !== undefined || isNew) {
+    const e = input.estimate == null || input.estimate === ('' as never) ? null : Number(input.estimate)
+    if (e != null && (!Number.isFinite(e) || e < 0)) throw new ApiError('Enter a valid estimate')
+    out.estimate = e == null ? null : r2(e)
+  }
+  if (input.promisedAt !== undefined || isNew) {
+    const p = input.promisedAt ? new Date(String(input.promisedAt)) : null
+    if (p && Number.isNaN(p.getTime())) throw new ApiError('Choose the ready-by date')
+    out.promisedAt = p ? p.toISOString() : null
+  }
+  if (input.technicianId !== undefined || isNew) out.technicianId = input.technicianId && mine(d.users).some((u) => u.id === input.technicianId) ? input.technicianId : null
+  return out
+}
+
 export const api = {
   auth: {
     /** Change your own password (demo: plain check of the current one). */
@@ -1896,6 +1955,170 @@ export const api = {
       const totals: Partial<Record<PaymentMethod, number>> = {}
       for (const p of inRangeAll) if (!p.voided) totals[p.method] = r2((totals[p.method] ?? 0) + p.amount)
       return clone({ rows: rows.map((p) => ({ ...p, billNumber: bill(p.orderId) })), next: rest.length > n ? { at: rows[n - 1].createdAt, id: rows[n - 1].id } : null, count: all.length, totals })
+    },
+  },
+  /** Service jobs (repairs, laundry, tailoring): same rules as the server (backend/src/modules/serviceJobs.ts). */
+  serviceJobs: {
+    async counts() {
+      const d = getDB()
+      requirePerm(d, 'jobs.manage')
+      const stages = jobStagesFor(biz(d))
+      const day = new Date(); day.setHours(0, 0, 0, 0)
+      const now = nowIso()
+      const counts: Partial<Record<JobStage, number>> = {}
+      const overdue: Partial<Record<JobStage, number>> = {}
+      for (const j of here(d, d.serviceJobs ?? [])) {
+        if (j.stage === 'delivered') { if (j.stageAt >= day.toISOString()) counts.delivered = (counts.delivered ?? 0) + 1; continue }
+        if (!stages.includes(j.stage)) continue
+        counts[j.stage] = (counts[j.stage] ?? 0) + 1
+        if (j.stage !== 'ready' && j.promisedAt && j.promisedAt < now) overdue[j.stage] = (overdue[j.stage] ?? 0) + 1
+      }
+      counts.delivered ??= 0
+      return { stages, counts, overdue }
+    },
+    async board(stage: JobStage, page?: number | string | null) {
+      const d = getDB()
+      requirePerm(d, 'jobs.manage')
+      if (!jobStagesFor(biz(d)).includes(stage) && !CLOSED_STAGES.includes(stage)) throw new ApiError('Unknown stage')
+      const all = here(d, d.serviceJobs ?? []).filter((j) => j.stage === stage)
+      if (!CLOSED_STAGES.includes(stage)) {
+        const p = Math.min(JOB_MAX_PAGES - 1, Math.max(0, Math.floor(Number(page) || 0)))
+        const rows = all.sort((a, b) => (a.promisedAt ?? '').localeCompare(b.promisedAt ?? '') || a.createdAt.localeCompare(b.createdAt)).slice(p * JOB_PAGE, p * JOB_PAGE + JOB_PAGE + 1)
+        return clone({ rows: rows.slice(0, JOB_PAGE).map(jobCard), next: rows.length > JOB_PAGE && p + 1 < JOB_MAX_PAGES ? p + 1 : null as number | string | null })
+      }
+      // Closed: newest first, after the cursor "<stageAt>|<id>" (same rule as the server).
+      const sorted = all.sort((a, b) => b.stageAt.localeCompare(a.stageAt) || (idBefore(a.id, b.id) ? 1 : -1))
+      const [at, id] = typeof page === 'string' && page.includes('|') ? page.split('|') : [null, null]
+      const start = at ? sorted.findIndex((j) => j.stageAt === at && j.id === id) + 1 : 0
+      const rest = sorted.slice(start)
+      const out = rest.slice(0, JOB_PAGE)
+      const last = out[out.length - 1]
+      return clone({ rows: out.map(jobCard), next: rest.length > JOB_PAGE && last ? `${last.stageAt}|${last.id}` : null as number | string | null })
+    },
+    async get(id: string) {
+      const d = getDB()
+      requirePerm(d, 'jobs.manage')
+      return clone(fullJob(d, ownJob(d, id)))
+    },
+    async search(q?: string) {
+      const d = getDB()
+      requirePerm(d, 'jobs.manage')
+      const t = String(q ?? '').trim().slice(0, 60)
+      if (!t) return []
+      const dg = t.replace(/\D/g, ''), key = serialKey(t)
+      // Same rule as the server: job number, full phone or full serial find any job; part of one, the open jobs only.
+      let full = ''
+      if (dg.length >= 10) { try { full = (normalizePhone(t, biz(d).defaultCountry || 'IN') ?? '').replace(/\D/g, '') } catch { /* not a phone */ } }
+      const isOpen = (j: DemoJob) => !CLOSED_STAGES.includes(j.stage)
+      const hits = here(d, d.serviceJobs ?? []).filter((j) => {
+        const ph = j.customerPhone.replace(/\D/g, ''), sk = serialKey(j.serial)
+        return j.number.toUpperCase() === t.toUpperCase() || (!!full && ph === full) || (key.length >= 4 && sk === key)
+          || (isOpen(j) && ((dg.length >= 4 && ph.includes(dg)) || (key.length >= 4 && sk.includes(key))))
+      })
+      return clone(hits.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 20).map(jobCard))
+    },
+    async create(input: JobInput) {
+      return tx((d) => {
+        const s = requirePerm(d, 'jobs.manage')
+        const cust = mine(d.customers).find((c) => c.id === input?.customerId)
+        if (!cust) throw new ApiError('Choose the customer')
+        const det = jobDetails(d, input, true)
+        const adv = input.advance && Number(input.advance.amount) > 0 ? input.advance : null
+        if (adv) {
+          if (!Number.isFinite(Number(adv.amount))) throw new ApiError('Enter a valid advance')
+          if (!(JOB_PAY_METHODS as readonly string[]).includes(adv.method)) throw new ApiError('Choose how the advance was paid')
+          if (det.estimate != null && r2(Number(adv.amount)) > det.estimate) throw new ApiError('The advance is more than the estimate')
+        }
+        const branchId = writeBranch(d)
+        const number = `J-${1001 + mine(d.serviceJobs ?? []).length}` // jobs are never deleted
+        const at = nowIso()
+        let payId: string | null = null
+        if (adv) {
+          payId = uid('pay_')
+          d.payments.push({ id: payId, businessId: s.businessId, branchId, orderId: null, customerId: cust.id, method: adv.method, kind: 'sale', amount: r2(Number(adv.amount)), reference: String(adv.reference ?? '').trim().slice(0, 80) || `Advance ${number}`, voided: false, ...stamp(s.userId) })
+        }
+        const j: DemoJob = {
+          id: uid('job_'), businessId: s.businessId, branchId, number, stage: 'received', stageAt: at, customerId: cust.id, orderId: null, advancePaymentId: payId,
+          item: '', brandModel: '', serial: '', colour: '', problem: '', accessories: '', conditionNote: '', promisedAt: null, technicianId: null, estimate: null, ...det,
+          customerName: cust.name.slice(0, 120), customerPhone: cust.phone ?? '', advance: adv ? r2(Number(adv.amount)) : 0, closeReason: '', deliveredAt: null,
+          createdAt: at, createdBy: s.userId, updatedAt: at, updatedBy: s.userId, version: 1, events: [{ from: null, to: 'received', note: '', at, by: s.userId }],
+        }
+        ;(d.serviceJobs ??= []).push(j)
+        audit(d, 'job', j.id, 'create', number)
+        return clone(fullJob(d, j))
+      })
+    },
+    async update(id: string, patch: Partial<JobInput>, version?: number) {
+      return tx((d) => {
+        const s = requirePerm(d, 'jobs.manage')
+        const j = ownJob(d, id)
+        jobOpen(j)
+        if (version != null && Number(version) !== j.version) throw new ApiError(JOB_CONFLICT)
+        Object.assign(j, jobDetails(d, patch ?? {}, false))
+        j.version++; touch(j, s.userId)
+        audit(d, 'job', j.id, 'update', j.number)
+        return clone(fullJob(d, j))
+      })
+    },
+    async setStage(id: string, stage: JobStage, note?: string, version?: number) {
+      return tx((d) => {
+        const s = requirePerm(d, 'jobs.manage')
+        if (!jobStagesFor(biz(d)).includes(stage) || stage === 'delivered') throw new ApiError('Choose a stage')
+        const j = ownJob(d, id)
+        jobOpen(j)
+        if (j.stage === stage) return clone(jobCard(j))
+        if (version != null && Number(version) !== j.version) throw new ApiError(JOB_CONFLICT)
+        const at = nowIso()
+        j.events.push({ from: j.stage, to: stage, note: String(note ?? '').trim().slice(0, 255), at, by: s.userId })
+        j.stage = stage; j.stageAt = at; j.version++; touch(j, s.userId)
+        return clone(jobCard(j))
+      })
+    },
+    async close(id: string, how: 'cancelled' | 'returned', reason?: string, refund?: { method: string } | null) {
+      return tx((d) => {
+        const s = requirePerm(d, 'jobs.manage')
+        if (how !== 'cancelled' && how !== 'returned') throw new ApiError('Choose cancelled or returned')
+        const j = ownJob(d, id)
+        jobOpen(j)
+        if (refund && j.advance > 0) {
+          if (!(JOB_PAY_METHODS as readonly string[]).includes(refund.method)) throw new ApiError('Choose how the advance is given back')
+          d.payments.push({ id: uid('pay_'), businessId: s.businessId, branchId: j.branchId, orderId: null, customerId: j.customerId, method: refund.method as PaymentMethod, kind: 'refund', amount: j.advance, reference: `Advance back ${j.number}`, voided: false, ...stamp(s.userId) })
+          j.advance = 0
+        }
+        const at = nowIso()
+        const why = String(reason ?? '').trim().slice(0, 255)
+        j.events.push({ from: j.stage, to: how, note: why, at, by: s.userId })
+        Object.assign(j, { stage: how, stageAt: at, closeReason: why }); j.version++; touch(j, s.userId)
+        audit(d, 'job', j.id, 'cancel', `${j.number} ${how}`)
+        return clone(fullJob(d, j))
+      })
+    },
+    /** Hand it back: its bill is made and paid like a counter bill; the advance is part of it. `pays` = what is collected now. */
+    async deliver(id: string, bill: { items: OrderItem[]; discount?: number; notes?: string }, pays: PaymentInput[]) {
+      return tx((d) => {
+        const s = requirePerm(d, 'jobs.manage')
+        if (!Array.isArray(bill?.items) || !bill.items.length) throw new ApiError('Add the parts or labour for this job')
+        const j = ownJob(d, id)
+        if (j.stage === 'delivered' && j.orderId) return clone({ job: fullJob(d, j), order: d.orders.find((o) => o.id === j.orderId)! })
+        jobOpen(j)
+        if (!j.customerId) throw new ApiError('This job has no customer')
+        const draft: OrderDraft = { type: 'counter', tableId: null, customerId: j.customerId, items: bill.items, discount: Number(bill.discount ?? 0), notes: String(bill.notes ?? `Job ${j.number}`).slice(0, 255), source: 'pos' }
+        checkCounterRights(d, draft)
+        const o = writeOrder(d, { ...draft, items: draft.items.map((i) => ({ ...i })) })
+        o.branchId = j.branchId
+        const adv = j.advancePaymentId && j.advance > 0 ? d.payments.find((p) => p.id === j.advancePaymentId && !p.voided) : null
+        if (adv) {
+          if (adv.amount > o.total + 0.001) throw new ApiError(`The bill (${o.total}) is less than the advance (${adv.amount}). Give back the difference first.`)
+          adv.orderId = o.id
+          o.paid = adv.amount
+          o.balance = r2(o.total - o.paid)
+        }
+        settle(d, o, pays)
+        const at = nowIso()
+        j.events.push({ from: j.stage, to: 'delivered', note: '', at, by: s.userId })
+        Object.assign(j, { stage: 'delivered', stageAt: at, deliveredAt: at, orderId: o.id }); j.version++; touch(j, s.userId)
+        return clone({ job: fullJob(d, j), order: o })
+      })
     },
   },
 
@@ -3563,7 +3786,7 @@ for (const action of Object.keys(READ_MODULE)) {
     try { modules = biz(getDB())?.modules } catch { /* not signed in: the action itself says so */ }
     const off = modules ? moduleOffRead(action, modules) : null
     if (off && 'error' in off) throw new ApiError(off.error)
-    if (off) return []
+    if (off) return ns === 'serviceJobs' ? off.empty : [] // (older demo screens expect [] for the rest)
     return (fn as (...a: unknown[]) => unknown).apply(group, args)
   }
 }

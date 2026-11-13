@@ -4932,6 +4932,346 @@
       }
     ]
   },
+  "service_jobs": {
+    "columns": [
+      {
+        "name": "business_id",
+        "type": "fk",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "businesses",
+        "onDelete": "cascade"
+      },
+      {
+        "name": "branch_id",
+        "type": "fk",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "branches",
+        "onDelete": "cascade"
+      },
+      {
+        "name": "customer_id",
+        "type": "fk",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "customers",
+        "onDelete": "null"
+      },
+      {
+        "name": "order_id",
+        "type": "fk",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "orders",
+        "onDelete": "null"
+      },
+      {
+        "name": "advance_payment_id",
+        "type": "fk",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "payments",
+        "onDelete": "null"
+      },
+      {
+        "name": "client_uuid",
+        "type": "varchar",
+        "maxLength": 40,
+        "mandatory": true,
+        "unique": true,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "job_number",
+        "type": "varchar",
+        "maxLength": 30,
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "number_key",
+        "type": "varchar",
+        "maxLength": 80,
+        "mandatory": true,
+        "unique": true,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "stage",
+        "type": "int",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "enum": "JobStage"
+      },
+      {
+        "name": "stage_at",
+        "type": "datetime",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "item",
+        "type": "varchar",
+        "maxLength": 80,
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "brand_model",
+        "type": "varchar",
+        "maxLength": 120,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "serial",
+        "type": "varchar",
+        "maxLength": 40,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "serial_key",
+        "type": "varchar",
+        "maxLength": 80,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "colour",
+        "type": "varchar",
+        "maxLength": 30,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "problem",
+        "type": "varchar",
+        "maxLength": 500,
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "accessories",
+        "type": "varchar",
+        "maxLength": 255,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "condition_note",
+        "type": "varchar",
+        "maxLength": 255,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "estimate_minor",
+        "type": "bigint",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "unit": "minor"
+      },
+      {
+        "name": "advance_minor",
+        "type": "bigint",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "0",
+        "unit": "minor"
+      },
+      {
+        "name": "promised_at",
+        "type": "datetime",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "technician_id",
+        "type": "fk",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "users",
+        "onDelete": "null"
+      },
+      {
+        "name": "customer_name",
+        "type": "varchar",
+        "maxLength": 120,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": true
+      },
+      {
+        "name": "customer_phone",
+        "type": "varchar",
+        "maxLength": 16,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": true
+      },
+      {
+        "name": "phone_key",
+        "type": "varchar",
+        "maxLength": 16,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "delivered_at",
+        "type": "datetime",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "close_reason",
+        "type": "varchar",
+        "maxLength": 255,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "created_by",
+        "type": "fk",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "users",
+        "onDelete": "null"
+      },
+      {
+        "name": "updated_by",
+        "type": "fk",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "users",
+        "onDelete": "null"
+      },
+      {
+        "name": "row_version",
+        "type": "int",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "default": "1"
+      }
+    ]
+  },
+  "service_job_events": {
+    "columns": [
+      {
+        "name": "business_id",
+        "type": "fk",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "businesses",
+        "onDelete": "cascade"
+      },
+      {
+        "name": "job_id",
+        "type": "fk",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "service_jobs",
+        "onDelete": "cascade"
+      },
+      {
+        "name": "from_stage",
+        "type": "int",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "enum": "JobStage"
+      },
+      {
+        "name": "to_stage",
+        "type": "int",
+        "mandatory": true,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "note",
+        "type": "varchar",
+        "maxLength": 255,
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false
+      },
+      {
+        "name": "created_by",
+        "type": "fk",
+        "mandatory": false,
+        "unique": false,
+        "search": false,
+        "pii": false,
+        "references": "users",
+        "onDelete": "null"
+      }
+    ]
+  },
   "expense_categories": {
     "columns": [
       {

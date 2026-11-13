@@ -371,10 +371,13 @@ function UserForm({ initial, roles, branches, onClose }: { initial: Partial<User
 
 function RoleForm({ initial, onClose }: { initial: Partial<Role>; onClose: () => void }) {
   const run = useAction()
+  const { mod } = useApp()
+  // A module's own permission is listed only while that module is on (every other permission as always).
+  const shown = PERMISSIONS.filter((p) => !p.module || mod(p.module))
   const all = (initial.permissions as string[] | undefined)?.includes('*')
   const [name, setName] = useState(initial.name ?? '')
   const [perms, setPerms] = useState<Permission[]>(all ? PERMISSIONS.map((p) => p.key) : ((initial.permissions ?? []) as Permission[]))
-  const groups = [...new Set(PERMISSIONS.map((p) => p.group))]
+  const groups = [...new Set(shown.map((p) => p.group))]
   return (
     <Modal open onClose={onClose} size="lg" title={initial.id ? `${initial.name} permissions` : 'New role'}
       footer={<>
@@ -389,7 +392,7 @@ function RoleForm({ initial, onClose }: { initial: Partial<Role>; onClose: () =>
           <div key={g}>
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{g}</p>
             <div className="flex flex-col gap-2">
-              {PERMISSIONS.filter((p) => p.group === g).map((p) => (
+              {shown.filter((p) => p.group === g).map((p) => (
                 <Checkbox key={p.key} label={p.label} checked={perms.includes(p.key)} onChange={(v) => !all && setPerms(v ? [...perms, p.key] : perms.filter((x) => x !== p.key))} />
               ))}
             </div>

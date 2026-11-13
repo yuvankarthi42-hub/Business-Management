@@ -22,7 +22,7 @@ export function defaultBilling(category: Business['category']): BillingJson {
 }
 export const DEFAULT_SEQ: Record<SeqName, { prefix: string; start: number }> = {
   invoice: { prefix: 'INV-', start: 10001 }, order: { prefix: '#', start: 1001 }, kot: { prefix: 'KOT-', start: 1 },
-  credit_note: { prefix: 'CN-', start: 1001 }, purchase: { prefix: 'PUR-', start: 1 },
+  credit_note: { prefix: 'CN-', start: 1001 }, purchase: { prefix: 'PUR-', start: 1 }, job: { prefix: 'J-', start: 1001 },
 }
 
 export interface BusinessBundle {

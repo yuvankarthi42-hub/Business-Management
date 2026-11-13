@@ -132,6 +132,10 @@ const WRITES: Record<string, string[]> = {
   'campaigns.create': ['campaigns'], 'campaigns.update': ['campaigns'], 'campaigns.markSent': ['campaigns'],
   'qr.accept': TABLE_CHANGE, 'qr.reject': ORDER_CHANGE,
   'public.placeOrder': ['public'],
+  // Service jobs: their own reads are never cached (remote/api.ts UNCACHED); these clear what the job touches elsewhere.
+  'serviceJobs.create': ['payments', 'customers', 'reports'], 'serviceJobs.update': [], 'serviceJobs.setStage': [],
+  'serviceJobs.close': ['payments', 'customers', 'reports'],
+  'serviceJobs.deliver': [...ORDER_CHANGE, 'stock', 'customers', 'points', 'reports'],
 }
 
 export function readPolicy(name: string) { return READS[name] ?? null }

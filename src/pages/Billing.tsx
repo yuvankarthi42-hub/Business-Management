@@ -1,9 +1,10 @@
 import clsx from 'clsx'
 import { Banknote, ChefHat, ClipboardList, CreditCard, MoreHorizontal, ScanLine, ShoppingBag, Smartphone } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useSaveOnce } from '@/features/billKey'
 import { useApp, useData } from '@/app/AppContext'
-import { Badge, Button, Chips, Drawer, SearchInput, Segmented, Select, useAction, useToast } from '@/components/ui'
+import { Badge, Button, Chips, Drawer, SearchInput, Segmented, Select, Spinner, useAction, useToast } from '@/components/ui'
 import { ORDER_TYPE_LABEL, usesRetailPos } from '@/core/config'
 import SuperBilling from '@/features/supermarket/SuperBilling'
 import { WeightModal } from '@/features/supermarket/WeightModal'
@@ -22,9 +23,14 @@ import { BillSuccessModal, PaymentModal } from '@/features/Payment'
 import { ExchangeNote } from '@/features/Returns'
 import { useCustomer } from '@/features/customerLookup'
 
+// A service job's bill (/billing?job=…, from Service Jobs): its own screen, loaded only then. The two below don't change.
+const JobBilling = lazy(() => import('@/features/serviceJobs/JobBilling'))
+
 /** Supermarket and hardware shops get the scan-first screen; everyone else the tile POS below. */
 export default function Billing() {
-  const { me } = useApp()
+  const { me, mod, can } = useApp()
+  const job = useSearchParams()[0].get('job')
+  if (me && job && mod('serviceJobs') && can('jobs.manage')) return <Suspense fallback={<Spinner />}><JobBilling key={job} id={job} /></Suspense>
   return me && usesRetailPos(me.business) ? <SuperBilling /> : <TileBilling />
 }
 

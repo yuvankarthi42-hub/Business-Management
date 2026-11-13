@@ -4,6 +4,7 @@ import { isTextileShop } from './stickers'
 import type {
   Business, BusinessCategory, QrSettings, ExpenseCategory, ModuleConfig, ModuleKey, OrderType, PaymentMethod, Permission, Terminology,
 } from './types'
+import { serviceJobsShownFor } from './serviceJobs'
 
 export const DEFAULT_TERMS: Terminology = {
   product: { singular: 'Product', plural: 'Products' },
@@ -31,7 +32,7 @@ export interface ModuleDef {
   comingSoon?: boolean
   categories: BusinessCategory[] // where it is recommended by default
   /** Shown only for this kind of business (supermarket / hardware screens). */
-  only?: 'retailPos'
+  only?: 'retailPos' | 'serviceJobs'
 }
 
 export const MODULES: ModuleDef[] = [
@@ -49,12 +50,13 @@ export const MODULES: ModuleDef[] = [
   { key: 'kitchen', name: 'Kitchen Display (KOT)', description: 'Send orders to kitchen and track status', categories: ['food', 'restaurant'] },
   { key: 'specials', name: 'Daily Specials', description: 'Highlight today’s specials in billing, menu and a TV display', categories: ['food', 'restaurant'] },
   { key: 'qrOrdering', name: 'QR Ordering', description: 'Customers scan a QR to order — dine-in, takeaway, delivery', categories: ['food', 'restaurant'] },
+  { key: 'serviceJobs', name: 'Service Jobs', description: 'Repairs, laundry, tailoring: take items in, move them through stages, bill at delivery', categories: [], only: 'serviceJobs' },
   { key: 'employees', name: 'Staff & Roles', description: 'Multiple users with role permissions', categories: ['retail', 'food', 'restaurant', 'service'] },
   { key: 'appointments', name: 'Appointments', description: 'Bookings for service businesses', comingSoon: true, categories: ['service'] },
 ]
 
 /** Modules that apply to this business (hides supermarket-only ones for other shops). */
-export const modulesShownFor = (b: Pick<Business, 'category' | 'subType'>) => MODULES.filter((m) => !m.only || usesRetailPos(b))
+export const modulesShownFor = (b: Pick<Business, 'category' | 'subType'>) => MODULES.filter((m) => !m.only || (m.only === 'serviceJobs' ? serviceJobsShownFor(b) : usesRetailPos(b)))
 
 export function modulesFor(category: BusinessCategory): ModuleConfig {
   const cfg = {} as ModuleConfig
@@ -185,7 +187,8 @@ export const EXPENSE_LABEL: Record<ExpenseCategory, string> = {
 
 // ---------- Permissions ----------
 
-export const PERMISSIONS: { key: Permission; label: string; group: string }[] = [
+/** `module`: shown in the role editor only while that module is on. */
+export const PERMISSIONS: { key: Permission; label: string; group: string; module?: ModuleKey }[] = [
   { key: 'dashboard.view', label: 'View dashboard', group: 'General' },
   { key: 'billing.create', label: 'Create bills', group: 'Sales' },
   { key: 'billing.discount', label: 'Give discounts', group: 'Sales' },
@@ -205,6 +208,7 @@ export const PERMISSIONS: { key: Permission; label: string; group: string }[] = 
   { key: 'settings.manage', label: 'Business settings', group: 'Admin' },
   { key: 'bill.format', label: 'Change bill format (own branches)', group: 'Admin' },
   { key: 'users.manage', label: 'Manage staff & roles', group: 'Admin' },
+  { key: 'jobs.manage', label: 'Service jobs (take in, stages, deliver)', group: 'Sales', module: 'serviceJobs' },
 ]
 
 export const DEFAULT_ROLES: { id: string; name: string; permissions: Permission[] | ['*'] }[] = [
@@ -213,9 +217,9 @@ export const DEFAULT_ROLES: { id: string; name: string; permissions: Permission[
     id: 'manager', name: 'Manager',
     permissions: ['dashboard.view', 'billing.create', 'billing.discount', 'billing.price', 'orders.view', 'orders.cancel', 'tables.manage',
       'kitchen.view', 'payments.view', 'payments.collect', 'expenses.manage', 'reports.view', 'products.manage',
-      'inventory.manage', 'customers.manage'],
+      'inventory.manage', 'customers.manage', 'jobs.manage'],
   },
-  { id: 'cashier', name: 'Cashier', permissions: ['billing.create', 'orders.view', 'tables.manage', 'payments.view', 'payments.collect', 'customers.manage'] },
+  { id: 'cashier', name: 'Cashier', permissions: ['billing.create', 'orders.view', 'tables.manage', 'payments.view', 'payments.collect', 'customers.manage', 'jobs.manage'] },
   { id: 'waiter', name: 'Waiter', permissions: ['tables.manage', 'orders.view'] },
   { id: 'kitchen', name: 'Kitchen Staff', permissions: ['kitchen.view'] },
 ]

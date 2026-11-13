@@ -19,7 +19,7 @@ export const BusinessStatus = { active: 1, deactivated: 2 } as const
 export type BusinessStatus = keyof typeof BusinessStatus
 export const PeriodKind = { new: 1, renew: 2, extend: 3, change: 4 } as const
 export type PeriodKind = keyof typeof PeriodKind
-export const SequenceName = { invoice: 1, order: 2, kot: 3, credit_note: 4, purchase: 5 } as const
+export const SequenceName = { invoice: 1, order: 2, kot: 3, credit_note: 4, purchase: 5, job: 6 } as const
 export type SequenceName = keyof typeof SequenceName
 export const DeviceKind = { counter: 1, waiter: 2, kitchen: 3, display: 4 } as const
 export type DeviceKind = keyof typeof DeviceKind
@@ -81,7 +81,7 @@ export const TicketStatus = { open: 1, in_progress: 2, waiting: 3, resolved: 4, 
 export type TicketStatus = keyof typeof TicketStatus
 export const TicketSide = { customer: 1, admin: 2 } as const
 export type TicketSide = keyof typeof TicketSide
-export const AuditEntity = { order: 1, payment: 2, product: 3, category: 4, customer: 5, inventory: 6, expense: 7, user: 8, role: 9, branch: 10, settings: 11, whatsapp: 12, return: 13, staff: 14, table: 15, supplier: 16, purchase: 17 } as const
+export const AuditEntity = { order: 1, payment: 2, product: 3, category: 4, customer: 5, inventory: 6, expense: 7, user: 8, role: 9, branch: 10, settings: 11, whatsapp: 12, return: 13, staff: 14, table: 15, supplier: 16, purchase: 17, job: 18 } as const
 export type AuditEntity = keyof typeof AuditEntity
 export const AuditAction = { create: 1, update: 2, delete: 3, cancel: 4, void: 5, login: 6, printer: 7, enable: 8, disconnect: 9, import: 10, export: 11 } as const
 export type AuditAction = keyof typeof AuditAction
@@ -108,6 +108,9 @@ export type PointsKind = keyof typeof PointsKind
 /** Which bill a branch's bill format is for (bill_formats.kind). */
 export const BillKind = { thermal: 1, a4: 2, estimate: 3, challan: 4 } as const
 export type BillKind = keyof typeof BillKind
+/** A service job's stage (service_jobs.stage). Each shop type uses its own list of them (src/core/serviceJobs.ts). Never renumber; add at the end. */
+export const JobStage = { received: 1, checking: 2, approval: 3, parts: 4, repairing: 5, ready: 6, delivered: 7, cancelled: 8, returned: 9, washing: 10, ironing: 11, cutting: 12, stitching: 13, trial: 14, in_progress: 15 } as const
+export type JobStage = keyof typeof JobStage
 
 type EnumMap = Record<string, number>
 /** Name → number for the database. Throws on an unknown name so bad input never reaches a table. */

@@ -8,7 +8,7 @@ type P = { id: string }
 const line = (p: P, qty = 1) => ({ id: `tmp_${Math.random()}`, productId: p.id, name: '', variantId: null, variantName: null, addOns: [], qty, unit: 'pc', unitPrice: 0, taxRate: 0, notes: '', kotQty: 0 })
 
 /** Rows per table, to prove a refused action wrote nothing. */
-const TABLES = ['kitchen_tickets', 'dining_tables', 'stock_movements', 'stock_batches', 'purchases', 'suppliers', 'supplier_payments', 'expenses', 'attendance', 'salary_payments', 'staff_advances', 'daily_specials', 'payments'] as const
+const TABLES = ['service_jobs', 'service_job_events', 'kitchen_tickets', 'dining_tables', 'stock_movements', 'stock_batches', 'purchases', 'suppliers', 'supplier_payments', 'expenses', 'attendance', 'salary_payments', 'staff_advances', 'daily_specials', 'payments'] as const
 
 test('a module that is off: its actions are refused and no database entries are made', async () => {
   const s = await withShop()
@@ -49,6 +49,11 @@ test('a module that is off: its actions are refused and no database entries are 
       'specials.save': [today, [{ productId: tea.id, specialPrice: 15, tag: '', sort: 0 }]],
       'orders.setFulfilment': [run.order.id, 'packing'],
       'customers.collectDue': ['1', [{ method: 'cash', amount: 10 }]],
+      'serviceJobs.create': [{ customerId: '1', item: 'Mobile', problem: 'Screen', advance: { amount: 100, method: 'cash' } }],
+      'serviceJobs.update': ['1', { problem: 'Battery' }, 1],
+      'serviceJobs.setStage': ['1', 'ready'],
+      'serviceJobs.close': ['1', 'cancelled', 'x', { method: 'cash' }],
+      'serviceJobs.deliver': ['1', { items: [line(tea)] }, [{ method: 'cash', amount: 20 }]],
     }
     assert.deepEqual(Object.keys(calls).sort(), Object.keys(WRITE_MODULE).sort(), 'every guarded action is tested')
 

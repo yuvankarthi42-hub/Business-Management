@@ -765,6 +765,52 @@ CREATE TABLE push_subscriptions (
 );
 
 
+-- A service job (repairs, laundry, tailoring…): an item the shop takes in and returns. Its bill (orders) is made
+-- when it is delivered; an advance paid at drop-off is a payment of the customer, put on that bill then.
+CREATE TABLE service_jobs (
+  business_id      BIGINT       NOT NULL FK → businesses CASCADE,
+  branch_id        BIGINT       NOT NULL FK → branches CASCADE,
+  customer_id      BIGINT       FK → customers NULL,
+  order_id         BIGINT       FK → orders NULL,       -- the bill, made at delivery
+  advance_payment_id BIGINT     FK → payments NULL,     -- the advance taken at drop-off
+  client_uuid      VARCHAR(40)  NOT NULL UNIQUE,        -- a re-sent request never makes a second job
+  job_number       VARCHAR(30)  NOT NULL,               -- J-1042
+  number_key       VARCHAR(80)  NOT NULL UNIQUE,        -- '<business_id>:<job_number>'
+  stage            INT          NOT NULL,               -- JobStage: 1 received, 2 checking, 3 approval, 4 parts, 5 repairing, 6 ready, 7 delivered, 8 cancelled, 9 returned, 10 washing, 11 ironing, 12 cutting, 13 stitching, 14 trial, 15 in_progress
+  stage_at         DATETIME     NOT NULL,               -- when it reached this stage
+  item             VARCHAR(80)  NOT NULL,               -- Mobile | Laptop | Saree | Shirt …
+  brand_model      VARCHAR(120),                        -- Redmi Note 12
+  serial           VARCHAR(40),                         -- IMEI / serial number
+  serial_key       VARCHAR(80),                         -- '<business_id>:<serial digits/letters, lower case>' (search)
+  colour           VARCHAR(30),
+  problem          VARCHAR(500) NOT NULL,
+  accessories      VARCHAR(255),                        -- what came with it (charger, cover, SIM…)
+  condition_note   VARCHAR(255),                        -- scratches, dead, wet…
+  estimate_minor   BIGINT,
+  advance_minor    BIGINT       NOT NULL DEFAULT 0,
+  promised_at      DATETIME,                            -- ready by
+  technician_id    BIGINT       FK → users NULL,
+  customer_name    VARCHAR(120) PII,                    -- snapshot (the board shows it without reading customers)
+  customer_phone   VARCHAR(16)  PII,                    -- E.164 snapshot
+  phone_key        VARCHAR(16),                         -- digits of the phone (search)
+  delivered_at     DATETIME,
+  close_reason     VARCHAR(255),                        -- cancelled / returned: why
+  created_by       BIGINT       REQ FK → users NULL,
+  updated_by       BIGINT       FK → users NULL,
+  row_version      INT          NOT NULL DEFAULT 1
+);
+
+-- Every stage change of a job (its history).
+CREATE TABLE service_job_events (
+  business_id      BIGINT       NOT NULL FK → businesses CASCADE,
+  job_id           BIGINT       NOT NULL FK → service_jobs CASCADE,
+  from_stage       INT,                                 -- JobStage (NULL for the first one)
+  to_stage         INT          NOT NULL,               -- JobStage
+  note             VARCHAR(255),
+  created_by       BIGINT       FK → users NULL
+);
+
+
 -- =====================================================================================================
 --  8. EXPENSES & STAFF
 -- =====================================================================================================

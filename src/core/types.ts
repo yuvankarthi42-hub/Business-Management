@@ -36,6 +36,7 @@ export type Terminology = Record<TermKey, { singular: string; plural: string }>
 export type ModuleKey =
   | 'billing' | 'orders' | 'products' | 'inventory' | 'customers' | 'payments' | 'expenses'
   | 'reports' | 'tables' | 'kitchen' | 'mobileOrders' | 'employees' | 'appointments' | 'specials' | 'qrOrdering' | 'customerOrders'
+  | 'serviceJobs'
 
 export type ModuleConfig = Record<ModuleKey, boolean>
 
@@ -241,7 +242,7 @@ export type Permission =
   | 'dashboard.view' | 'billing.create' | 'billing.discount' | 'billing.price' | 'orders.view' | 'orders.cancel'
   | 'products.manage' | 'inventory.manage' | 'customers.manage' | 'payments.view' | 'payments.collect'
   | 'expenses.manage' | 'reports.view' | 'reports.profit' | 'tables.manage' | 'kitchen.view' | 'bill.format'
-  | 'settings.manage' | 'users.manage'
+  | 'settings.manage' | 'users.manage' | 'jobs.manage'
 
 export interface Role {
   id: ID
