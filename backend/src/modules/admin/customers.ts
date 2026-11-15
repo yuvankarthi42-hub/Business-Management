@@ -99,11 +99,17 @@ define('admin', {
       const businessName = String(input?.businessName ?? '').trim().slice(0, 150), ownerName = String(input?.ownerName ?? '').trim().slice(0, 120)
       if (!businessName) throw new ApiError('Enter the business name')
       if (!ownerName) throw new ApiError('Enter the owner’s name')
+      // The mobile number's check is read at the same moment as the username's (one round trip). The answers are
+      // looked at in the same order as before, so the same message comes first.
+      let early: string | null = null
+      try { early = cleanPhone(input.phone, 'IN', 'Enter the owner’s mobile number — it is their login ID') } catch { /* reported below, in order */ }
+      const phoneFree = early ? loginFree(c, 'phone', early) : null
+      phoneFree?.catch(() => {})
       const username = await checkUsername(c, input.username)
       assertPassword(input.password, [username, input.phone])
       const maxBranches = checkBranches(input.maxBranches)
       const phone = cleanPhone(input.phone, 'IN', 'Enter the owner’s mobile number — it is their login ID')
-      if (!(await loginFree(c, 'phone', phone))) throw new ApiError('This mobile number is already used by another account')
+      if (!(await (phone === early && phoneFree ? phoneFree : loginFree(c, 'phone', phone)))) throw new ApiError('This mobile number is already used by another account')
       const email = cleanEmail(input.email)
       const { startAt, endAt, months } = periodFor(input.validity, c.now)
       const hash = await hashPassword(input.password)
@@ -215,16 +221,20 @@ define('admin', {
   resetPassword: adminWrite('customers.password', async (c, id: string, password: string) => {
     const a = c.requireAdmin()
     const r = await findBiz(c, id)
-    const owner = await ownerOf(c, r.ROWID)
+    const owner = await ownerOf(c, r.ROWID, r)
     if (!owner) throw new ApiError('This customer has no owner login')
     assertPassword(password, [str(owner.username), str(owner.phone)])
     // A new token version signs the owner out on every device.
     await (await c.shopDb(r.ROWID)).update('users', owner.ROWID, { password_hash: await hashPassword(password), token_version: Number(owner.token_version ?? 1) + 1, failed_logins: 0, locked_until: null, password_changed_at: c.now.toISOString() })
-    await adminLog(c, a, 'password', { id: r.ROWID, name: str(r.name) }, `Password reset for ${str(owner.username) || str(owner.name)}`)
-    // The owner is told, and must set their own password before using the app (the API allows nothing else).
+    // After the password itself: the admin log, the owner's "set your own password" notice and the shop's audit
+    // line start together (independent rows; the shop's two go out in one round trip).
     const shop = await c.shopDb(r.ROWID)
-    await putSetting(shop, r.ROWID, SUPPORT_RESET, { userId: owner.ROWID, at: c.now.toISOString() }, null)
-    await shop.insert('audit_logs', { business_id: r.ROWID, branch_id: owner.default_branch_id ?? null, user_id: null, entity: E.AuditEntity.user, entity_id: owner.ROWID, action: E.AuditAction.update, detail: 'Password reset by Kadai Kalanjiyam support' })
+    await Promise.all([
+      adminLog(c, a, 'password', { id: r.ROWID, name: str(r.name) }, `Password reset for ${str(owner.username) || str(owner.name)}`),
+      // The owner is told, and must set their own password before using the app (the API allows nothing else).
+      putSetting(shop, r.ROWID, SUPPORT_RESET, { userId: owner.ROWID, at: c.now.toISOString() }, null),
+      shop.insert('audit_logs', { business_id: r.ROWID, branch_id: owner.default_branch_id ?? null, user_id: null, entity: E.AuditEntity.user, entity_id: owner.ROWID, action: E.AuditAction.update, detail: 'Password reset by Kadai Kalanjiyam support' }),
+    ])
     await bumpEpoch(c, r.ROWID)
   }),
 

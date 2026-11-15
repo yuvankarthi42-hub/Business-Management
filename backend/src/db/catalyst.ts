@@ -1,6 +1,7 @@
 // Catalyst Data Store implementation of Db (zcatalyst-sdk-node). Reads use ZCQL, writes use the table API.
 // ZCQL has no query parameters, so every value is checked before it goes into a query (see literal()).
 import { columns, fromDs, rowFromDs, rowToDs, toDs } from './columns'
+import { resolveSubselects } from './subselect'
 import type { TableName } from './schema.gen'
 import { DuplicateError, type AggregateOptions, type Cond, type Db, type NewRow, type Row, type SchemaInfo, type SelectOptions, type Value, type Where } from './types'
 
@@ -71,6 +72,7 @@ export class CatalystDb implements Db {
 
   async select(table: TableName, o: SelectOptions = {}): Promise<Row[]> {
     if (!IDENT.test(table)) throw new Error('Bad table')
+    o = { ...o, where: await resolveSubselects(this, o.where) }
     const order = o.orderBy?.length ? ` ORDER BY ${o.orderBy.map(([c, d]) => { if (!IDENT.test(c)) throw new Error('Bad column'); return `${c} ${d === 'DESC' ? 'DESC' : 'ASC'}` }).join(', ')}` : ''
     const base = `SELECT * FROM ${table}${whereSql(table, o.where)}${order}`
     const want = o.limit ?? Infinity
@@ -86,6 +88,7 @@ export class CatalystDb implements Db {
     return out
   }
   async aggregate(table: TableName, o: AggregateOptions) {
+    o = { ...o, where: await resolveSubselects(this, o.where) }
     const groups = o.groupBy ?? []
     for (const g of groups) if (!IDENT.test(g)) throw new Error('Bad column')
     const fns = Object.entries(o.fns).map(([alias, [fn, col]]) => { if (!IDENT.test(col)) throw new Error('Bad column'); return { alias, fn, col: fn === 'COUNT' ? 'ROWID' : col } })
@@ -124,6 +127,7 @@ export class CatalystDb implements Db {
   }
   async get(table: TableName, id: string) { return this.first(table, { ROWID: id }) }
   async count(table: TableName, where?: Where) {
+    where = await resolveSubselects(this, where)
     const res = await this.app.zcql().executeZCQLQuery(`SELECT COUNT(ROWID) FROM ${table}${whereSql(table, where)}`)
     const v = Object.values(Object.values(res[0] ?? {})[0] ?? {})[0]
     return Number(v ?? 0)

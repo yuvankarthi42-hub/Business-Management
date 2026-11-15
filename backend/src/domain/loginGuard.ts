@@ -149,10 +149,11 @@ export async function issueDeviceToken(c: Ctx, kind: Kind, id: string, tokenVers
   if (kind === 'admin') await c.shared.del(`fail:platform_admins:${rowId}`)
   // Signed in: this network's wrong-try count and lock for the account start again (as the account's total does).
   const net = netOf(c)
-  await Promise.all([c.shared.del(netCount(kind, id, net)), c.shared.del(netLock(kind, id, net))])
+  // (The device list is read at the same moment: other keys — one round trip.)
+  const [, , devices] = await Promise.all([c.shared.del(netCount(kind, id, net)), c.shared.del(netLock(kind, id, net)), readDevices(c, kind, id)])
   const sent = c.loginDevice && DEVICE_TOKEN.test(c.loginDevice) ? tokenHash(c.loginDevice) : null
   // Drop the token this sign-in came with, and any made for an older password (token_version).
-  let list = (await readDevices(c, kind, id)).filter((d) => d.h !== sent && Number(d.tv) === tokenVersion)
+  let list = devices.filter((d) => d.h !== sent && Number(d.tv) === tokenVersion)
   const token = randomBytes(32).toString('base64url')
   list.push({ h: tokenHash(token), tv: tokenVersion })
   // Newest 5 only. (A dropped token's wrong-try count no longer matters: it isn't in the list; it expires by itself.)

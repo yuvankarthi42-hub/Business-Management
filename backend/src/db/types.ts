@@ -18,6 +18,12 @@ export type Cond =
   | { gte: Value; lt: Value } | { gte: Value; lte: Value } | { gt: Value; lt: Value }
   /** Text contains this (case-insensitive) — for search boxes. */
   | { contains: string }
+  /**
+   * One of the values of `column` in the rows of `table` matching `where` (a subquery): lets dependent reads go
+   * together, e.g. an order's add-ons by its items' ids without reading the items first. Turso: SQL IN (SELECT …);
+   * the other stores read the inner rows first (same rows).
+   */
+  | { inSelect: { table: TableName; column: string; where: Where } }
 export type Where = Record<string, Cond>
 
 export interface SelectOptions {

@@ -27,6 +27,11 @@ export interface SqlTx extends SqlRunner {
 export interface SqlDriver extends SqlRunner {
   /** All statements or none, in one round trip. */
   batch(stmts: Stmt[]): Promise<SqlResult[]>
+  /**
+   * Optional (Turso): several callers' statements outside a transaction in ONE round trip — each group gets its own
+   * results or error, exactly as if sent alone (each statement on its own, as separate requests would run them).
+   */
+  runGroups?(groups: Stmt[][]): Promise<(SqlResult[] | Error)[]>
   /** Interactive write transaction. Throws SqlError kind 'busy' when another writer holds the lock too long. */
   begin(): Promise<SqlTx>
   close?(): Promise<void>

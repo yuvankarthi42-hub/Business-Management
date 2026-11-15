@@ -3,6 +3,7 @@
 //   TEST_DB=memory           — the in-memory single-database store, like the Catalyst Data Store
 // `npm test` runs every test in both.
 import type { AddressInfo } from 'node:net'
+import { createServer, type Server } from 'node:http'
 import { createApp } from '../src/app'
 import { Ctx, type Env } from '../src/core/context'
 import { DbEpochs, KvEpochs } from '../src/core/epochs'
@@ -25,6 +26,34 @@ export class FakePush implements PushSender {
   readonly publicKey = 'BFakeTestPublicKey'
   sent: { target: PushTarget; payload: Record<string, unknown> }[] = []
   async send(target: PushTarget, payload: string): Promise<PushResult> { this.sent.push({ target, payload: JSON.parse(payload) }); return { ok: true, gone: false, status: 201 } }
+}
+
+/**
+ * TEST_HOST=worker runs every test through the Cloudflare Worker entry (src/worker/index.ts) instead of the Express
+ * host (Catalyst): a small local server stands in for Cloudflare's edge — it turns each request into a Fetch
+ * Request, sets CF-Connecting-IP from the connection as the edge does, and writes the Worker's Response back.
+ */
+export const TEST_HOST = process.env.TEST_HOST === 'worker' ? 'worker' : 'express'
+async function workerServer(env: Env): Promise<Server> {
+  process.env.NODE_ENV ||= 'test' // the Worker would otherwise treat an unset NODE_ENV as production
+  const { default: worker } = await import('../src/worker/index')
+  const { useEnvForTests } = await import('../src/worker/env')
+  const bindings = {}
+  useEnvForTests(bindings, env)
+  const server = createServer(async (req, res) => {
+    const chunks: Buffer[] = []
+    for await (const ch of req) chunks.push(ch as Buffer)
+    const headers = new Headers()
+    for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string' && k !== 'host') headers.set(k, v)
+    headers.set('cf-connecting-ip', String(req.socket.remoteAddress ?? '').replace(/^::ffff:/, ''))
+    const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : Buffer.concat(chunks)
+    const r = await worker.fetch(new Request(`http://${req.headers.host ?? '127.0.0.1'}${req.url}`, { method: req.method, headers, body }), bindings)
+    res.statusCode = r.status
+    r.headers.forEach((v, k) => res.setHeader(k, v))
+    res.end(Buffer.from(await r.arrayBuffer()))
+  })
+  await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok))
+  return server
 }
 
 export const TEST_DB = process.env.TEST_DB === 'memory' ? 'memory' : process.env.TEST_DB === 'hrana' ? 'hrana' : 'sqlite'
@@ -96,7 +125,7 @@ function router(env: Env, shopId: () => string | null): Db {
 export async function startServer() {
   process.env.SETUP_KEY = 'test-setup-key-1234567890'
   const env = await testEnv()
-  const server = createApp(() => env).listen(0)
+  const server = TEST_HOST === 'worker' ? await workerServer(env) : createApp(() => env).listen(0)
   const port = (server.address() as AddressInfo).port
   let token: string | null = null
   let branch: string | null = null

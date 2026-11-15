@@ -1,0 +1,47 @@
+# Cloudflare setup (account 2) — copy to backend/wrangler.toml (not committed) and fill in the names.
+# Build first:  cd backend && npm run build:cloudflare      Deploy:  npx wrangler deploy
+# Secrets (never in this file):  npx wrangler secret put AUTH_SECRET   (and the others listed below)
+
+name = "kk-api"
+main = "dist-worker/worker.js"
+compatibility_date = "2025-09-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+routes = [{ pattern = "api.example.com", custom_domain = true }]
+
+# Hourly: one batch of the daily jobs each time (a lease allows one run at a time; work already done is skipped;
+# a failed hour is finished by the next). Reminders still go once a day, from 09:00 IST.
+[triggers]
+crons = ["30 * * * *"]
+
+[vars]
+NODE_ENV = "production"
+ACCOUNT_ID = "cf-1"                                   # this setup's id — the Catalyst setup has its own (or none)
+API_PREFIX = "/server/api"                            # the app calls <worker>/server/api/rpc/…  ("" = no prefix)
+ALLOWED_ORIGINS = "https://app.example.com"           # the Cloudflare Pages address(es) of the app
+R2_PUBLIC_URL = "https://media.example.com"           # custom domain of the PUBLIC bucket only
+LIVE_URL = "wss://api.example.com/server/api/live"    # live updates (WebSocket hub); remove to use the change feed
+TURSO_PLATFORM_URL = "libsql://kk-platform-<org>.turso.io"   # THIS setup's own Turso org (never the Catalyst one)
+TURSO_ORG = "<org>"
+TURSO_GROUP = "default"
+TURSO_DB_PREFIX = "bp"
+
+# Secrets — set with `wrangler secret put` (each setup has its OWN values, never copied from the other):
+#   AUTH_SECRET  PASSWORD_PEPPER  SECRETS_KEY  SECRETS_KEY_ID  SETUP_KEY  CRON_KEY
+#   TURSO_AUTH_TOKEN  TURSO_API_TOKEN   VAPID_PUBLIC_KEY  VAPID_PRIVATE_KEY  VAPID_SUBJECT
+
+[[r2_buckets]]
+binding = "MEDIA"            # public bucket (served from R2_PUBLIC_URL)
+bucket_name = "kk-media"
+
+[[r2_buckets]]
+binding = "MEDIA_PRIVATE"    # PRIVATE bucket: no custom domain, no r2.dev access — only the API reads it
+bucket_name = "kk-media-private"
+
+[[durable_objects.bindings]]
+name = "SHOP_HUB"
+class_name = "ShopHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ShopHub"]   # SQLite-backed: available on the Workers Free plan

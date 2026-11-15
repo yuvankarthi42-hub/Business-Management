@@ -81,6 +81,9 @@ define('auth', {
     }
     if (!row) { await checkPassword(password, await dummyHash()); throw new ApiError(WRONG_SHOP, 401, 'BAD_LOGIN') }
     const account = `${str(row.business_id)}:${row.ROWID}`
+    // The shop's details are read at the same moment as the lock check (one round trip); used only after the password.
+    const bundleP = loadBusiness(c, str(row.business_id))
+    bundleP.catch(() => {}) // not awaited when the account is locked or the password is wrong
     const locked = await lockedMinutes(c, 'shop', row, account)
     if (locked) throw lockedError(locked)
     if (!(await checkPassword(password, str(row.password_hash)))) {
@@ -90,16 +93,19 @@ define('auth', {
       throw new ApiError(WRONG_SHOP, 401, 'BAD_LOGIN')
     }
     if (row.is_active === false) throw new ApiError('Your login has been turned off. Ask your shop owner.', 403, 'INACTIVE')
-    const bundle = await loadBusiness(c, str(row.business_id))
+    const bundle = await bundleP
     if (!bundle) throw new ApiError(WRONG_SHOP, 401, 'BAD_LOGIN')
     if (subscriptionState(bundle.business).blocked) throw new ApiError(DEACTIVATED_MESSAGE, 403, 'DEACTIVATED')
     // An older or weaker hash (bcrypt, fewer iterations, no pepper yet) is replaced in the same write.
     const rehash = needsRehash(str(row.password_hash)) ? { password_hash: await hashPassword(password) } : {}
-    await c.db.update('users', row.ROWID, { failed_logins: 0, locked_until: null, last_login_at: c.now.toISOString(), ...rehash })
-    await c.platform.update('businesses', str(row.business_id), { last_login_at: c.now.toISOString() })
     const tv = Number(row.token_version ?? 1)
-    // This browser's device token (lets it sign in while someone else's guessing has locked the account).
-    const deviceToken = await issueDeviceToken(c, 'shop', account, tv)
+    // The sign-in's writes (independent rows and keys) start together: the user, the shop's last sign-in, and this
+    // browser's device token (lets it sign in while someone else's guessing has locked the account).
+    const [, , deviceToken] = await Promise.all([
+      c.db.update('users', row.ROWID, { failed_logins: 0, locked_until: null, last_login_at: c.now.toISOString(), ...rehash }),
+      c.platform.update('businesses', str(row.business_id), { last_login_at: c.now.toISOString() }),
+      issueDeviceToken(c, 'shop', account, tv),
+    ])
     // Support reset this password: the session may only set a new password until that's done (app.ts).
     // (Read with the shop's settings above — no extra read.)
     const reset = bundle.supportReset

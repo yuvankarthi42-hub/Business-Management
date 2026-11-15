@@ -1,6 +1,7 @@
 // In-memory Data Store with the same rules as Catalyst (types, defaults, mandatory, unique, FK on-delete).
 // Used for local development (`npm run dev`, saved to a JSON file) and for the tests. Never used in production.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { resolveSubselects } from './subselect'
 import { columns, fromDs, rowFromDs, rowToDs, toDs } from './columns'
 import { TABLES, type TableName } from './schema.gen'
 import { Lock } from './lock'
@@ -36,6 +37,7 @@ class MemoryStore {
   }
 
   async select(t: TableName, o: SelectOptions = {}): Promise<Row[]> {
+    o = { ...o, where: await resolveSubselects(this, o.where) }
     let out = this.rows(t).filter((r) => this.match(t, r, o.where)).map((r) => rowFromDs(t, r))
     for (const [col, dir] of [...(o.orderBy ?? [])].reverse()) out = out.sort((a, b) => cmp(a[col], b[col]) * (dir === 'DESC' ? -1 : 1))
     out = out.slice(o.offset ?? 0, o.limit !== undefined ? (o.offset ?? 0) + o.limit : undefined)
@@ -43,6 +45,7 @@ class MemoryStore {
     return out
   }
   async aggregate(t: TableName, o: AggregateOptions) {
+    o = { ...o, where: await resolveSubselects(this, o.where) }
     const rows = this.rows(t).filter((r) => this.match(t, r, o.where)).map((r) => rowFromDs(t, r))
     const groups = new Map<string, Row[]>()
     for (const r of rows) { const k = JSON.stringify((o.groupBy ?? []).map((g) => r[g])); groups.set(k, [...(groups.get(k) ?? []), r]) }
@@ -66,7 +69,7 @@ class MemoryStore {
   }
   async first(t: TableName, where: Where, orderBy?: SelectOptions['orderBy']) { return (await this.select(t, { where, orderBy, limit: 1 }))[0] ?? null }
   async get(t: TableName, id: string) { return this.first(t, { ROWID: id }) }
-  async count(t: TableName, where?: Where) { this.stats.reads++; return this.rows(t).filter((r) => this.match(t, r, where)).length }
+  async count(t: TableName, where?: Where) { where = await resolveSubselects(this, where); this.stats.reads++; return this.rows(t).filter((r) => this.match(t, r, where)).length }
 
   private checkUnique(t: TableName, row: Stored, selfId?: Value) {
     for (const c of columns(t)) {

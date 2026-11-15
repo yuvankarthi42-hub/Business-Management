@@ -2,6 +2,7 @@
 // environment variable AUTH_SECRET (Catalyst console → Functions → api → Configuration).
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { ApiError } from './errors'
+import { accountId } from './account'
 
 const b64 = (s: Buffer | string) => Buffer.from(s).toString('base64url')
 /** Development fallbacks (secrets) are allowed only when NODE_ENV is unset, "development" or "test". */
@@ -20,7 +21,9 @@ const secret = () => {
 export function signToken(payload: Record<string, unknown>, ttlSeconds: number): string {
   const head = b64(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
   const now = Math.floor(Date.now() / 1000)
-  const body = b64(JSON.stringify({ ...payload, iat: now, exp: now + ttlSeconds }))
+  // Separate setups: the token says which account signed it (core/account.ts). No ACCOUNT_ID: as before.
+  const acc = accountId()
+  const body = b64(JSON.stringify({ ...payload, ...(acc ? { acc } : {}), iat: now, exp: now + ttlSeconds }))
   const sig = b64(createHmac('sha256', secret()).update(`${head}.${body}`).digest())
   return `${head}.${body}.${sig}`
 }
@@ -36,13 +39,17 @@ export function verifyToken<T extends Record<string, unknown>>(token: string | u
   try {
     const p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'))
     if (typeof p.exp !== 'number' || p.exp < Math.floor(Date.now() / 1000)) return null
+    // A token of another account (or one marked for an account on a server without ACCOUNT_ID) is never accepted.
+    // A token with no mark was signed by this server before it had an ACCOUNT_ID (same secret): still valid.
+    if (p.acc !== undefined && p.acc !== accountId()) return null
     return p
   } catch { return null }
 }
 
 /** A short signature for one purpose (signed file links). Kept apart from sign-in tokens by the purpose prefix. */
 export function signFor(purpose: string, data: string): Buffer {
-  return createHmac('sha256', secret()).update(`${purpose}|${data}`).digest().subarray(0, 16)
+  const acc = accountId()
+  return createHmac('sha256', secret()).update(acc ? `${purpose}|${acc}|${data}` : `${purpose}|${data}`).digest().subarray(0, 16)
 }
 export function signedFor(purpose: string, data: string, sig: string): boolean {
   const got = Buffer.from(String(sig ?? ''), 'base64url'), want = signFor(purpose, data)

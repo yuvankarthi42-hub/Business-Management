@@ -9,10 +9,13 @@
 //   CLIENT_IP_SOURCE=cloudflare (not used yet) — CF-Connecting-IP, but only when the request carries the secret
 //     header that our Cloudflare rule adds (X-Edge-Auth = CF_EDGE_SECRET). Without it → the catalyst rule above,
 //     so a visitor talking to Catalyst directly can't pretend to be Cloudflare.
+//   CLIENT_IP_SOURCE=worker (the Cloudflare Worker setup; set by worker/index.ts) — CF-Connecting-IP only. A Worker is
+//     reached only through Cloudflare's edge, which sets that header itself and drops one a visitor sends; X-Forwarded-For
+//     and everything else is ignored. (On Catalyst this rule is never used: a visitor could send that header there.)
 //   CLIENT_IP_SOURCE=socket (default locally) — the TCP peer address only.
 import { createHash, timingSafeEqual } from 'node:crypto'
 
-export type IpSource = 'socket' | 'catalyst' | 'cloudflare'
+export type IpSource = 'socket' | 'catalyst' | 'cloudflare' | 'worker'
 interface ReqLike { header(name: string): string | undefined; socket?: { remoteAddress?: string | null } }
 
 const v4 = (s: string) => { const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s); return m && m.slice(1).every((x) => Number(x) <= 255) ? m.slice(1).map(Number) : null }
@@ -59,7 +62,7 @@ const sameSecret = (a: string, b: string) => {
 
 export function ipSource(env: NodeJS.ProcessEnv = process.env): IpSource {
   const v = String(env.CLIENT_IP_SOURCE ?? '').trim().toLowerCase()
-  if (v === 'socket' || v === 'catalyst' || v === 'cloudflare') return v
+  if (v === 'socket' || v === 'catalyst' || v === 'cloudflare' || v === 'worker') return v
   return env.NODE_ENV === 'production' ? 'catalyst' : 'socket'
 }
 
@@ -68,6 +71,7 @@ export function resolveClientIp(req: ReqLike, env: NodeJS.ProcessEnv = process.e
   const source = ipSource(env)
   const peer = cleanIp(req.socket?.remoteAddress)
   if (source === 'socket') return { ip: peer, via: 'socket' }
+  if (source === 'worker') { const cf = cleanIp(req.header('cf-connecting-ip')); return { ip: cf, via: cf ? 'cf-connecting-ip' : 'none' } }
   if (source === 'cloudflare') {
     const secret = String(env.CF_EDGE_SECRET ?? '')
     const sent = req.header('x-edge-auth') ?? ''

@@ -61,7 +61,7 @@ export interface Session {
   support?: { adminId: string; adminName: string; reason: string; startedAt: string }
 }
 export const ALL_BRANCHES = 'all'
-const DEMO_BUSINESSES = ['biz_foodcorner', 'biz_sweetspot', 'biz_freshmart', 'biz_murugan_hw', 'biz_kanchi_silks', 'biz_annai_veg', 'biz_balaji_auto', 'biz_smart_mobiles']
+const DEMO_BUSINESSES = ['biz_foodcorner', 'biz_sweetspot', 'biz_freshmart', 'biz_murugan_hw', 'biz_kanchi_silks', 'biz_annai_veg', 'biz_balaji_auto', 'biz_smart_mobiles', 'biz_nadar_unavagam']
 const SESSION_KEY = 'billpoodum.session'
 
 export const session = {

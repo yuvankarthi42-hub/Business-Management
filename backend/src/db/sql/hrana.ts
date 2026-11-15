@@ -85,6 +85,19 @@ export class HranaDriver implements SqlDriver {
     return results.slice(1, 1 + stmts.length).map((r) => result(HranaDriver.ok(r)))
   }
 
+  /** Several callers' statements (no transaction) in one request; each group its own results or its first error. */
+  async runGroups(groups: Stmt[][]): Promise<(SqlResult[] | Error)[]> {
+    const all = groups.flat()
+    if (!all.length) return groups.map(() => [])
+    const readOnly = all.every((s) => /^\s*(SELECT|PRAGMA|WITH)\b/i.test(s.sql))
+    const { results } = await this.pipeline([FK_ON, ...all.map(exec), { type: 'close' }], null, this.base, readOnly)
+    let at = 1
+    return groups.map((g) => {
+      const mine = results.slice(at, at + g.length); at += g.length
+      try { return mine.map((r) => result(HranaDriver.ok(r))) } catch (e) { return e as Error }
+    })
+  }
+
   async script(sql: string) {
     const { results } = await this.pipeline([FK_ON, { type: 'sequence', sql }, { type: 'close' }], null)
     const r = results[1]

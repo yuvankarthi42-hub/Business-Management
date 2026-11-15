@@ -220,43 +220,47 @@ define('business', {
     const probe = { category: input.category, subType: input.subType }
     const defaults = setupDefaultsFor(probe)
     const modules = { ...input.modules, ...defaults.modules }
-    await c.platform.update('businesses', c.businessId, { name: textArg(input.name).trim().slice(0, 150), category: code(E.BusinessCategory, input.category), sub_type: String(input.subType).slice(0, 60) })
-    await putSetting(c.db, c.businessId, 'modules', modules, c.userId)
-    await putSetting(c.db, c.businessId, 'terminology', input.terminology, c.userId)
-    // The main branch starts with the bill layout we set up for the shop's type (a saved one is kept).
-    const main = await c.db.first('branches', { business_id: c.businessId, is_default: true })
-    if (main) await putBillFormat(c.db, c.businessId, main.ROWID, defaultBillFormat(probe, c.business.billing.receiptFooter), c.userId, true)
-    // MRP / shelf prices include GST in supermarkets, spare-parts and textile shops (core/config.ts setupDefaultsFor).
-    await saveBilling(c, { orderTypes: input.orderTypes, taxMode: defaults.taxMode })
-    await setDefaultTaxByRate(c, defaults.taxRate)
+    // Steps that don't depend on one another start together (inside the transaction they go out in shared round
+    // trips); the two that both rewrite the "billing" setting stay one after the other. Same writes as before.
+    const [, , , main, cats, used] = await Promise.all([
+      c.platform.update('businesses', c.businessId, { name: textArg(input.name).trim().slice(0, 150), category: code(E.BusinessCategory, input.category), sub_type: String(input.subType).slice(0, 60) }),
+      putSetting(c.db, c.businessId, 'modules', modules, c.userId),
+      putSetting(c.db, c.businessId, 'terminology', input.terminology, c.userId),
+      c.db.first('branches', { business_id: c.businessId, is_default: true }),
+      c.db.select('categories', { where: { business_id: c.businessId } }),
+      c.db.first('orders', { business_id: c.businessId, table_id: { ne: null } }),
+    ])
+    const [, , oldTables] = await Promise.all([
+      // The main branch starts with the bill layout we set up for the shop's type (a saved one is kept).
+      main ? putBillFormat(c.db, c.businessId, main.ROWID, defaultBillFormat(probe, c.business.billing.receiptFooter), c.userId, true) : null,
+      // MRP / shelf prices include GST in supermarkets, spare-parts and textile shops (core/config.ts setupDefaultsFor).
+      (async () => { await saveBilling(c, { orderTypes: input.orderTypes, taxMode: defaults.taxMode }); await setDefaultTaxByRate(c, defaults.taxRate) })(),
+      used ? null : c.db.select('dining_tables', { where: { business_id: c.businessId } }),
+    ])
 
-    // Categories: update kept ones, add new ones, remove the ones taken out of the list.
-    const cats = await c.db.select('categories', { where: { business_id: c.businessId } })
+    // Categories: update kept ones, add new ones, remove the ones taken out of the list. The list is worked out
+    // first; the writes then go together (new ones are added in the list's order, as before).
     const seen = new Set<string>()
-    const ids: (string | null)[] = []
+    const plan: ({ update: string; data: Record<string, string | number | boolean> } | { insert: Record<string, string | number | boolean> } | null)[] = []
     let sort = 0
     for (const x of input.categories ?? []) {
       const name = String(x.name ?? '').trim()
-      if (!name || seen.has(name.toLowerCase())) { ids.push(null); continue }
+      if (!name || seen.has(name.toLowerCase())) { plan.push(null); continue }
       seen.add(name.toLowerCase())
       const ex = x.id && isId(x.id) ? cats.find((k) => k.ROWID === x.id) : undefined
       const data = { name: name.slice(0, 80), emoji: (x.emoji || '⭐').slice(0, 8), sort_order: sort++, is_active: true, uniq_key: `${c.businessId}:${keyPart(name)}` }
-      if (ex) { await c.db.update('categories', ex.ROWID, data); ids.push(ex.ROWID) }
-      else {
-        const clash = cats.find((k) => k.uniq_key === data.uniq_key)
-        if (clash) { await c.db.update('categories', clash.ROWID, data); ids.push(clash.ROWID) }
-        else ids.push((await c.db.insert('categories', { business_id: c.businessId, ...data })).ROWID)
-      }
+      const target = ex ?? cats.find((k) => k.uniq_key === data.uniq_key)
+      plan.push(target ? { update: target.ROWID, data } : { insert: { business_id: c.businessId, ...data } })
     }
+    const ids: (string | null)[] = await Promise.all(plan.map(async (p) => (!p ? null : 'update' in p ? (await c.db.update('categories', p.update, p.data), p.update) : (await c.db.insert('categories', p.insert)).ROWID)))
     const keep = new Set(ids.filter(Boolean) as string[])
     if (!keep.size) throw new ApiError('Add at least one category')
     const removed = cats.filter((k) => !keep.has(k.ROWID)).map((k) => k.ROWID)
     if (removed.length) await c.db.deleteMany('categories', removed) // products.category_id is cleared (On Delete = Null)
 
     // Tables: T1, T2… across the areas. Rebuilt while no bill uses a table yet.
-    const used = await c.db.first('orders', { business_id: c.businessId, table_id: { ne: null } })
     if (!used) {
-      const old = await c.db.select('dining_tables', { where: { business_id: c.businessId } })
+      const old = oldTables ?? []
       if (old.length) await c.db.deleteMany('dining_tables', old.map((t) => t.ROWID))
       if (modules.tables) {
         const branchId = c.writeBranch({ fallback: true })

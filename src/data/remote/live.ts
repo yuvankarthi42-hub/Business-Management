@@ -1,6 +1,7 @@
 // Live updates for staff screens, where the server has a live-update hub (not on Catalyst — there the change feed
 // in sync.ts is used): one stream per tab from the hub, instead of asking the server every 30 s whether anything changed.
 //  • Off unless the server has a hub (events.ticket returns a url) — then everything works as before.
+//  • The hub is a stream (POST <url>/stream) or, when its address is wss://… (Cloudflare), a WebSocket (<url>/ws).
 //  • Each event names the action another device finished; the same reads are refreshed as for this device's own
 //    writes, except lists that take the changed orders / tickets in place (no extra server call).
 //  • A gap in the change numbers, a reconnect or a "resync" → ONE catch-up read of the change feed (only what
@@ -68,16 +69,18 @@ let again = false // signed in again while a stream was being opened: open one f
 async function connect() {
   if (connecting || ctl || !auth.user) return
   connecting = true
-  let opened: { res: Response; c: AbortController } | null = null
+  let opened: Opened | null = null
   try { opened = await openStream() } finally { connecting = false }
   if (again) { again = false; if (opened) opened.c.abort(); ctl = null; void connect(); return }
   if (!opened) return
-  const { res, c } = opened
-  try { await read(res.body!, c) } catch { /* stream ended */ }
+  const { c } = opened
+  try { if ('ws' in opened) await readSocket(opened.ws, c); else await read(opened.res.body!, c) } catch { /* stream ended */ }
   if (ctl === c) { down(); retry() }
 }
 
-async function openStream(): Promise<{ res: Response; c: AbortController } | null> {
+type Opened = { res: Response; c: AbortController } | { ws: WebSocket; c: AbortController }
+
+async function openStream(): Promise<Opened | null> {
   const user = auth.user!
   if (forUser !== user) { forUser = user; lastId = null } // another sign-in: start fresh
   // Reconnects reuse the ticket while it is valid (no API call); a refused or expired one gets a new one.
@@ -95,6 +98,14 @@ async function openStream(): Promise<{ res: Response; c: AbortController } | nul
   feed = t.feed
   const c = new AbortController()
   ctl = c
+  // A WebSocket hub (Cloudflare): the ticket goes as the second sub-protocol (not in the address, so no log keeps it).
+  if (/^wss?:\/\//i.test(t.url)) {
+    const u = `${t.url.replace(/\/$/, '')}/ws?device=${encodeURIComponent(deviceId)}${lastId ? `&since=${encodeURIComponent(lastId)}` : ''}`
+    let ws: WebSocket
+    try { ws = new WebSocket(u, [LIVE_PROTOCOL, t.ticket]) } catch { if (ctl === c) { down(); retry() } return null }
+    c.signal.addEventListener('abort', () => { try { ws.close() } catch { /* closed */ } })
+    return { ws, c }
+  }
   let res: Response
   try {
     res = await fetch(`${resolveUrl(t.url)}/stream`, { method: 'POST', headers: { 'content-type': 'text/plain;charset=UTF-8' }, body: JSON.stringify({ ticket: t.ticket, device: deviceId, since: lastId }), signal: c.signal, credentials: 'omit', cache: 'no-store' })
@@ -105,6 +116,33 @@ async function openStream(): Promise<{ res: Response; c: AbortController } | nul
     return null
   }
   return { res, c }
+}
+
+const LIVE_PROTOCOL = 'kk-live'
+/** Keep-alive through proxies (the hub answers "pong" without waking up). */
+const PING_MS = 45_000
+
+/** A WebSocket hub's messages ({ event, id, data }), one at a time, until the socket closes. */
+function readSocket(ws: WebSocket, c: AbortController): Promise<void> {
+  return new Promise((resolve) => {
+    let opened = false
+    let chain = Promise.resolve()
+    const ping = setInterval(() => { try { if (ws.readyState === WebSocket.OPEN) ws.send('ping') } catch { /* closing */ } }, PING_MS)
+    ws.onopen = () => { opened = true }
+    ws.onmessage = (m) => {
+      if (typeof m.data !== 'string' || m.data === 'pong') return
+      let msg: { event?: string; id?: string; data?: unknown }
+      try { msg = JSON.parse(m.data) } catch { return }
+      chain = chain.then(() => handle(msg.event ?? 'message', JSON.stringify(msg.data ?? {}), msg.id ?? null, c)).catch(() => undefined)
+    }
+    ws.onclose = (e) => {
+      clearInterval(ping)
+      // Refused before it opened (the ticket ran out, was changed, or the user lost access) or closed for a new
+      // ticket: the next try asks the API for a fresh one (the API checks the user again).
+      if (!opened || e.code === 4401) cached = null
+      void chain.then(() => resolve())
+    }
+  })
 }
 
 async function read(body: ReadableStream<Uint8Array>, c: AbortController) {

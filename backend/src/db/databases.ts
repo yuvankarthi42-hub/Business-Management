@@ -120,7 +120,13 @@ export class PerShopDatabases implements Databases {
       const { url, token } = await this.prov.create(name)
       step = 'tables'
       await migrateWhenReachable(await this.prov.connect(url, token), 'shop')
-      await p.update('shop_databases', row.ROWID, { db_url: url, db_token: token ?? null, status: E.ShopDbStatus.ready, schema_version: latestVersion('shop') })
+      const ready = await p.update('shop_databases', row.ROWID, { db_url: url, db_token: token ?? null, status: E.ShopDbStatus.ready, schema_version: latestVersion('shop') })
+      // Opened from the row just written (the shop is used straight away): no second read of it.
+      if (!this.shops.has(businessId)) {
+        const hit = this.open(businessId, ready).catch((e) => { this.shops.delete(businessId); throw e })
+        hit.catch(() => {}) // reported when the shop is used
+        this.shops.set(businessId, hit)
+      }
     } catch (e) {
       console.error(`[createShop ${businessId}] ${step}`, e)
       await p.update('shop_databases', row.ROWID, { status: E.ShopDbStatus.failed }).catch(() => {})

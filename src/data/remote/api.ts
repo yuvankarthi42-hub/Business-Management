@@ -85,8 +85,11 @@ export function createRemoteApi(shape: Api): Api {
     return (await a.auth.me())?.user
   }) as Api['auth']['login']
   // Own password: the answer is a new sign-in token (other devices are signed out).
+  // Two small requests, one password hash each (the server's own two-step way): the current password is checked
+  // first, and its short proof lets the change skip hashing it again. Same messages as one request.
   a.auth.changePassword = (async (current: string, next: string) => {
-    const r = await call<{ token: string }>('auth.changePassword', current, next)
+    const { proof } = await call<{ proof: string }>('auth.checkPassword', current)
+    const r = await call<{ token: string }>('auth.changePassword', current, next, { proof })
     if (r?.token) auth.user = r.token
     clearAll()
     return r

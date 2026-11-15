@@ -4,6 +4,7 @@
 import catalyst from 'zcatalyst-sdk-node'
 import { catalystEnv } from './catalystEnv'
 import { Ctx } from './core/context'
+import { assertAccount } from './core/account'
 import { runDailyJobs } from './modules/admin/renewals'
 
 process.env.NODE_ENV ||= 'production' // unset or empty → production (never the development secrets)
@@ -13,7 +14,9 @@ interface CronContext { closeWithSuccess(): void; closeWithFailure(): void }
 module.exports = async (_cronDetails: unknown, context: CronContext) => {
   try {
     const env = catalystEnv(catalyst.initialize(context as never))
-    const c = new Ctx(env, await env.dbs.platform(), null)
+    const platform = await env.dbs.platform()
+    await assertAccount(platform) // ACCOUNT_ID set: only this account's database (core/account.ts); unset: no check
+    const c = new Ctx(env, platform, null)
     const sent = await runDailyJobs(c)
     console.log(`Daily jobs done: ${JSON.stringify(sent)}`)
     context.closeWithSuccess()

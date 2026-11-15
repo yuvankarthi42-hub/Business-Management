@@ -785,8 +785,11 @@ define('public', {
     const priced = await priceItems(c, items, new Map(), b.id, [branch.ROWID])
     // Stock is checked only with Inventory on (otherwise stock isn't kept — no reads).
     const stocked = !!b.modules.inventory
-    const stockRows = stocked ? await selectIn(c, 'branch_stock', 'product_id', priced.map((p) => p.productId), { branch_id: branch.ROWID }) : []
-    const prods = stocked ? await selectIn(c, 'products', 'ROWID', priced.map((p) => p.productId), { business_id: b.id }) : []
+    // Both read at the same moment (one round trip).
+    const [stockRows, prods] = stocked ? await Promise.all([
+      selectIn(c, 'branch_stock', 'product_id', priced.map((p) => p.productId), { branch_id: branch.ROWID }),
+      selectIn(c, 'products', 'ROWID', priced.map((p) => p.productId), { business_id: b.id }),
+    ]) : [[], []]
     for (const p of priced) {
       const pr = prods.find((x) => x.ROWID === p.productId)
       const have = Number(stockRows.find((s) => s.product_id === p.productId)?.qty_milli ?? 0) / 1000

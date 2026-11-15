@@ -128,6 +128,10 @@ function condSql(table: TableName, name: string, cond: Cond, args: SqlValue[]): 
     if (!list.length) return '0'
     return `${c} IN (${list.map(one).join(', ')})`
   }
+  if ('inSelect' in o) {
+    const sub = (cond as { inSelect: { table: TableName; column: string; where: Where } }).inSelect
+    return `${c} IN (SELECT ${col(sub.table, sub.column)} FROM ${tbl(sub.table)}${whereSql(sub.table, sub.where, args)})`
+  }
   if ('contains' in o) {
     // LIKE with % and _ escaped, so the text is matched as typed.
     args.push(`%${String(o.contains).toLowerCase().replace(/[\\%_]/g, (m) => `\\${m}`)}%`)
@@ -157,6 +161,33 @@ function mapError(e: unknown, table: TableName): Error {
   return e as Error
 }
 
+/** The next turn of the event loop (Node: setImmediate; elsewhere a zero timeout). */
+const nextTurn = (fn: () => void) => { if (typeof setImmediate === 'function') setImmediate(fn); else setTimeout(fn, 0) }
+
+/**
+ * Outside a transaction (driver can: Turso): calls started at the same moment — e.g. the reads of a Promise.all —
+ * go out together in ONE round trip. Each still gets exactly its own results or error, as if sent alone; a call
+ * made after awaiting another is not delayed by it (it starts its own round trip).
+ */
+const together = new WeakMap<SqlDriver, { stmts: Stmt[]; res: (r: SqlResult[]) => void; rej: (e: unknown) => void }[]>()
+function runTogether(driver: SqlDriver, stmts: Stmt[]): Promise<SqlResult[]> {
+  let waiting = together.get(driver)
+  if (!waiting) together.set(driver, (waiting = []))
+  const list = waiting
+  return new Promise<SqlResult[]>((res, rej) => {
+    list.push({ stmts, res, rej })
+    if (list.length > 1) return // joins the round trip already waiting to go
+    nextTurn(async () => {
+      const group = list.splice(0)
+      if (group.length === 1) { try { group[0].res(await driver.run(group[0].stmts)) } catch (e) { group[0].rej(e) } return }
+      try {
+        const outs = await driver.runGroups!(group.map((g) => g.stmts))
+        outs.forEach((o, k) => (o instanceof Error ? group[k].rej(o) : group[k].res(o)))
+      } catch (e) { for (const g of group) g.rej(e) }
+    })
+  })
+}
+
 /**
  * Calls on one transaction go one after another (one connection), even when the code uses Promise.all. Where the
  * driver can (Turso: runGroups), calls started at the same moment go out together in ONE round trip — each still
@@ -177,7 +208,7 @@ class Serial implements SqlRunner {
       this.waiting.push({ stmts, res, rej })
       if (this.waiting.length > 1) return // joins the round trip already waiting to go
       void this.next(async () => {
-        await new Promise((r) => setImmediate(r)) // calls started at the same moment join this one
+        await new Promise<void>((r) => nextTurn(r)) // calls started at the same moment join this one
         const group = this.waiting.splice(0)
         try {
           const outs = await this.tx.runGroups!(group.map((g) => g.stmts))
@@ -253,7 +284,10 @@ export class TursoDb implements Db {
   private dropFinals(e: unknown) { for (const f of this.finals.splice(0)) f.rej(e) }
 
   private async exec(table: TableName, stmts: Stmt[]) {
-    try { return await this.runner.run(stmts) } catch (e) { throw mapError(e, table) }
+    try {
+      if (!this.inTransaction && this.runner === this.driver && this.driver.runGroups) return await runTogether(this.driver, stmts)
+      return await this.runner.run(stmts)
+    } catch (e) { throw mapError(e, table) }
   }
   /** Several writes that must all happen: one round trip, atomic (inside a transaction: part of it). */
   private async execAll(table: TableName, stmts: Stmt[]) {

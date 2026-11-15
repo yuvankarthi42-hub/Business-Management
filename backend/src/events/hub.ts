@@ -116,6 +116,11 @@ export class Hub {
   }
   /** A screen's connection ended. */
   remove(l: Listener) { this.listeners.delete(l) }
+  /**
+   * A screen that was already connected, handed back after the host slept (Cloudflare hibernation): it is listened to
+   * again without a new "hello" (it had one). Its next reconnect sees the new boot and resyncs once.
+   */
+  restore(l: Listener) { this.listeners.add(l) }
 
   private reauth(l: Listener) {
     try { l.send({ event: 'reauth', data: {} }) } catch { /* gone */ }

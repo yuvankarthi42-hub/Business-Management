@@ -6,6 +6,7 @@ import type { Business, Customer, Order, OrderItem, OrderType, PaymentMethod, Pr
 import { dateKey } from '@/core/specials'
 import type { DB } from './db'
 import { defaultRoles, newBusiness, rng } from './seed'
+import { dishImage, type Dish } from './dishImages'
 
 interface ItemDef {
   name: string; cat: string; price: number; cost: number; unit: string; tax: 0 | 5 | 12 | 18; emoji: string
@@ -573,6 +574,57 @@ export const TEXTILE_DEMO_ID = TEXTILE.id
 export function addTextileHsn(d: DB) {
   for (const [id, , , hsn] of TEXTILE.categories) { const c = d.categories.find((x) => x.id === `cat_${TEXTILE.id}_${id}`); if (c && hsn && !c.hsn) c.hsn = hsn }
 }
+
+/** நாடார் உணவகம் — a parotta / tiffin / biryani hotel (food type). Local development only (see db.ts). */
+const NADAR: ShopSpec = {
+  id: 'biz_nadar_unavagam', name: 'நாடார் உணவகம்', subType: 'Fast Food', emoji: '🍛', category: 'food',
+  orderTypes: ['counter', 'takeaway', 'delivery'],
+  address: '12, Main Bazaar Road, Virudhunagar 626001', phone: '+91 98765 88880', email: 'nadarunavagam@gmail.com', gstin: '33NADAR7788E1Z3',
+  invoicePrefix: 'NU-', defaultTax: 'tax_5', footer: 'நன்றி, மீண்டும் வருக!', seed: 8818, ean: '8908000',
+  categories: [['tiffin', 'Tiffin', '🥞'], ['parotta', 'Parotta', '🫓'], ['rice', 'Biryani & Rice', '🍛'], ['chicken', 'Chicken', '🍗']],
+  items: [
+    { name: 'Parotta', cat: 'parotta', price: 15, cost: 6, unit: 'pc', tax: 5, emoji: '🫓', pop: 10, noStock: true, kitchen: true, qty: [2, 2, 3, 4] },
+    { name: 'Dosa', cat: 'tiffin', price: 40, cost: 14, unit: 'pc', tax: 5, emoji: '🥞', pop: 7, noStock: true, kitchen: true, qty: [1, 1, 2] },
+    { name: 'Roast', cat: 'tiffin', price: 45, cost: 16, unit: 'pc', tax: 5, emoji: '🥞', pop: 5, noStock: true, kitchen: true, qty: [1, 1, 2] },
+    { name: 'Chapati Set', cat: 'parotta', price: 40, cost: 15, unit: 'plate', tax: 5, emoji: '🫓', pop: 5, noStock: true, kitchen: true, qty: [1, 1, 2] },
+    { name: 'Chicken (100g)', cat: 'chicken', price: 40, cost: 22, unit: 'plate', tax: 5, emoji: '🍗', pop: 6, noStock: true, kitchen: true, nonVeg: true, qty: [1, 2, 3] },
+    { name: 'Kothu Parotta', cat: 'parotta', price: 100, cost: 40, unit: 'plate', tax: 5, emoji: '🍳', pop: 5, noStock: true, kitchen: true, qty: [1, 1, 2] },
+    { name: 'Idli', cat: 'tiffin', price: 10, cost: 4, unit: 'pc', tax: 5, emoji: '🍚', pop: 8, noStock: true, kitchen: true, qty: [2, 3, 4] },
+    { name: 'Poori Set', cat: 'tiffin', price: 40, cost: 15, unit: 'plate', tax: 5, emoji: '🫓', pop: 5, noStock: true, kitchen: true, qty: [1, 1, 2] },
+    { name: 'Pongal', cat: 'tiffin', price: 40, cost: 14, unit: 'plate', tax: 5, emoji: '🍚', pop: 5, noStock: true, kitchen: true, qty: [1, 1, 2] },
+    { name: 'Chicken Biryani', cat: 'rice', price: 110, cost: 55, unit: 'plate', tax: 5, emoji: '🍛', pop: 8, noStock: true, kitchen: true, nonVeg: true, qty: [1, 1, 2, 3] },
+    { name: 'Kuska', cat: 'rice', price: 80, cost: 30, unit: 'plate', tax: 5, emoji: '🍛', pop: 5, noStock: true, kitchen: true, qty: [1, 1, 2] },
+  ],
+  users: [
+    { id: 'usr_nu_owner', name: 'Murugesan Nadar', phone: '9876588881', role: 'Owner' },
+    { id: 'usr_nu_cash', name: 'Selvi', phone: '9876588882', role: 'Cashier' },
+    { id: 'usr_nu_kit', name: 'Raja (master)', phone: '9876588883', role: 'Kitchen Staff' },
+  ],
+  customers: [{ name: 'Pandi' }, { name: 'Muthu' }, { name: 'Lakshmi' }, { name: 'Bus stand office', credit: true, notes: 'Lunch parcels, pays weekly' }, { name: 'Ganesan' }, { name: 'Kavitha' }],
+  perDay: [35, 55], linesPerBill: [1, 3], deliveryShare: 0.06, creditShare: 0.02,
+  expenses: [
+    { notes: 'Maida, rice, oil — supplier', category: 'purchase', min: 2500, max: 4500, every: 1 },
+    { notes: 'Chicken — daily', category: 'purchase', min: 1800, max: 3200, every: 1 },
+    { notes: 'Gas cylinder', category: 'other', min: 1450, max: 1450, every: 3 },
+    { notes: 'Shop electricity', category: 'electricity', min: 2200, max: 2800, every: 30 },
+  ],
+}
+const NADAR_DISHES: Record<string, Dish> = {
+  'Parotta': 'parotta', 'Dosa': 'dosa', 'Roast': 'roast', 'Chapati Set': 'chapati', 'Chicken (100g)': 'chicken', 'Kothu Parotta': 'kothu',
+  'Idli': 'idli', 'Poori Set': 'poori', 'Pongal': 'pongal', 'Chicken Biryani': 'biryani', 'Kuska': 'kuska',
+}
+
+/** நாடார் உணவகம் demo shop with bill history and drawn dish pictures. Local development only (db.ts guards it). */
+export function addNadarDemo(d: DB) {
+  if (d.businesses.some((b) => b.id === NADAR.id)) return
+  buildShop(d, NADAR)
+  for (const p of d.products) {
+    const dish = p.businessId === NADAR.id ? NADAR_DISHES[p.name] : undefined
+    const img = dish ? dishImage(dish) : null
+    if (img) { p.imageUrl = img.imageUrl; p.thumbUrl = img.thumbUrl }
+  }
+}
+export const NADAR_DEMO_ID = NADAR.id
 
 /** Adds the supermarket and hardware demo shops if they aren't there yet. */
 export function addFoodDemo(d: DB) {

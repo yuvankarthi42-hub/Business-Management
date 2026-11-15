@@ -9,7 +9,7 @@ import type { ServiceJob } from '@/core/serviceJobs'
 import { seedAdminTeam, seedPlatform } from './seedPlatform'
 import { dropHealthEvents, dropSmsReminders, fixFutureDemoTimes, markContractors, seedStaffAndWholesale, seedSupport } from './seedOps'
 import { buildSeed, demoSpecials } from './seed'
-import { addFoodDemo, addMobileDemo, addRetailDemos, addTextileDemo, addTextileHsn, addVegAutoDemos, seedDemoBatches } from './seedRetail'
+import { addFoodDemo, addMobileDemo, addNadarDemo, addRetailDemos, addTextileDemo, addTextileHsn, addVegAutoDemos, NADAR_DEMO_ID, seedDemoBatches } from './seedRetail'
 import { normalizePhone } from '@/core/phone'
 
 export interface DB {
@@ -151,12 +151,13 @@ export async function initDB() {
     const fromIdb = stored ? migrate(stored) : null
     if (fromIdb) {
       db = fromIdb
-      if (savedVersion !== VERSION) persist(db) // save the migrated copy
+      if (savedVersion !== VERSION || addLocalDemos(db)) persist(db) // save the migrated copy
     } else {
       // First run on IndexedDB: move the old localStorage save over (or create fresh demo data).
       const raw = localStorage.getItem(KEY)
       const legacy = raw ? migrate(JSON.parse(raw) as DB) : null
       db = legacy ?? freshSeed(false)
+      addLocalDemos(db)
       persist(db)
       localStorage.removeItem(KEY)
     }
@@ -167,6 +168,7 @@ export async function initDB() {
       const raw = localStorage.getItem(KEY)
       db = (raw && migrate(JSON.parse(raw) as DB)) || freshSeed(false)
     } catch { db = freshSeed(false) }
+    addLocalDemos(db)
     persist(db)
   }
 }
@@ -188,8 +190,22 @@ function freshSeed(save = true): DB {
   seedStaffAndWholesale(fresh)
   markContractors(fresh)
   seedSupport(fresh)
+  addLocalDemos(fresh)
   if (save) persist(fresh)
   return fresh
+}
+
+/**
+ * Local development only (`npm run dev`): the நாடார் உணவகம் food shop with bill history. Never in a build, so no
+ * deployed demo or live account gets it; no VERSION change. True when it was added (the caller saves).
+ */
+function addLocalDemos(d: DB): boolean {
+  if (!import.meta.env.DEV || d.businesses.some((b) => b.id === NADAR_DEMO_ID)) return false
+  addNadarDemo(d)
+  normalizeAllPhones(d)
+  seedPlatform(d)
+  seedStaffAndWholesale(d)
+  return true
 }
 
 /** v17: WhatsApp integration collections + its release flag (off until the product admin turns it on). */

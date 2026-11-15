@@ -49,8 +49,12 @@ export const wholesaleList = (c: Ctx) => c.db.first('price_lists', { business_id
 export async function loadProducts(c: Ctx, o: LoadProductsOptions = {}): Promise<Product[]> {
   const biz = c.businessId
   const where = { business_id: biz, ...(o.ids ? { ROWID: { in: o.ids } } : {}), ...(o.activeOnly ? { is_active: true } : {}) }
-  const rows = await c.db.select('products', { where, orderBy: [['sort_order', 'ASC'], ['ROWID', 'ASC']] })
-  return productsFrom(c, rows, o.ids ? rows.map((r) => r.ROWID) : null, o)
+  // The wholesale price list is read at the same moment as the products (neither needs the other: one round trip).
+  const [rows, list] = await Promise.all([
+    c.db.select('products', { where, orderBy: [['sort_order', 'ASC'], ['ROWID', 'ASC']] }),
+    o.forCustomers ? Promise.resolve(null) : wholesaleList(c),
+  ])
+  return productsFrom(c, rows, o.ids ? rows.map((r) => r.ROWID) : null, o, list)
 }
 
 /** One page of the product list, in the list's order (sort order, then id): products.page for big shops. */
@@ -62,11 +66,12 @@ export async function loadProductPage(c: Ctx, offset: number, limit: number) {
 }
 
 /** Product rows → the app's `Product`, with variants, add-ons, wholesale prices, stock, next expiry and photo. `ids` = read only these products' extras (null = the whole shop's). */
-async function productsFrom(c: Ctx, rows: Row[], ids: string[] | null, o: LoadProductsOptions): Promise<Product[]> {
+async function productsFrom(c: Ctx, rows: Row[], ids: string[] | null, o: LoadProductsOptions, knownList?: Row | null): Promise<Product[]> {
   if (!rows.length) return []
   const biz = c.businessId
   const only: Where = ids ? { product_id: { in: ids } } : {}
-  const list = o.forCustomers ? null : await wholesaleList(c)
+  // `knownList`: the wholesale list already read with the products (loadProducts); otherwise read now, as before.
+  const list = o.forCustomers ? null : knownList !== undefined ? knownList : await wholesaleList(c)
   const branches = o.branches ?? c.scope()
   const inScope = new Set(branches)
   // Expiry batches only matter for products that track them.
@@ -202,14 +207,15 @@ type Sql = { sql: string; args: (string | number | null)[] }
 async function lightRowsWhere(c: Ctx, pick: { sql: string; args: (string | number | null)[] }, idsOf: 'range' | 'list', ids?: number[], limit?: number): Promise<{ rows: LightRow[]; dbNow: string; lastId: number | null }> {
   const db = c.db
   const biz = Number(c.businessId)
-  const list = await wholesaleList(c)
+  // The wholesale list goes out with the product rows (one round trip); only the extras below need it.
+  const listP = wholesaleList(c)
   const branches = c.scope().map(Number)
   const bIn = branches.map(() => '?').join(', ')
   // The product rows decide the id range the other reads cover.
-  const [prows, nowRows] = await db.sqlReads!([
+  const [[prows, nowRows], list] = await Promise.all([db.sqlReads!([
     { sql: `SELECT ${LIGHT_COLS} FROM "products" WHERE "business_id" = ? AND ${pick.sql} ORDER BY "id" LIMIT ?`, args: [biz, ...pick.args, limit ?? 100000] },
     { sql: `SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-2 seconds') AS now`, args: [] },
-  ])
+  ]), listP])
   const dbNow = String(nowRows[0]?.now ?? new Date(Date.now() - 2000).toISOString())
   if (!prows.length) return { rows: [], dbNow, lastId: null }
   const pids = prows.map((r) => Number(r.id))

@@ -488,3 +488,72 @@ window is shorter than you need.
 | A shop has no QR Orders / Daily Specials / GST returns | The feature is off for it: **Admin → Features** (Step 9) — and the shop's own module must be on (Settings → Modules). |
 | Another device's change shows late | Normal on Catalyst: Billing, Tables, Kitchen, QR orders and Take Order check every 30 s, other screens every 60 s (only while the screen is in use). |
 | Wrong change in a shop's data | Turso point-in-time restore — "Backups and restoring a shop" above. |
+
+---
+
+# Account 2 — Cloudflare + Turso (a separate setup)
+
+Everything above is **account 1 (Catalyst + Turso)**, for big customers. Account 2 runs the **same code** on Cloudflare,
+with **its own** Turso org, buckets, secrets and product admin. The two never share data, logins or files.
+
+```
+Shops' phones / PCs   ──►  Cloudflare Pages (web app)  ──►  Worker "kk-api"  ──►  Turso org 2 (platform + 1 per shop)
+                                                              │  R2 "kk-media" (public photos)  ·  R2 "kk-media-private"
+                                                              │  Durable Object ShopHub (live updates, WebSocket)
+                                                              └─ Cron: every hour (daily jobs, one batch per run)
+```
+
+| | Account 1 (Catalyst) | Account 2 (Cloudflare) |
+|---|---|---|
+| Other devices' changes | change feed every 30–60 s (Single device flag: none) | WebSocket hub — no timed checks |
+| Photos | Stratus | R2 (public bucket + **private** bucket) |
+| Daily jobs | Cron 09:00 (`daily` function) | Cron every hour (`30 * * * *`) |
+| Visitor address (rate limits) | `CLIENT_IP_SOURCE=catalyst` | `CF-Connecting-IP` only (set by the Worker itself) |
+
+### C1 — Turso org 2
+Create a **new** Turso org (never reuse account 1's). Make the platform database and the tokens exactly as in Step 2.
+
+### C2 — Secrets (new values — never copy account 1's)
+Generate new `AUTH_SECRET`, `SETUP_KEY`, `SECRETS_KEY`, `PASSWORD_PEPPER`, `CRON_KEY` (`openssl rand -hex 32` each) and,
+if used, new VAPID keys (`npm --prefix backend run vapid`).
+
+### C3 — R2 buckets
+1. `kk-media` — connect a **custom domain** (e.g. `media.example.com`) → that is `R2_PUBLIC_URL`.
+2. `kk-media-private` — **no** custom domain, **r2.dev access off**. Support screenshots go here and are read only by the
+   API through signed links that stop working after 30–60 minutes (then: 404). Without this bucket a private file is
+   refused (never put in the public one).
+
+### C4 — The Worker
+```bash
+cd backend
+cp wrangler.example.toml wrangler.toml        # fill in names, domains, ACCOUNT_ID, Turso org (not committed)
+npm run build:cloudflare                      # → dist-worker/worker.js (checks no Catalyst code is inside)
+npx wrangler secret put AUTH_SECRET           # …and every secret listed in wrangler.toml
+npx wrangler deploy
+```
+- `ACCOUNT_ID` (e.g. `cf-1`): this setup's id. On first use it is written into the platform database; a Worker pointed at
+  another setup's database refuses every request, and tokens / file links of another setup are refused.
+- Plan: the Workers **Free** plan is fine for trying it; for customers use **Workers Paid** (more requests per day,
+  30 s CPU and 1,000 sub-requests per request — CSV imports and the daily jobs need them).
+- Check once with `npx wrangler dev` before the first deploy: sign in, a bill, a photo upload, a support screenshot,
+  and "Notify me" on order tracking (web push uses Node's `createECDH`; if the runtime lacks it, only that part fails).
+
+### C5 — Tables, first admin, checks
+Same as Step 7 with `<api-url>` = `https://api.example.com/server/api`: `/schema-check`, `/migrate`, `admin.setup`,
+the smoke test, and `/ip-check` (send a made-up `X-Forwarded-For`: the answer must still be your real address,
+via `cf-connecting-ip`).
+
+### C6 — The web app on Cloudflare Pages
+```bash
+cp .env.cloudflare.example .env.cloudflare    # VITE_API_BASE = the Worker's /server/api address
+npm run build:cloudflare                      # → dist-cloudflare/
+```
+Upload `dist-cloudflare/` to a Pages project (no 404.html → Pages serves the app for every address). Put the Pages
+address in the Worker's `ALLOWED_ORIGINS`.
+
+### Every release
+Deploy **both** setups, and run each new migration on **both** Turso orgs (`POST /migrate` on each API).
+
+### Account 1 (optional)
+To mark account 1 too, set `ACCOUNT_ID` (e.g. `cat-1`) on the Catalyst `api` and `daily` functions. Signed-in users stay
+signed in; private screenshot links made in the last hour need one refresh. Without it, account 1 runs exactly as before.

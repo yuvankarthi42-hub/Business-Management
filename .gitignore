@@ -24,3 +24,10 @@ dist-prod
 .env*
 **/.env*
 !*.example
+
+# Cloudflare setup builds
+backend/dist-worker/
+dist-cloudflare
+backend/wrangler.toml
+backend/.wrangler/
+.env.cloudflare

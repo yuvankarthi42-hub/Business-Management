@@ -30,8 +30,37 @@ export function usePublicLive(shop: string | null | undefined, order: string | n
       if (!url || stopped) return
       setLive(true)
       const base = new URL(url, location.href).href.replace(/\/$/, '')
+      const onEvent = (event: string, data: string) => {
+        if (event === 'hello') { wait = 1000; return }
+        // Missed something while away: refresh once.
+        if (event === 'resync') { handlers.current.menu?.(); handlers.current.order?.(); return }
+        try {
+          const ev = JSON.parse(data) as { kind?: string }
+          if (ev.kind === 'menu') handlers.current.menu?.()
+          else if (ev.kind === 'order') handlers.current.order?.()
+        } catch { /* comment / keep-alive */ }
+      }
       while (!stopped) {
         ctl = new AbortController()
+        // A WebSocket hub (Cloudflare, address wss://…): the same messages as JSON ({ event, id, data }).
+        if (/^wss?:\/\//i.test(base)) {
+          const q = `shop=${encodeURIComponent(shop)}${order ? `&order=${encodeURIComponent(order)}` : ''}${since ? `&since=${encodeURIComponent(since)}` : ''}`
+          await new Promise<void>((resolve) => {
+            let ws: WebSocket
+            try { ws = new WebSocket(`${base}/public?${q}`, ['kk-live']) } catch { resolve(); return }
+            const ping = setInterval(() => { try { if (ws.readyState === WebSocket.OPEN) ws.send('ping') } catch { /* closing */ } }, 45_000)
+            ctl!.signal.addEventListener('abort', () => { try { ws.close() } catch { /* closed */ } })
+            ws.onmessage = (m) => {
+              if (typeof m.data !== 'string' || m.data === 'pong') return
+              try { const msg = JSON.parse(m.data) as { event?: string; id?: string; data?: unknown }; if (msg.id) since = msg.id; onEvent(msg.event ?? 'message', JSON.stringify(msg.data ?? {})) } catch { /* not ours */ }
+            }
+            ws.onclose = () => { clearInterval(ping); resolve() }
+          })
+          if (stopped) return
+          await new Promise((r) => setTimeout(r, wait + Math.random() * 500))
+          wait = Math.min(wait * 2, 30_000)
+          continue
+        }
         try {
           const res = await fetch(`${base}/public`, { method: 'POST', headers: { 'content-type': 'text/plain;charset=UTF-8' }, body: JSON.stringify({ shop, order, since }), signal: ctl.signal, credentials: 'omit', cache: 'no-store' })
           if (!res.ok || !res.body) throw new Error(String(res.status))
@@ -50,14 +79,7 @@ export function usePublicLive(shop: string | null | undefined, order: string | n
                 else if (line.startsWith('data:')) data += line.slice(5).trim()
                 else if (line.startsWith('id:')) since = line.slice(3).trim()
               }
-              if (event === 'hello') { wait = 1000; continue }
-              // Missed something while away: refresh once.
-              if (event === 'resync') { handlers.current.menu?.(); handlers.current.order?.(); continue }
-              try {
-                const ev = JSON.parse(data) as { kind?: string }
-                if (ev.kind === 'menu') handlers.current.menu?.()
-                else if (ev.kind === 'order') handlers.current.order?.()
-              } catch { /* comment / keep-alive */ }
+              onEvent(event, data)
             }
           }
         } catch { /* reconnect below */ }

@@ -50,7 +50,9 @@ export async function selectIn(c: Ctx, table: TableName, col: string, ids: strin
   const out: Row[] = []
   if (!db && SHARED_TABLES.includes(table)) throw new Error(`selectIn ${table}: say which database (it is in both)`)
   const from = db ?? (PLATFORM_TABLES.includes(table) ? c.platform : c.db)
-  for (const part of chunks([...new Set(ids)])) if (part.length) out.push(...await from.select(table, { where: { ...extra, [col]: { in: part } } }))
+  // The chunks are read at the same moment (one round trip on Turso), their rows kept in chunk order as before.
+  const parts = await Promise.all(chunks([...new Set(ids)]).filter((part) => part.length).map((part) => from.select(table, { where: { ...extra, [col]: { in: part } } })))
+  for (const rows of parts) out.push(...rows)
   return out
 }
 
@@ -101,9 +103,22 @@ export async function withItems(c: Ctx, rows: Row[]): Promise<Order[]> {
 /** Orders with their lines, and the line / add-on rows they were made from (for code that then edits them). */
 async function withItemRows(c: Ctx, rows: Row[]): Promise<{ orders: Order[]; items: Row[]; addons: Row[] }> {
   if (!rows.length) return { orders: [], items: [], addons: [] }
-  const items = await selectIn(c, 'order_items', 'order_id', rows.map((r) => r.ROWID))
-  const addons = items.length ? await selectIn(c, 'order_item_addons', 'order_item_id', items.map((i) => i.ROWID)) : []
+  const [items, addons] = await itemAndAddonRows(c, rows.map((r) => r.ROWID))
   return { orders: ordersFrom(rows, items, addons), items, addons }
+}
+/**
+ * The line rows of these orders and the add-on rows of those lines, read at the same moment (one round trip): the
+ * add-ons by "the lines of these orders" instead of by the line ids read first. The same rows as before; add-ons in
+ * line, then row order.
+ */
+async function itemAndAddonRows(c: Ctx, orderIds: string[]): Promise<[Row[], Row[]]> {
+  const ids = [...new Set(orderIds)]
+  const [items, addonParts] = await Promise.all([
+    selectIn(c, 'order_items', 'order_id', ids),
+    Promise.all(chunks(ids).map((part) => c.db.select('order_item_addons', { where: { order_item_id: { inSelect: { table: 'order_items', column: 'ROWID', where: { order_id: { in: part } } } } } }))),
+  ])
+  const addons = addonParts.flat().sort((a, b) => Number(a.order_item_id) - Number(b.order_item_id) || Number(a.ROWID) - Number(b.ROWID))
+  return [items, addons]
 }
 /** Order rows + their line and add-on rows → the app's orders (lines in their saved order, each with its own add-ons). */
 export function ordersFrom(rows: Row[], items: Row[], addons: Row[]): Order[] {
@@ -121,11 +136,15 @@ export async function loadOrder(c: Ctx, id: string, opts: { inScope?: boolean; b
 /** loadOrder, with the line and add-on rows it read (the same reads). */
 export async function loadOrderRows(c: Ctx, id: string, opts: { inScope?: boolean; businessId?: string } = {}) {
   if (!isId(id)) throw new ApiError('Order not found', 404)
-  const rows = await c.db.select('orders', { where: { ROWID: id, business_id: opts.businessId ?? c.businessId } })
+  // The order, its lines and their add-ons are read at the same moment (one round trip); the lines are used only
+  // once the order is found and in this user's branches.
+  const [rows, [items, addons]] = await Promise.all([
+    c.db.select('orders', { where: { ROWID: id, business_id: opts.businessId ?? c.businessId } }),
+    itemAndAddonRows(c, [id]),
+  ])
   const r = rows[0]
   if (!r || (opts.inScope !== false && c.session && !c.inScope(str(r.branch_id)))) throw new ApiError('Order not found', 404)
-  const got = await withItemRows(c, [r])
-  return { row: r, order: got.orders[0], itemRows: got.items, addonRows: got.addons }
+  return { row: r, order: ordersFrom([r], items, addons)[0], itemRows: items, addonRows: addons }
 }
 
 export function paymentFrom(r: Row): Payment {

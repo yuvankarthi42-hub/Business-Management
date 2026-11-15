@@ -85,8 +85,9 @@ export async function findBiz(c: Ctx, id: string) {
 }
 
 /** The owner login of a business (the user the product admin created), from the shop's database. */
-export async function ownerOf(c: Ctx, businessId: string): Promise<Row | null> {
-  const b = await c.platform.get('businesses', businessId)
+export async function ownerOf(c: Ctx, businessId: string, known?: Row): Promise<Row | null> {
+  // `known`: the business row the caller just read (same request): not read again.
+  const b = known && known.ROWID === businessId ? known : await c.platform.get('businesses', businessId)
   const db = await c.shopDb(businessId)
   if (b?.owner_user_id) { const u = await db.get('users', str(b.owner_user_id)); if (u) return u }
   return db.first('users', { business_id: businessId, username: { ne: null } }, [['ROWID', 'ASC']])
