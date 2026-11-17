@@ -1,6 +1,10 @@
 # Kadai Kalanjiyam — full deployment on a NEW account (from zero)
 
-Release: branch `main`, commit `454d963` (4 Nov 2026).
+Release: branch `main`, commit `9582b96` (final test 16 Nov 2026; zips built 17 Nov 2026).
+This is **account 1 — Catalyst + Turso**. Cloudflare (account 2) has its own guide: [DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md).
+
+**Already running an earlier release?** Skip to **[Later: updating this setup](#later-updating-this-setup)** — only the 3 zips and one `/migrate`.
+
 This guide sets up everything fresh: a new **Zoho Catalyst** project, a new **Turso** database group, photo storage,
 the API, the daily job, the web app and (optionally) order notifications. Nothing is copied from the old test setup —
 production starts empty.
@@ -9,6 +13,13 @@ production starts empty.
 screens check for changes every 30–60 s), release flags in **Admin → Features** (QR Orders, Daily Specials & offers
 display, GST report — all **off** until you turn them on, Step 9), a **Single device** flag that stops background
 checks for one-counter shops, every regular API under 10 ms CPU, and simpler forms.
+
+**New since 4 Nov (commit `454d963`):** Service Jobs for repair / mobile shops (job bills on the Billing page), bill design
+per branch, large-catalogue paging, security fixes, fewer database round trips (faster Orders, KOT, QR accept, cancel,
+menu and setup / sign-in APIs), and the same code can also run on Cloudflare (account 2). New database migrations:
+`0012_request_log`, `0013_drop_branch_stock_business_index`, `0014_service_jobs` (run `/migrate` once after the upload).
+No new environment variables are needed. Optional: `ACCOUNT_ID` (e.g. `cat-1`) on `api` and `daily` — see the end of the
+Cloudflare section.
 
 ```
 Shops' phones / PCs / tablets
@@ -249,7 +260,7 @@ Replace `<api-url>` with your API URL (Step 5) and `<SETUP_KEY>` with value #8. 
 curl -s <api-url>/health
 ```
 
-✔ Expected: `{"ok":true,"version":"1.0.0","handlers":177}`
+✔ Expected: `{"ok":true,"version":"1.0.0","handlers":202}`
 ✘ No answer / error page → the `api` function isn't deployed, or the URL is wrong (it must end in `/server/api`).
 
 ### 7.2 Create the database tables
@@ -421,6 +432,16 @@ shop **→ Features**). A shop's own module choices are kept: turning a feature 
 
 ## Later: updating this setup
 
+**This release (`9582b96`, 17 Nov 2026) — the zips are already built** in the project folder: `api.zip`, `daily.zip`,
+`web-prod.zip` (the previous ones are kept in `previous-zips-2026-11-17/`). For this release:
+1. Back up Turso (Developer plan point-in-time restore, or `turso db shell <db> .dump` for the platform database).
+2. Upload `api.zip` → **api**, `daily.zip` → **daily**, `web-prod.zip` → **Slate**, and deploy each.
+3. Run `/migrate` once (step 3 below) — this release adds `0012`, `0013` and `0014`.
+4. Check `/health` (`"handlers":202`), sign in, a bill and its print, the Orders page, a KOT, and a Service Job on a
+   mobile / repair shop. Refresh every shop screen once. Signed-in users stay signed in.
+
+For every later release, the full steps:
+
 0. Run the test cases first (Step 0.3) — all must pass.
 1. Build new zips (project folder):
    ```bash
@@ -492,6 +513,9 @@ window is shorter than you need.
 ---
 
 # Account 2 — Cloudflare + Turso (a separate setup)
+
+> **Full step-by-step guide: [DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md)** (for the ready package `cloudflare.zip`). The
+> notes below are the short overview.
 
 Everything above is **account 1 (Catalyst + Turso)**, for big customers. Account 2 runs the **same code** on Cloudflare,
 with **its own** Turso org, buckets, secrets and product admin. The two never share data, logins or files.
