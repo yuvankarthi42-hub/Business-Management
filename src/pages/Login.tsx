@@ -1,4 +1,4 @@
-import { ChefHat, Eye, EyeOff, Scissors, Shirt, ShoppingCart, Store, UtensilsCrossed } from 'lucide-react'
+import { ChefHat, Eye, EyeOff, Scissors, Shirt, ShoppingCart, Smartphone, Store, UtensilsCrossed } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useApp } from '@/app/AppContext'
@@ -54,8 +54,8 @@ export default function Login() {
         <div className="max-w-md">
           <h1 className="text-4xl font-bold leading-tight tracking-tight text-slate-900">One platform.<br />Every kind of business.</h1>
           <p className="mt-4 text-lg text-slate-600">Billing, orders, tables, kitchen, stock and daily income — set up the way <em>your</em> business works.</p>
-          <div className="mt-10 grid grid-cols-5 gap-3">
-            {[{ i: ShoppingCart, l: 'Retail' }, { i: Shirt, l: 'Textile' }, { i: ChefHat, l: 'Food' }, { i: UtensilsCrossed, l: 'Restaurant' }, { i: Scissors, l: 'Service' }].map(({ i: I, l }) => (
+          <div className="mt-10 grid grid-cols-3 gap-3">
+            {[{ i: ShoppingCart, l: 'Retail' }, { i: Shirt, l: 'Textile' }, { i: Smartphone, l: 'Mobile' }, { i: ChefHat, l: 'Food' }, { i: UtensilsCrossed, l: 'Restaurant' }, { i: Scissors, l: 'Service' }].map(({ i: I, l }) => (
               <div key={l} className="flex flex-col items-center gap-2 rounded-xl border border-slate-200 bg-white/70 px-2 py-4 shadow-card">
                 <I className="h-6 w-6 text-brand-600" /><span className="text-xs font-medium text-slate-700">{l}</span>
               </div>

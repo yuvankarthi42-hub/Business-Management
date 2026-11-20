@@ -10,7 +10,7 @@ import { productFormFor, templateFor, usesRetailPos } from '@/core/config'
 import { ScanAddModal } from '@/features/supermarket/ScanAdd'
 import { LabelPrintModal } from '@/features/Labels'
 import { AddDesignModal, CategoryDiscountModal } from '@/features/textile/Textile'
-import { detailsLine, discountedPrice } from '@/core/stickers'
+import { detailsLine, discountedPrice, isMobileShop } from '@/core/stickers'
 import { HsnInput } from '@/features/gst/GstFields'
 import { ProductImportModal } from '@/features/ProductImport'
 import type { AddOn, Product, Variant } from '@/core/types'
@@ -40,7 +40,7 @@ export default function Products() {
   const [discounting, setDiscounting] = useState(false)
   const textile = !!me && productFormFor(me.business).textile
   // Barcode labels: shops that sell packed goods (supermarket, hardware, bakery) — not dine-in menus.
-  const labels = superMode || /bakery|sweet/i.test(me?.business.subType ?? '')
+  const labels = superMode || /bakery|sweet/i.test(me?.business.subType ?? '') || (!!me && isMobileShop(me.business))
   const list = useMemo(() => {
     const s = q.trim().toLowerCase()
     return (products ?? []).filter((p) => (cat === 'all' || (cat === 'inactive' ? !p.active : p.categoryId === cat))

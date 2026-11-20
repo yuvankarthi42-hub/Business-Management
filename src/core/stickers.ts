@@ -13,9 +13,9 @@ export const DEFAULT_STICKERS: StickerSettings = {
   size: '50x38', code: 'qr', showShop: true, showName: true, showDesign: true, showDetails: true, priceMode: 'auto', footer: '', copies: 1,
 }
 
-/** Textile shops get QR + 50×38 by default; other shops keep the small barcode label they had. */
+/** Textile and mobile shops get QR + 50×38 by default; other shops keep the small barcode label they had. */
 export function stickerSettings(b: Pick<Business, 'stickers' | 'category' | 'subType'>): StickerSettings {
-  const base = isTextileShop(b) ? DEFAULT_STICKERS : { ...DEFAULT_STICKERS, size: '50x25' as const, code: 'barcode' as const }
+  const base = isTextileShop(b) || isMobileShop(b) ? DEFAULT_STICKERS : { ...DEFAULT_STICKERS, size: '50x25' as const, code: 'barcode' as const }
   return { ...base, ...(b.stickers ?? {}) }
 }
 
@@ -53,6 +53,11 @@ export function stickerPrice(p: Pick<Product, 'price' | 'mrp'>, billing: Pick<Bi
 }
 
 /** Silk, saree, textile and garment shops. */
+/** Mobile / electronics / repair shops: QR or barcode stickers for accessories and phones, scanned at billing. */
+export function isMobileShop(b: Pick<Business, 'category' | 'subType'>) {
+  return (b.category === 'retail' || b.category === 'service') && /mobile|phone|electronic|repair/i.test(b.subType ?? '')
+}
+
 export function isTextileShop(b: Pick<Business, 'category' | 'subType'>) {
   return b.category === 'retail' && /silk|saree|sari|textile|fabric|garment|cloth|readymade|boutique|apparel/i.test(b.subType)
 }

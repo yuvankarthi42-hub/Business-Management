@@ -3,9 +3,9 @@
 // is something the product really does.
 import clsx from 'clsx'
 import {
-  ArrowRight, BarChart3, Bell, Boxes, Check, ChefHat, CreditCard, FileSpreadsheet, Languages, LayoutDashboard, Lock,
+  ArrowRight, BarChart3, Bell, Boxes, Check, ChefHat, FileSpreadsheet, Languages, LayoutDashboard, Lock,
   MessageCircle, MonitorSmartphone, NotebookPen, PackageOpen, QrCode, ReceiptText, Scissors, ShieldCheck, ShoppingCart,
-  Store, Tag, TrendingUp, UserCheck, Users, UtensilsCrossed, Wallet, type LucideIcon,
+  Store, Tag, TrendingUp, UserCheck, Users, UtensilsCrossed, Wallet, Wrench, type LucideIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -142,6 +142,7 @@ interface Module { key: string; icon: LucideIcon; tag: string; title: string; bl
 const MODULES: Module[] = [
   { key: 'pos', icon: ReceiptText, tag: 'Sell', title: 'Billing & POS', blurb: 'Fast counter billing with barcode scan, sizes, add-ons, discounts and split payments — UPI, cash, card or credit.', points: ['Bill in a few taps — search, scan or tap the item', 'GST worked out per item, printed on 58 / 80 mm receipts', 'Returns, exchanges and credit notes', 'Edit running orders and settle them later'] },
   { key: 'serve', icon: UtensilsCrossed, tag: 'Serve', title: 'Tables, kitchen & QR orders', blurb: 'Run dine-in smoothly: table status, waiters taking orders on their phones, kitchen tickets on a screen and guests ordering by QR.', points: ['Every table at a glance — transfer and merge', 'Kitchen tickets (KOT) reach the kitchen screen instantly', 'QR menu for dine-in, takeaway and delivery', 'Today’s specials on a TV display'] },
+  { key: 'jobs', icon: Wrench, tag: 'Repair', title: 'Service jobs', blurb: 'For mobile, electronics and repair shops: take the item in, move it through each stage and bill it at delivery — with the advance already taken.', points: ['Job card with customer, item, IMEI / serial and problem', 'Received → Waiting for parts → Repairing → Ready', 'Advance at drop-off, adjusted in the final bill', 'Parts and labour on one bill — stock and reports update'] },
   { key: 'stock', icon: Boxes, tag: 'Stock', title: 'Inventory & stock', blurb: 'Know exactly what you have in every branch. Stock goes down with every bill and up with every purchase.', points: ['Low-stock alerts before you run out', 'Batch & expiry — the earliest expiry is sold first', 'Barcode labels and bulk import from Excel / CSV', 'Wastage and adjustments, with full history'] },
   { key: 'people', icon: UserCheck, tag: 'People', title: 'Staff & payroll', blurb: 'Attendance, salary, advances and commission — and logins that show each person only what their role allows.', points: ['Daily attendance in one tap', 'Monthly salary with advances deducted', 'Commission for each staff member', 'Roles & permissions for every login'] },
   { key: 'money', icon: Wallet, tag: 'Money', title: 'Payments, credit & expenses', blurb: 'Every rupee in and out: payments, customer credit, collections and shop expenses — all in one place.', points: ['Customer credit and outstanding dues', 'Collect dues against old bills', 'Expenses by category — rent, purchase, salary…', 'Cash, UPI and card totals for the day'] },
@@ -197,6 +198,22 @@ function ModuleMock({ k }: { k: string }) {
               {ex && <span className="hidden rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-white/50 sm:inline" data-no-i18n>{ex}</span>}
               <span className={clsx('rounded-full px-2.5 py-0.5 text-[11px] font-semibold', st === 'low' ? 'bg-amber-300/15 text-amber-200' : 'bg-[#7ffaab]/10 text-[#7ffaab]')}>{q as number} left</span>
             </span>
+          </div>
+        ))}
+      </div>
+    )
+    case 'jobs': return (
+      <div className="grid gap-3 sm:grid-cols-3">
+        {([['Received', [['JOB-1042', 'Redmi Note 12', 'Screen']]], ['Waiting for parts', [['JOB-1039', 'iPhone 11', 'Battery']]], ['Repairing', [['JOB-1036', 'Vivo Y21', 'Charging port'], ['JOB-1031', 'HP laptop', 'Keyboard']]]] as [string, [string, string, string][]][]).map(([st, cards], c) => (
+          <div key={st} className="lp-swap rounded-xl border border-white/5 bg-white/[.04] p-3" style={D(c * 80)}>
+            <div className="text-[11px] uppercase tracking-wider text-white/40">{st}</div>
+            {cards.map(([no, item, prob]) => (
+              <div key={no} className="mt-2.5 rounded-lg border border-white/5 bg-white/[.03] p-2.5">
+                <div className="text-[11px] font-semibold text-[#7ffaab]" data-no-i18n>{no}</div>
+                <div className="mt-1 text-[12px] text-white/85" data-no-i18n>{item}</div><div className="text-[11px] text-white/50" data-no-i18n>{prob}</div>
+                <div className="mt-1.5 text-[11px] text-white/40">Advance ₹200</div>
+              </div>
+            ))}
           </div>
         ))}
       </div>
@@ -303,7 +320,7 @@ function FeatureExplorer() {
 
 interface Shape { key: string; label: string; sub: string; icon: LucideIcon; nav: [LucideIcon, string][]; terms: [string, string][] }
 const SHAPES: Shape[] = [
-  { key: 'retail', label: 'Retail', sub: 'Supermarket · Silk & textiles · Hardware · Vegetables · Auto spares', icon: ShoppingCart,
+  { key: 'retail', label: 'Retail', sub: 'Supermarket · Silk & textiles · Hardware · Mobiles · Auto spares', icon: ShoppingCart,
     nav: [[ReceiptText, 'Billing'], [PackageOpen, 'Customer Orders'], [Tag, 'Products'], [Boxes, 'Inventory'], [Users, 'Customers'], [BarChart3, 'Reports']],
     terms: [['Items called', 'Products'], ['Buyers called', 'Customers'], ['Extras', 'QR price stickers, batches & expiry, wholesale prices']] },
   { key: 'food', label: 'Food', sub: 'Tea shop · Bakery · Fast food · Juice', icon: ChefHat,
@@ -312,9 +329,9 @@ const SHAPES: Shape[] = [
   { key: 'restaurant', label: 'Restaurant', sub: 'Hotel · Cafe · Dine-in · Cloud kitchen', icon: UtensilsCrossed,
     nav: [[UtensilsCrossed, 'Tables'], [NotebookPen, 'Take Order'], [ChefHat, 'Kitchen (KOT)'], [Tag, 'Menu Items'], [Users, 'Guests'], [BarChart3, 'Reports']],
     terms: [['Items called', 'Menu Items'], ['Buyers called', 'Guests'], ['Extras', 'Tables, waiter phones, QR at the table']] },
-  { key: 'service', label: 'Service', sub: 'Salon · Spa · Laundry · Repair', icon: Scissors,
-    nav: [[ReceiptText, 'Billing'], [Tag, 'Services'], [Users, 'Clients'], [UserCheck, 'Staff'], [CreditCard, 'Payments'], [BarChart3, 'Reports']],
-    terms: [['Items called', 'Services'], ['Buyers called', 'Clients'], ['Extras', 'Staff commission, client history, dues']] },
+  { key: 'service', label: 'Service', sub: 'Salon · Spa · Laundry · Mobile & repair', icon: Scissors,
+    nav: [[ReceiptText, 'Billing'], [Wrench, 'Service Jobs'], [Tag, 'Services'], [Users, 'Clients'], [UserCheck, 'Staff'], [BarChart3, 'Reports']],
+    terms: [['Items called', 'Services'], ['Buyers called', 'Clients'], ['Extras', 'Repair job cards, staff commission, client history']] },
 ]
 const SHAPE_MS = 5000
 
@@ -472,7 +489,7 @@ function Rush() {
 
 // ======================================================================= page
 
-const KINDS = ['Tea shops', 'Supermarkets', 'Silk & saree shops', 'Bakeries', 'Restaurants', 'Textiles & garments', 'Salons', 'Hardware stores', 'Juice shops', 'Cafes', 'Sweet stalls', 'Laundries', 'Grocery stores', 'Cloud kitchens', 'Stationery', 'Spas', 'Dhabas', 'Electronics', 'Vegetable shops', 'Auto spare parts', 'Garages']
+const KINDS = ['Tea shops', 'Supermarkets', 'Silk & saree shops', 'Bakeries', 'Restaurants', 'Textiles & garments', 'Salons', 'Hardware stores', 'Juice shops', 'Cafes', 'Sweet stalls', 'Laundries', 'Grocery stores', 'Cloud kitchens', 'Stationery', 'Spas', 'Dhabas', 'Electronics', 'Vegetable shops', 'Auto spare parts', 'Garages', 'Mobile shops', 'Repair shops']
 
 const UNLIMITED: [LucideIcon, string, string][] = [
   [ReceiptText, 'Unlimited bills', 'Every bill, every day, on every counter — no monthly bill count.'],
@@ -494,7 +511,7 @@ const TRUST: [LucideIcon, string, string][] = [
 const FAQ: [string, string][] = [
   ['Is it only for billing?', 'No. Billing is one part. Kadai Kalanjiyam also runs your stock, kitchen and tables, staff and salary, customer credit, expenses and reports — for every branch.'],
   ['Is there a limit on bills, users or customers?', 'No. Bills, users, customers, products and devices are all unlimited. Only the number of branches is set for your account, and you can add more when you open a new one.'],
-  ['Which businesses can use it?', 'Retail shops and supermarkets, tea shops and bakeries, restaurants and hotels, salons and other services. The screens and words change to fit the type of business you choose.'],
+  ['Which businesses can use it?', 'Retail shops and supermarkets, mobile and repair shops, tea shops and bakeries, restaurants and hotels, salons and other services. The screens and words change to fit the type of business you choose.'],
   ['Do I need the internet?', 'Yes. Everything is saved online the moment you press Save, so all your counters and your own phone always see the same numbers — and nothing is lost if a device breaks.'],
   ['Is my business data kept separate?', 'Yes. Every business gets its own private database. Only you and the staff you add can sign in, each with the permissions you choose.'],
   ['Which printers work?', 'Common 58 mm and 80 mm thermal receipt printers — through the browser, USB, serial or Bluetooth — set separately for each branch.'],

@@ -2,6 +2,7 @@
 
 Release: branch `main`, commit `9582b96` (final test 16 Nov 2026; zips built 17 Nov 2026).
 This is **account 1 — Catalyst + Turso**. Cloudflare (account 2) has its own guide: [DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md).
+> **Newer, cleaner step-by-step guide for Catalyst: [DEPLOY-CATALYST.md](DEPLOY-CATALYST.md)** — use that one.
 
 **Already running an earlier release?** Skip to **[Later: updating this setup](#later-updating-this-setup)** — only the 3 zips and one `/migrate`.
 

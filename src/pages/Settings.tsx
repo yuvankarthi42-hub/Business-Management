@@ -14,6 +14,7 @@ import { PhoneInput } from '@/components/PhoneInput'
 import { PrinterAndBill } from '@/features/printing/BillFormatSettings'
 import { sellsByWeight } from '@/features/scale/ScaleSettings'
 import { StickerSettingsPanel } from '@/features/Labels'
+import { isMobileShop } from '@/core/stickers'
 import { LoyaltySettingsPanel } from '@/features/loyalty/Points'
 import { BRAND } from '@/core/brand'
 import { GstinInput, StateSelect } from '@/features/gst/GstFields'
@@ -32,7 +33,7 @@ export default function Settings() {
     { key: 'profile', label: 'Business Profile', icon: Building2, show: can('settings.manage') },
     { key: 'billing', label: 'Billing & Tax', icon: Receipt, show: can('settings.manage') },
     { key: 'loyalty', label: 'Loyalty points', icon: Star, show: can('settings.manage') && mod('customers') },
-    { key: 'stickers', label: 'Price stickers', icon: Tag, show: can('settings.manage') && !!me && (usesRetailPos(me.business) || /bakery|sweet/i.test(me.business.subType)) },
+    { key: 'stickers', label: 'Price stickers', icon: Tag, show: can('settings.manage') && !!me && (usesRetailPos(me.business) || /bakery|sweet/i.test(me.business.subType) || isMobileShop(me.business)) },
     { key: 'printer', label: !!me && sellsByWeight(me.business) ? 'Printer, scale and bill' : 'Printer and bill', icon: Printer, show: can('billing.create') || can('settings.manage') || can('bill.format') },
     { key: 'integrations', label: 'Integrations', icon: Plug, show: can('settings.manage') && !!me?.features.whatsapp },
     { key: 'terms', label: 'Terminology', icon: Languages, show: can('settings.manage') },
